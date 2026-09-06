@@ -20,7 +20,7 @@ use yellowstone_grpc_proto::{
 };
 
 use crate::{
-    config::{BufferConfig, NullConfig, ShipsternConfig},
+    config::BufferConfig,
     instruction::InstructionPipeline,
     sources::{FilterUpdateSource, SourceExitStatus, SourceTrait},
     Error, FilterUpdateError, Handler, HandlerResult, Pipeline, Runtime,
@@ -85,12 +85,7 @@ fn make_slot_update(slot: u64) -> SubscribeUpdate {
     }
 }
 
-fn default_test_config() -> ShipsternConfig<NullConfig> {
-    ShipsternConfig {
-        source: NullConfig,
-        buffer: BufferConfig::default(),
-    }
-}
+fn default_buffer_config() -> BufferConfig { BufferConfig::default() }
 
 fn assert_server_hangup(result: Result<(), Box<Error>>) {
     assert!(result.is_err());
@@ -200,12 +195,9 @@ struct MockStreamEndSource;
 
 #[async_trait]
 impl SourceTrait for MockStreamEndSource {
-    type Config = NullConfig;
-
-    fn new(_: NullConfig, _: shipstern_core::Filters) -> Self { Self }
-
     async fn connect(
         &self,
+        _filters: Filters,
         tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
         status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), Error> {
@@ -222,12 +214,9 @@ struct MockStreamErrorSource;
 
 #[async_trait]
 impl SourceTrait for MockStreamErrorSource {
-    type Config = NullConfig;
-
-    fn new(_: NullConfig, _: shipstern_core::Filters) -> Self { Self }
-
     async fn connect(
         &self,
+        _filters: Filters,
         tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
         _status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), Error> {
@@ -246,12 +235,9 @@ struct MockSourceExitStreamErrorSource;
 
 #[async_trait]
 impl SourceTrait for MockSourceExitStreamErrorSource {
-    type Config = NullConfig;
-
-    fn new(_: NullConfig, _: shipstern_core::Filters) -> Self { Self }
-
     async fn connect(
         &self,
+        _filters: Filters,
         tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
         status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), Error> {
@@ -272,12 +258,9 @@ struct MockErrorSource;
 
 #[async_trait]
 impl SourceTrait for MockErrorSource {
-    type Config = NullConfig;
-
-    fn new(_: NullConfig, _: shipstern_core::Filters) -> Self { Self }
-
     async fn connect(
         &self,
+        _filters: Filters,
         tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
         status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), Error> {
@@ -296,12 +279,9 @@ struct MockStreamEndWithUpdatesSource {
 
 #[async_trait]
 impl SourceTrait for MockStreamEndWithUpdatesSource {
-    type Config = NullConfig;
-
-    fn new(_: NullConfig, _: shipstern_core::Filters) -> Self { Self { updates_to_send: 5 } }
-
     async fn connect(
         &self,
+        _filters: Filters,
         tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
         status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), Error> {
@@ -328,12 +308,9 @@ struct MockCompletedWithUpdatesSource {
 
 #[async_trait]
 impl SourceTrait for MockCompletedWithUpdatesSource {
-    type Config = NullConfig;
-
-    fn new(_: NullConfig, _: shipstern_core::Filters) -> Self { Self { updates_to_send: 3 } }
-
     async fn connect(
         &self,
+        _filters: Filters,
         tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
         status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), Error> {
@@ -386,23 +363,20 @@ impl Handler<SlotUpdate, SlotUpdate> for SlowSlotHandler {
 /// its own owner pubkey and asserts on that marker alone.
 static RECEIVED_FILTERS: Mutex<Vec<Filters>> = Mutex::new(Vec::new());
 
-/// Sets the source was constructed with, standing in for the initial
-/// subscribe. Separate from `RECEIVED_FILTERS` so a test can tell the first
+/// Sets the runtime handed to `connect_with_filter_updates`, which is the
+/// initial subscribe. Separate from `RECEIVED_FILTERS` so a test can tell the first
 /// request apart from the updates that follow it, under the same
 /// mark-and-filter convention.
 static INITIAL_FILTERS: Mutex<Vec<Filters>> = Mutex::new(Vec::new());
 
 #[derive(Debug)]
-struct MockFilterUpdateSource(Filters);
+struct MockFilterUpdateSource;
 
 #[async_trait]
 impl SourceTrait for MockFilterUpdateSource {
-    type Config = NullConfig;
-
-    fn new(_: NullConfig, filters: Filters) -> Self { Self(filters) }
-
     async fn connect(
         &self,
+        _filters: Filters,
         tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
         status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), Error> {
@@ -413,11 +387,12 @@ impl SourceTrait for MockFilterUpdateSource {
         Ok(())
     }
 
-    /// Records the set it was constructed with, standing in for the initial
-    /// subscribe, then every set published until the last handle is dropped,
-    /// so a test controls when the run finishes by dropping its handle.
+    /// Records the set the runtime passed in, which is the initial subscribe,
+    /// then every set published until the last handle is dropped, so a test
+    /// controls when the run finishes by dropping its handle.
     async fn connect_with_filter_updates(
         &self,
+        filters: Filters,
         tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
         status_tx: oneshot::Sender<SourceExitStatus>,
         mut filter_updates_rx: watch::Receiver<Filters>,
@@ -425,7 +400,7 @@ impl SourceTrait for MockFilterUpdateSource {
         INITIAL_FILTERS
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(self.0.clone());
+            .push(filters);
 
         wait_for_runtime_ready().await;
 
@@ -449,9 +424,9 @@ impl FilterUpdateSource for MockFilterUpdateSource {}
 /// A runtime with one registered slot pipeline, so `TEST_SLOT_FILTER` is a
 /// parser ID that filter updates may name.
 fn filter_update_runtime() -> Runtime<MockFilterUpdateSource> {
-    Runtime::<MockFilterUpdateSource>::builder()
+    Runtime::builder()
         .slot(Pipeline::new(SlowSlotParser, [SlowSlotHandler]))
-        .try_build(default_test_config())
+        .try_build_with(MockFilterUpdateSource, default_buffer_config())
         .unwrap()
 }
 
@@ -655,7 +630,7 @@ impl Handler<(), InstructionUpdate> for MarkerIxHandler {
 fn instruction_filter_update_runtime() -> Runtime<MockFilterUpdateSource> {
     Runtime::<MockFilterUpdateSource>::builder()
         .instruction(Pipeline::new(MarkerIxParser, [MarkerIxHandler]))
-        .try_build(default_test_config())
+        .try_build_with(MockFilterUpdateSource, default_buffer_config())
         .unwrap()
 }
 
@@ -807,8 +782,8 @@ async fn test_source_runs_when_the_filter_update_handle_is_never_taken() {
 
 #[tokio::test]
 async fn test_stream_end_returns_error() {
-    let runtime = Runtime::<MockStreamEndSource>::builder()
-        .try_build(default_test_config())
+    let runtime = Runtime::builder()
+        .try_build_with(MockStreamEndSource, default_buffer_config())
         .unwrap();
 
     assert_server_hangup(runtime.try_run_async().await);
@@ -816,8 +791,8 @@ async fn test_stream_end_returns_error() {
 
 #[tokio::test]
 async fn test_stream_error_returns_error() {
-    let runtime = Runtime::<MockStreamErrorSource>::builder()
-        .try_build(default_test_config())
+    let runtime = Runtime::builder()
+        .try_build_with(MockStreamErrorSource, default_buffer_config())
         .unwrap();
 
     assert!(runtime.try_run_async().await.is_err());
@@ -825,8 +800,8 @@ async fn test_stream_error_returns_error() {
 
 #[tokio::test]
 async fn test_source_exit_stream_error_maps_to_yellowstone_status() {
-    let runtime = Runtime::<MockSourceExitStreamErrorSource>::builder()
-        .try_build(default_test_config())
+    let runtime = Runtime::builder()
+        .try_build_with(MockSourceExitStreamErrorSource, default_buffer_config())
         .unwrap();
 
     assert_yellowstone_status(
@@ -838,8 +813,8 @@ async fn test_source_exit_stream_error_maps_to_yellowstone_status() {
 
 #[tokio::test]
 async fn test_error_status_returns_error() {
-    let runtime = Runtime::<MockErrorSource>::builder()
-        .try_build(default_test_config())
+    let runtime = Runtime::builder()
+        .try_build_with(MockErrorSource, default_buffer_config())
         .unwrap();
 
     assert_other_error(runtime.try_run_async().await);
@@ -847,8 +822,11 @@ async fn test_error_status_returns_error() {
 
 #[tokio::test]
 async fn test_stream_end_after_updates_returns_error() {
-    let runtime = Runtime::<MockStreamEndWithUpdatesSource>::builder()
-        .try_build(default_test_config())
+    let runtime = Runtime::builder()
+        .try_build_with(
+            MockStreamEndWithUpdatesSource { updates_to_send: 5 },
+            default_buffer_config(),
+        )
         .unwrap();
 
     assert_server_hangup(runtime.try_run_async().await);
@@ -858,9 +836,12 @@ async fn test_stream_end_after_updates_returns_error() {
 async fn test_completed_source_drains_buffered_updates_before_returning() {
     SLOW_SLOT_HANDLED.store(0, Ordering::Relaxed);
 
-    let runtime = Runtime::<MockCompletedWithUpdatesSource>::builder()
+    let runtime = Runtime::builder()
         .slot(Pipeline::new(SlowSlotParser, [SlowSlotHandler]))
-        .try_build(default_test_config())
+        .try_build_with(
+            MockCompletedWithUpdatesSource { updates_to_send: 3 },
+            default_buffer_config(),
+        )
         .unwrap();
 
     assert!(runtime.try_run_async().await.is_ok());
@@ -982,12 +963,9 @@ struct MockBurstSource<const N: u64>;
 
 #[async_trait]
 impl<const N: u64> SourceTrait for MockBurstSource<N> {
-    type Config = NullConfig;
-
-    fn new(_: NullConfig, _: shipstern_core::Filters) -> Self { Self }
-
     async fn connect(
         &self,
+        _filters: Filters,
         tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
         status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), Error> {
@@ -1038,13 +1016,13 @@ async fn edge_high_volume_drain_processes_every_update() {
     const N: u64 = 500;
     BURST_HANDLED.store(0, Ordering::Relaxed);
 
-    let runtime = Runtime::<MockBurstSource<N>>::builder()
+    let runtime = Runtime::builder()
         .slot(Pipeline::new(SlowSlotParser, [CountingHandler {
             counter: &BURST_HANDLED,
             sleep: Duration::from_millis(1),
             panic_on_even_slot: false,
         }]))
-        .try_build(default_test_config())
+        .try_build_with(MockBurstSource::<N>, default_buffer_config())
         .unwrap();
 
     assert!(runtime.try_run_async().await.is_ok());
@@ -1062,13 +1040,13 @@ async fn edge_panicking_handler_does_not_kill_pool() {
     const N: u64 = 20; // slots 0..20 -> 10 even (panic), 10 odd (survive)
     PANIC_SURVIVED.store(0, Ordering::Relaxed);
 
-    let runtime = Runtime::<MockBurstSource<N>>::builder()
+    let runtime = Runtime::builder()
         .slot(Pipeline::new(SlowSlotParser, [CountingHandler {
             counter: &PANIC_SURVIVED,
             sleep: Duration::from_millis(1),
             panic_on_even_slot: true,
         }]))
-        .try_build(default_test_config())
+        .try_build_with(MockBurstSource::<N>, default_buffer_config())
         .unwrap();
 
     // ~10 "task panicked" lines on stderr are expected.
@@ -1085,21 +1063,18 @@ async fn edge_single_job_serializes_and_drains() {
     const N: u64 = 25;
     SERIAL_HANDLED.store(0, Ordering::Relaxed);
 
-    let config = ShipsternConfig {
-        source: NullConfig,
-        buffer: BufferConfig {
-            jobs: Some(1),
-            ..BufferConfig::default()
-        },
+    let buffer = BufferConfig {
+        jobs: Some(1),
+        ..BufferConfig::default()
     };
 
-    let runtime = Runtime::<MockBurstSource<N>>::builder()
+    let runtime = Runtime::builder()
         .slot(Pipeline::new(SlowSlotParser, [CountingHandler {
             counter: &SERIAL_HANDLED,
             sleep: Duration::from_millis(1),
             panic_on_even_slot: false,
         }]))
-        .try_build(config)
+        .try_build_with(MockBurstSource::<N>, buffer)
         .unwrap();
 
     assert!(runtime.try_run_async().await.is_ok());
@@ -1128,9 +1103,9 @@ impl Handler<SlotUpdate, SlotUpdate> for WedgedHandler {
 async fn edge_wedged_handler_does_not_hang_shutdown() {
     const N: u64 = 2;
 
-    let runtime = Runtime::<MockBurstSource<N>>::builder()
+    let runtime = Runtime::builder()
         .slot(Pipeline::new(SlowSlotParser, [WedgedHandler]))
-        .try_build(default_test_config())
+        .try_build_with(MockBurstSource::<N>, default_buffer_config())
         .unwrap();
 
     // Fails by hanging if the barrier is unbounded; the outer timeout is the
@@ -1185,21 +1160,18 @@ async fn edge_concurrency_never_exceeds_jobs() {
     PROBE_PEAK.store(0, Ordering::Relaxed);
     PROBE_HANDLED.store(0, Ordering::Relaxed);
 
-    let config = ShipsternConfig {
-        source: NullConfig,
-        buffer: BufferConfig {
-            jobs: Some(JOBS),
-            ..BufferConfig::default()
-        },
+    let buffer = BufferConfig {
+        jobs: Some(JOBS),
+        ..BufferConfig::default()
     };
 
-    let runtime = Runtime::<MockBurstSource<N>>::builder()
+    let runtime = Runtime::builder()
         .slot(Pipeline::new(SlowSlotParser, [ConcurrencyProbeHandler {
             in_flight: &PROBE_IN_FLIGHT,
             peak: &PROBE_PEAK,
             handled: &PROBE_HANDLED,
         }]))
-        .try_build(config)
+        .try_build_with(MockBurstSource::<N>, buffer)
         .unwrap();
 
     assert!(runtime.try_run_async().await.is_ok());
@@ -1227,12 +1199,9 @@ struct MockAbortAfterSource<const PRE: u64, const POST: u64>;
 
 #[async_trait]
 impl<const PRE: u64, const POST: u64> SourceTrait for MockAbortAfterSource<PRE, POST> {
-    type Config = NullConfig;
-
-    fn new(_: NullConfig, _: shipstern_core::Filters) -> Self { Self }
-
     async fn connect(
         &self,
+        _filters: Filters,
         tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
         _status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), Error> {
@@ -1281,21 +1250,18 @@ async fn edge_abort_discards_queued_and_returns_promptly() {
 
     ABORT_COMPLETED.store(0, Ordering::Relaxed);
 
-    let config = ShipsternConfig {
-        source: NullConfig,
-        buffer: BufferConfig {
-            jobs: Some(JOBS),
-            ..BufferConfig::default()
-        },
+    let buffer = BufferConfig {
+        jobs: Some(JOBS),
+        ..BufferConfig::default()
     };
 
-    let runtime = Runtime::<MockAbortAfterSource<PRE, POST>>::builder()
+    let runtime = Runtime::builder()
         .slot(Pipeline::new(SlowSlotParser, [CountingHandler {
             counter: &ABORT_COMPLETED,
             sleep: HANDLER_SLEEP,
             panic_on_even_slot: false,
         }]))
-        .try_build(config)
+        .try_build_with(MockAbortAfterSource::<PRE, POST>, buffer)
         .unwrap();
 
     // Must return within budget, not block on the 2s handlers.
@@ -1321,12 +1287,9 @@ struct MockStopUnderBackpressureSource;
 
 #[async_trait]
 impl SourceTrait for MockStopUnderBackpressureSource {
-    type Config = NullConfig;
-
-    fn new(_: NullConfig, _: shipstern_core::Filters) -> Self { Self }
-
     async fn connect(
         &self,
+        _filters: Filters,
         tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
         status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), Error> {
@@ -1354,21 +1317,18 @@ async fn edge_stop_is_responsive_while_waiting_for_a_permit() {
 
     STOP_RESPONSIVE_HANDLED.store(0, Ordering::Relaxed);
 
-    let config = ShipsternConfig {
-        source: NullConfig,
-        buffer: BufferConfig {
-            jobs: Some(1),
-            ..BufferConfig::default()
-        },
+    let buffer = BufferConfig {
+        jobs: Some(1),
+        ..BufferConfig::default()
     };
 
-    let runtime = Runtime::<MockStopUnderBackpressureSource>::builder()
+    let runtime = Runtime::builder()
         .slot(Pipeline::new(SlowSlotParser, [CountingHandler {
             counter: &STOP_RESPONSIVE_HANDLED,
             sleep: HANDLER_SLEEP,
             panic_on_even_slot: false,
         }]))
-        .try_build(config)
+        .try_build_with(MockStopUnderBackpressureSource, buffer)
         .unwrap();
 
     // Must return well before the 10s handler frees the permit.
@@ -1385,21 +1345,18 @@ async fn edge_zero_jobs_does_not_deadlock() {
     const N: u64 = 10;
     ZERO_JOBS_HANDLED.store(0, Ordering::Relaxed);
 
-    let config = ShipsternConfig {
-        source: NullConfig,
-        buffer: BufferConfig {
-            jobs: Some(0),
-            ..BufferConfig::default()
-        },
+    let buffer = BufferConfig {
+        jobs: Some(0),
+        ..BufferConfig::default()
     };
 
-    let runtime = Runtime::<MockBurstSource<N>>::builder()
+    let runtime = Runtime::builder()
         .slot(Pipeline::new(SlowSlotParser, [CountingHandler {
             counter: &ZERO_JOBS_HANDLED,
             sleep: Duration::from_millis(1),
             panic_on_even_slot: false,
         }]))
-        .try_build(config)
+        .try_build_with(MockBurstSource::<N>, buffer)
         .unwrap();
 
     // Bounded so a 0-permit deadlock regression fails instead of hanging.
@@ -1440,12 +1397,9 @@ struct MockStopWithInFlightSource<const N: u64>;
 
 #[async_trait]
 impl<const N: u64> SourceTrait for MockStopWithInFlightSource<N> {
-    type Config = NullConfig;
-
-    fn new(_: NullConfig, _: shipstern_core::Filters) -> Self { Self }
-
     async fn connect(
         &self,
+        _filters: Filters,
         tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
         status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), Error> {
@@ -1474,19 +1428,16 @@ async fn edge_stop_waits_for_in_flight_handlers() {
     STOP_INFLIGHT_STARTED.store(0, Ordering::SeqCst);
     STOP_INFLIGHT_FINISHED.store(0, Ordering::SeqCst);
 
-    let config = ShipsternConfig {
-        source: NullConfig,
-        buffer: BufferConfig {
-            jobs: Some(usize::try_from(N).unwrap()),
-            ..BufferConfig::default()
-        },
+    let buffer = BufferConfig {
+        jobs: Some(usize::try_from(N).unwrap()),
+        ..BufferConfig::default()
     };
 
-    let runtime = Runtime::<MockStopWithInFlightSource<N>>::builder()
+    let runtime = Runtime::builder()
         .slot(Pipeline::new(SlowSlotParser, [StartFinishHandler {
             sleep: HANDLER_SLEEP,
         }]))
-        .try_build(config)
+        .try_build_with(MockStopWithInFlightSource::<N>, buffer)
         .unwrap();
 
     assert!(runtime.try_run_async().await.is_ok());

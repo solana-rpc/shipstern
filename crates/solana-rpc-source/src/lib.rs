@@ -2,7 +2,7 @@ use std::{str::FromStr, time::Duration};
 
 use async_trait::async_trait;
 use shipstern::{
-    sources::{SourceExitStatus, SourceTrait},
+    sources::{FromConfig, SourceExitStatus, SourceTrait},
     CommitmentLevel, Error as ShipsternError,
 };
 use shipstern_core::Filters;
@@ -28,7 +28,6 @@ use yellowstone_grpc_proto::{
 /// A `Source` implementation for the Solana Accounts RPC API.
 #[derive(Debug)]
 pub struct SolanaAccountsRpcSource {
-    filters: Filters,
     config: SolanaAccountsRpcConfig,
 }
 
@@ -49,9 +48,7 @@ pub struct SolanaAccountsRpcConfig {
 impl SolanaAccountsRpcSource {
     /// Create a new `SolanaAccountsRpcSource`.
     #[must_use]
-    pub fn new(config: SolanaAccountsRpcConfig, filters: Filters) -> Self {
-        Self { config, filters }
-    }
+    pub fn new(config: SolanaAccountsRpcConfig) -> Self { Self { config } }
 
     fn get_commitment_config(&self) -> CommitmentConfig {
         match self.config.commitment_level {
@@ -62,19 +59,22 @@ impl SolanaAccountsRpcSource {
     }
 }
 
-#[async_trait]
-impl SourceTrait for SolanaAccountsRpcSource {
+impl FromConfig for SolanaAccountsRpcSource {
     type Config = SolanaAccountsRpcConfig;
 
-    fn new(config: Self::Config, filters: Filters) -> Self { Self { config, filters } }
+    fn from_config(config: Self::Config) -> Self { Self::new(config) }
+}
 
+#[async_trait]
+impl SourceTrait for SolanaAccountsRpcSource {
     #[allow(deprecated)] // get_program_accounts_with_config is deprecated but replacement not yet stable
     async fn connect(
         &self,
+        filters: Filters,
         tx: Sender<Result<SubscribeUpdate, Status>>,
         status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), ShipsternError> {
-        let filters = &self.filters;
+        let filters = &filters;
         let config = &self.config;
 
         let mut tasks_set = JoinSet::new();
@@ -229,19 +229,16 @@ mod tests {
                     .build()
                     .expect("account owner filter should build"),
             )]));
-            let source = SolanaAccountsRpcSource::new(
-                SolanaAccountsRpcConfig {
-                    endpoint: "http://127.0.0.1:9".to_string(),
-                    timeout: 1,
-                    commitment_level: Some(CommitmentLevel::Confirmed),
-                },
-                filters,
-            );
+            let source = SolanaAccountsRpcSource::new(SolanaAccountsRpcConfig {
+                endpoint: "http://127.0.0.1:9".to_string(),
+                timeout: 1,
+                commitment_level: Some(CommitmentLevel::Confirmed),
+            });
             let (tx, mut rx) = mpsc::channel(1);
             let (status_tx, status_rx) = oneshot::channel();
 
             source
-                .connect(tx, status_tx)
+                .connect(filters, tx, status_tx)
                 .await
                 .expect("connect should report task failure through source status");
 
@@ -275,19 +272,16 @@ mod tests {
                         .expect("account owner filter should build"),
                 ),
             ]));
-            let source = SolanaAccountsRpcSource::new(
-                SolanaAccountsRpcConfig {
-                    endpoint: "http://127.0.0.1:9".to_string(),
-                    timeout: 1,
-                    commitment_level: Some(CommitmentLevel::Confirmed),
-                },
-                filters,
-            );
+            let source = SolanaAccountsRpcSource::new(SolanaAccountsRpcConfig {
+                endpoint: "http://127.0.0.1:9".to_string(),
+                timeout: 1,
+                commitment_level: Some(CommitmentLevel::Confirmed),
+            });
             let (tx, mut rx) = mpsc::channel(1);
             let (status_tx, status_rx) = oneshot::channel();
 
             source
-                .connect(tx, status_tx)
+                .connect(filters, tx, status_tx)
                 .await
                 .expect("connect should report task failures through source status");
 

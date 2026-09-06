@@ -8,11 +8,11 @@ use shipstern_core::{
 use tokio::sync::watch;
 
 use crate::{
-    config::ShipsternConfig,
+    config::{BufferConfig, ShipsternConfig},
     handle::FilterState,
     handler::{BoxPipeline, DynPipeline, PipelineSet, PipelineSets},
     instruction::InstructionPipeline,
-    sources::SourceTrait,
+    sources::{FromConfig, SourceTrait},
     util, Runtime,
 };
 
@@ -179,15 +179,30 @@ impl<S: SourceTrait> RuntimeBuilder<S> {
         self.mutate(|s| s.slot.push(Box::new(slot)))
     }
 
-    /// Attempt to build a new [`Runtime`] instance from the current builder
-    /// state and the provided configuration.
+    /// Attempt to build a new [`Runtime`] around `source`, using the given
+    /// buffer configuration.
+    ///
+    /// This is the entry point for a source built by the caller, which is any
+    /// source not implementing [`FromConfig`], or one carrying state that a
+    /// config section cannot express.
+    ///
+    /// ```rust, ignore
+    /// let ShipsternConfig { source, buffer } = toml::from_str(&text)?;
+    ///
+    /// Runtime::builder()
+    ///     .account(Pipeline::new(AccountParser, [Logger]))
+    ///     .try_build_with(YellowstoneGrpcSource::from_config(source), buffer)?;
+    /// ```
     ///
     /// # Errors
-    /// This function returns an error if the builder or configuration are
-    /// invalid.
+    /// This function returns an error if the builder is invalid.
     /// # Panics
     /// Only panics if the prometheus metrics registry is not set.
-    pub fn try_build(self, config: ShipsternConfig<S::Config>) -> Result<Runtime<S>, BuilderError> {
+    pub fn try_build_with(
+        self,
+        source: S,
+        buffer: BufferConfig,
+    ) -> Result<Runtime<S>, BuilderError> {
         let Self {
             err,
             account,
@@ -202,11 +217,6 @@ impl<S: SourceTrait> RuntimeBuilder<S> {
             metrics_registry,
         } = self;
         let () = err?;
-
-        let ShipsternConfig {
-            source: source_cfg,
-            buffer: buffer_cfg,
-        } = config;
 
         // Bundle every instruction parser into a single InstructionPipeline so
         // the instruction tree is built once per transaction (one
@@ -273,15 +283,48 @@ impl<S: SourceTrait> RuntimeBuilder<S> {
         let filter_state = Arc::new(FilterState::new(filter_updates_tx));
 
         Ok(Runtime {
-            buffer: buffer_cfg,
-            source: source_cfg,
+            buffer,
+            source,
             pipelines,
             filter_updates_rx,
             filter_state,
-            _source: std::marker::PhantomData,
             #[cfg(feature = "prometheus")]
             metrics_registry,
         })
+    }
+
+    /// Build a new [`Runtime`] around `source`, terminating the current
+    /// process if an error occurs.
+    #[inline]
+    #[must_use]
+    pub fn build_with(self, source: S, buffer: BufferConfig) -> Runtime<S> {
+        util::handle_fatal_msg(
+            self.try_build_with(source, buffer),
+            "Error building Shipstern runtime",
+        )
+    }
+}
+
+impl<S: FromConfig> RuntimeBuilder<S> {
+    /// Attempt to build a new [`Runtime`] instance from the current builder
+    /// state and the provided configuration, constructing the source from its
+    /// section of the config.
+    ///
+    /// ```rust, ignore
+    /// let config: ShipsternConfig<YellowstoneGrpcConfig> = toml::from_str(&text)?;
+    ///
+    /// Runtime::<YellowstoneGrpcSource>::builder()
+    ///     .account(Pipeline::new(AccountParser, [Logger]))
+    ///     .try_build(config)?;
+    /// ```
+    ///
+    /// # Errors
+    /// This function returns an error if the builder or configuration are
+    /// invalid.
+    pub fn try_build(self, config: ShipsternConfig<S::Config>) -> Result<Runtime<S>, BuilderError> {
+        let ShipsternConfig { source, buffer } = config;
+
+        self.try_build_with(S::from_config(source), buffer)
     }
 
     /// Build a new [`Runtime`] instance from the current builder state and the

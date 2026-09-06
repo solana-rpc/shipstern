@@ -9,7 +9,7 @@ use std::{path::PathBuf, time::Duration};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use shipstern::{
-    sources::{SourceExitStatus, SourceTrait},
+    sources::{FromConfig, SourceExitStatus, SourceTrait},
     Error as ShipsternError,
 };
 use shipstern_core::{CommitmentLevel, Filters};
@@ -118,17 +118,19 @@ impl CoordinatorSubscription for SubscribeRequest {
 #[derive(Debug)]
 pub struct CoordinatorSource {
     config: CoordinatorSourceConfig,
-    filters: Filters,
+}
+
+impl FromConfig for CoordinatorSource {
+    type Config = CoordinatorSourceConfig;
+
+    fn from_config(config: Self::Config) -> Self { Self { config } }
 }
 
 #[async_trait]
 impl SourceTrait for CoordinatorSource {
-    type Config = CoordinatorSourceConfig;
-
-    fn new(config: Self::Config, filters: Filters) -> Self { Self { config, filters } }
-
     async fn connect(
         &self,
+        filters: Filters,
         tx: Sender<Result<SubscribeUpdate, Status>>,
         status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), ShipsternError> {
@@ -169,7 +171,7 @@ impl SourceTrait for CoordinatorSource {
 
         let mut client = builder.connect().await?;
 
-        let subscribe_request = SubscribeRequest::from(self.filters.clone())
+        let subscribe_request = SubscribeRequest::from(filters)
             .with_coordinator_subscriptions()
             .with_from_slot(config.from_slot)
             .with_commitment_processed();

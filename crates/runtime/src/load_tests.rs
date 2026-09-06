@@ -26,7 +26,7 @@ use yellowstone_grpc_proto::{
 };
 
 use crate::{
-    config::{BufferConfig, NullConfig, ShipsternConfig},
+    config::BufferConfig,
     sources::{SourceExitStatus, SourceTrait},
     Error, Handler, Pipeline, Runtime,
 };
@@ -77,12 +77,9 @@ struct FloodSource<const N: u64>;
 
 #[async_trait]
 impl<const N: u64> SourceTrait for FloodSource<N> {
-    type Config = NullConfig;
-
-    fn new(_: NullConfig, _: shipstern_core::Filters) -> Self { Self }
-
     async fn connect(
         &self,
+        _filters: shipstern_core::Filters,
         tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
         status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), Error> {
@@ -177,22 +174,19 @@ impl Handler<SlotUpdate, SlotUpdate> for LoadHandler {
     }
 }
 
-fn config_with_jobs(jobs: usize) -> ShipsternConfig<NullConfig> {
-    ShipsternConfig {
-        source: NullConfig,
-        buffer: BufferConfig {
-            jobs: Some(jobs),
-            ..BufferConfig::default()
-        },
+fn buffer_with_jobs(jobs: usize) -> BufferConfig {
+    BufferConfig {
+        jobs: Some(jobs),
+        ..BufferConfig::default()
     }
 }
 
 async fn run_flood<const N: u64>(jobs: usize, handler: LoadHandler) -> (Duration, bool) {
     reset_counters();
 
-    let runtime = Runtime::<FloodSource<N>>::builder()
+    let runtime = Runtime::builder()
         .slot(Pipeline::new(LoadParser, [handler]))
-        .try_build(config_with_jobs(jobs))
+        .try_build_with(FloodSource::<N>, buffer_with_jobs(jobs))
         .unwrap();
 
     let t0 = Instant::now();

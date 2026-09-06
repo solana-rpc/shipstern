@@ -8,7 +8,7 @@ use agave_snapshots::snapshot_config::{SnapshotConfig, SnapshotUsage};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use shipstern::{
-    sources::{SourceExitStatus, SourceTrait},
+    sources::{FromConfig, SourceExitStatus, SourceTrait},
     Error as ShipsternError,
 };
 use shipstern_core::{Filters, Pubkey};
@@ -136,7 +136,6 @@ pub struct SolanaSnapshotConfig {
 /// A `Source` implementation for the Solana Snapshot API.
 #[derive(Debug)]
 pub struct SolanaSnapshotSource {
-    filters: Filters,
     config: SolanaSnapshotConfig,
 }
 
@@ -163,30 +162,32 @@ impl FilterOwnerKeyLookup {
     fn owners(&self) -> Vec<Pubkey> { self.0.keys().copied().collect() }
 }
 
-#[async_trait]
-impl SourceTrait for SolanaSnapshotSource {
+impl FromConfig for SolanaSnapshotSource {
     type Config = SolanaSnapshotConfig;
 
-    fn new(config: Self::Config, filters: Filters) -> Self { Self { config, filters } }
+    fn from_config(config: Self::Config) -> Self { Self { config } }
+}
 
+#[async_trait]
+impl SourceTrait for SolanaSnapshotSource {
     async fn connect(
         &self,
+        filters: Filters,
         tx: tokio::sync::mpsc::Sender<Result<SubscribeUpdate, Status>>,
         status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), ShipsternError> {
-        let filter_owner_key_lookup = FilterOwnerKeyLookup::new(&self.filters);
+        let filter_owner_key_lookup = FilterOwnerKeyLookup::new(&filters);
         let solana_snapshot = SolanaSnapshot::load_ledger(self.config.ledger_path.clone())?;
         let snapshot_slot = solana_snapshot.slot;
 
-        let filters = self
-            .filters
+        let slot_filters = filters
             .parsers_filters
             .iter()
             .filter_map(|(key, parser_filter)| parser_filter.slot.map(|_| key.to_string()))
             .collect::<Vec<String>>();
 
         tx.send(Ok(SubscribeUpdate {
-            filters,
+            filters: slot_filters,
             created_at: None,
             update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
                 slot: snapshot_slot,

@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use futures_util::FutureExt;
 use jetstreamer_firehose::firehose::{firehose, BlockData, EntryData, OnErrorFn, TransactionData};
 use shipstern::{
-    sources::{SourceExitStatus, SourceTrait},
+    sources::{FromConfig, SourceExitStatus, SourceTrait},
     Error as ShipsternError,
 };
 use shipstern_core::Filters;
@@ -645,23 +645,24 @@ impl SlotRangeConfig {
 /// Jetstream source for historical Solana data streaming
 #[derive(Debug)]
 pub struct JetstreamSource {
-    filters: Filters,
     config: JetstreamSourceConfig,
+}
+
+impl FromConfig for JetstreamSource {
+    type Config = JetstreamSourceConfig;
+
+    fn from_config(config: Self::Config) -> Self { Self { config } }
 }
 
 #[async_trait]
 impl SourceTrait for JetstreamSource {
-    type Config = JetstreamSourceConfig;
-
-    fn new(config: Self::Config, filters: Filters) -> Self { Self { config, filters } }
-
     async fn connect(
         &self,
+        filters: Filters,
         tx: Sender<Result<SubscribeUpdate, yellowstone_grpc_proto::tonic::Status>>,
         status_tx: oneshot::Sender<SourceExitStatus>,
     ) -> Result<(), ShipsternError> {
         let config = self.config.clone();
-        let filters = self.filters.clone();
 
         // jetstreamer-firehose reads configuration exclusively through env vars.
         // The caller must have set them *before* the runtime started via
@@ -950,8 +951,7 @@ mod tests {
             shutdown_signal_tx: None,
         };
 
-        let filters = Filters::new(std::collections::HashMap::new());
-        let source = JetstreamSource::new(config, filters);
+        let source = JetstreamSource::from_config(config);
 
         assert_eq!(source.config.archive_url, "https://api.old-faithful.net");
         assert_eq!(source.config.threads, 4);

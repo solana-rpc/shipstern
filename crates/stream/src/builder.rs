@@ -2,8 +2,9 @@ use std::{collections::HashMap, fmt::Debug};
 
 use shipstern::{
     builder::{Builder, BuilderKind, RuntimeBuilder, RuntimeKind},
+    config::{BufferConfig, ShipsternConfig},
     handler::{BoxPipeline, Pipeline},
-    sources::SourceTrait,
+    sources::{FromConfig, SourceTrait},
     util,
 };
 use shipstern_core::{
@@ -17,7 +18,7 @@ use shipstern_proto::{
 use tokio::sync::broadcast;
 
 use super::{
-    config::StreamConfig,
+    config::{GrpcConfig, StreamConfig},
     grpc::{Channels, GrpcHandler, Receiver},
     Server,
 };
@@ -169,13 +170,17 @@ impl<'a, S: SourceTrait> StreamBuilder<'a, S> {
         self.insert(instruction, |s| &mut s.instruction)
     }
 
-    /// Attempt to build a new [`Server`] instance from the current builder
-    /// state and the provided configuration.
+    /// Attempt to build a new [`Server`] around `source`, using the given
+    /// gRPC and buffer configuration.
     ///
     /// # Errors
-    /// This function returns an error if the builder or configuration are
-    /// invalid.
-    pub fn try_build(self, config: StreamConfig<S::Config>) -> Result<Server<'a, S>, BuilderError> {
+    /// This function returns an error if the builder is invalid.
+    pub fn try_build_with(
+        self,
+        source: S,
+        grpc_cfg: GrpcConfig,
+        buffer: BufferConfig,
+    ) -> Result<Server<'a, S>, BuilderError> {
         let Builder {
             err,
             account,
@@ -191,11 +196,6 @@ impl<'a, S: SourceTrait> StreamBuilder<'a, S> {
             ..
         } = self.0;
         let () = err?;
-
-        let StreamConfig {
-            grpc: grpc_cfg,
-            runtime: runtime_cfg,
-        } = config;
 
         let channels = channels
             .into_iter()
@@ -217,7 +217,7 @@ impl<'a, S: SourceTrait> StreamBuilder<'a, S> {
             ..Default::default()
         };
 
-        let runtime = runtime_builder.try_build(runtime_cfg)?;
+        let runtime = runtime_builder.try_build_with(source, buffer)?;
 
         Ok(Server {
             grpc_cfg,
@@ -225,6 +225,39 @@ impl<'a, S: SourceTrait> StreamBuilder<'a, S> {
             channels,
             runtime,
         })
+    }
+
+    /// Build a new [`Server`] around `source`, terminating the current process
+    /// if an error occurs.
+    #[inline]
+    pub fn build_with(
+        self,
+        source: S,
+        grpc_cfg: GrpcConfig,
+        buffer: BufferConfig,
+    ) -> Server<'a, S> {
+        util::handle_fatal_msg(
+            self.try_build_with(source, grpc_cfg, buffer),
+            "Error building Shipstern stream server",
+        )
+    }
+}
+
+impl<'a, S: FromConfig> StreamBuilder<'a, S> {
+    /// Attempt to build a new [`Server`] instance from the current builder
+    /// state and the provided configuration, constructing the source from its
+    /// section of the config.
+    ///
+    /// # Errors
+    /// This function returns an error if the builder or configuration are
+    /// invalid.
+    pub fn try_build(self, config: StreamConfig<S::Config>) -> Result<Server<'a, S>, BuilderError> {
+        let StreamConfig {
+            grpc,
+            runtime: ShipsternConfig { source, buffer },
+        } = config;
+
+        self.try_build_with(S::from_config(source), grpc, buffer)
     }
 
     /// Build a new [`Server`] instance from the current builder state and the
