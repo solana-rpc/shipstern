@@ -4198,7 +4198,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -4217,7 +4217,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-block-coordinator"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "async-trait",
  "bs58",
@@ -4241,7 +4241,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-block-meta-parser"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "prost",
  "prost-types",
@@ -4252,7 +4252,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-core"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
  "borsh 1.8.1",
@@ -4268,7 +4268,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-kafka-sink"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "futures",
  "prost",
@@ -4286,7 +4286,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-mock"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "futures",
  "regex",
@@ -4302,7 +4302,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-parser"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
  "bs58",
@@ -4315,7 +4315,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-proc-macro"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
  "bs58",
@@ -4331,7 +4331,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-proto"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "prost",
  "protobuf-src",
@@ -4340,7 +4340,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-spl-token-extensions-parser"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "borsh 1.8.1",
  "bs58",
@@ -4364,7 +4364,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-spl-token-parser"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bs58",
  "prost",
@@ -4381,7 +4381,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-stake-pool-parser"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "borsh 1.8.1",
  "bs58",
@@ -4405,7 +4405,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-yellowstone-grpc-source"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "async-trait",
  "clap",
