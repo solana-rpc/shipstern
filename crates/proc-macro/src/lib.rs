@@ -444,3 +444,149 @@ mod expansion_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod literal_width_tests {
+    ///
+    /// Integer suffixes that pin a generated literal to one width.
+    ///
+    /// A suffixed literal only compiles where that exact type is expected, so
+    /// emitting one hard-codes an assumption about how wide codama happens to
+    /// make a count, size or offset field.
+    ///
+    /// Deliberately limited to the widths a codama count, size or offset can
+    /// reach. `u32` is excluded because prost field tags are `u32` by the
+    /// protobuf spec and are numbered from field order, never from a node, so
+    /// under the `proto` feature the generated code carries tens of thousands of
+    /// legitimately suffixed `u32` literals. Including it would make this assert
+    /// on something that is neither wrong nor ours to change.
+    ///
+    const WIDTH_SUFFIXES: [&str; 4] = ["usize", "isize", "u64", "i64"];
+
+    ///
+    /// Collect every width-suffixed integer literal in a token string.
+    ///
+    /// Matches a digit run followed immediately by a suffix, so a bare type
+    /// mention (`const N: usize`) is not a hit while `558usize` is.
+    ///
+    /// Example output:
+    ///
+    /// ```rust, ignore
+    /// assert_eq!(suffixed_literals("data . len () == 558usize"), vec!["558usize"]);
+    /// assert!(suffixed_literals("const N : usize").is_empty());
+    /// ```
+    ///
+    fn suffixed_literals(tokens: &str) -> Vec<String> {
+        let chars: Vec<char> = tokens.chars().collect();
+        let mut found = Vec::new();
+        let mut i = 0;
+
+        while i < chars.len() {
+            if !chars[i].is_ascii_digit() {
+                i += 1;
+                continue;
+            }
+
+            // A digit run only starts a literal if nothing identifier-like precedes it.
+            let starts_literal = i == 0 || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '_');
+
+            let start = i;
+            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '_') {
+                i += 1;
+            }
+
+            if !starts_literal {
+                continue;
+            }
+
+            let tail: String = chars[i..(i + 6).min(chars.len())].iter().collect();
+
+            if let Some(suffix) = WIDTH_SUFFIXES.iter().find(|s| tail.starts_with(**s)) {
+                let digits: String = chars[start..i].iter().collect();
+                found.push(format!("{digits}{suffix}"));
+            }
+        }
+
+        found
+    }
+
+    fn idl_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/idls")
+    }
+
+    ///
+    /// No generated parser may contain a width-pinned integer literal.
+    ///
+    /// Counts, sizes and offsets reach `quote!` as plain integers, and bare
+    /// interpolation renders those *suffixed*: `558usize` today, `558u64` the
+    /// day codama widens the field. The generated code indexes `data` and
+    /// declares `usize` consts, so the suffixed form stops compiling on that
+    /// bump even though the IDL never changed.
+    ///
+    /// Asserting over the whole fixture corpus is what makes this a guard
+    /// rather than a spot check: a new interpolation site added anywhere in the
+    /// renderer fails here the first time a fixture exercises it.
+    ///
+    #[test]
+    fn generated_parsers_contain_no_width_pinned_literals() {
+        let mut offenders: Vec<String> = Vec::new();
+        let mut expanded = 0_usize;
+
+        for entry in std::fs::read_dir(idl_dir()).expect("tests/idls is readable") {
+            let path = entry.expect("readable dir entry").path();
+
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            let tokens = super::expand_parser_tokens(
+                &path,
+                crate::render::shipstern_parser::ParserConfig::default(),
+                false,
+            )
+            .to_string();
+
+            expanded += 1;
+
+            for literal in suffixed_literals(&tokens) {
+                offenders.push(format!("{name}: {literal}"));
+            }
+        }
+
+        assert!(
+            expanded > 0,
+            "no fixtures expanded; the corpus path is wrong"
+        );
+
+        offenders.sort();
+        offenders.dedup();
+
+        assert!(
+            offenders.is_empty(),
+            "{} width-pinned literal(s) in generated output across {expanded} IDLs:\n{}",
+            offenders.len(),
+            offenders.join("\n"),
+        );
+    }
+
+    #[test]
+    fn scanner_separates_literals_from_type_mentions() {
+        assert_eq!(suffixed_literals("data . len () == 558usize"), ["558usize"]);
+        assert_eq!(suffixed_literals("data . get (0usize .. 8usize)"), [
+            "0usize", "8usize"
+        ]);
+
+        // Bare type mentions and already-unsuffixed literals are not hits.
+        assert!(suffixed_literals("const N : usize , R : Read").is_empty());
+        assert!(suffixed_literals("data . len () == 558").is_empty());
+
+        // An identifier ending in digits is not a literal.
+        assert!(suffixed_literals("let swap_v2usize = 1 ;").is_empty());
+    }
+}

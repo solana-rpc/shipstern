@@ -11,6 +11,10 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 - `shipstern-proc-macro`: the deprecation note on `cpi_event_discriminator` and `cpi_event_payload_offset` no longer names a removal version. The 0.9.0 entry below promised their removal for the 0.10 release, which did not happen; they are still parsed and honoured as the fallback for IDLs that declare no CPI event envelope, and no removal version is established. That entry is corrected in place, since it promised a removal consumers may have planned around.
 
+### Fixed
+
+- `shipstern-proc-macro`: counts, sizes and offsets now render as unsuffixed integer literals in generated parsers. Bare `quote!` interpolation of a Rust integer emits a suffixed literal, so a codama field typed `usize` produced `558usize` and pinned the generated code to that width; the emitted parsers compare against `data.len()` and declare `usize` consts, so those literals stop compiling the moment codama widens a count, size or offset, even though the IDL never changed. Generated output changes textually; parsing behaviour does not ([#321](https://github.com/solana-rpc/shipstern/pull/321) by @senzenn).
+
 ## [0.10.0] - 2026-09-10
 
 ### Changed

@@ -70,3 +70,29 @@ pub fn to_pascal_case(str: &str) -> String {
 
     result
 }
+
+///
+/// Render a count, size or offset as an **unsuffixed** integer literal.
+///
+/// `quote!` interpolates a bare integer as a *suffixed* literal: a `usize`
+/// becomes `558usize`, a `u64` becomes `558u64`. That pins the generated code
+/// to the width codama happens to use for that field. Generated parsers compare
+/// against `data.len()` and declare `usize` consts, so the day codama widens a
+/// count/size/offset the emitted code stops compiling.
+///
+/// An unsuffixed literal lets inference pick the width at the use site, which
+/// keeps the generated code correct on both sides of that change.
+///
+/// Example output:
+///
+/// ```rust, ignore
+/// // suffixed (what bare interpolation emits once the field is u64):
+/// data.len() == 558u64   // error[E0308]: expected `usize`, found `u64`
+///
+/// // unsuffixed (what this emits):
+/// data.len() == 558      // infers usize
+/// ```
+///
+pub(crate) fn unsuffixed(value: u64) -> proc_macro2::Literal {
+    proc_macro2::Literal::u64_unsuffixed(value)
+}
