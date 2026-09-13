@@ -838,3 +838,250 @@ mod field_presence_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod discriminator_injectivity_tests {
+    use crate::render::instruction_parser::{extract_ix_discriminator_key, DiscriminatorKey};
+
+    ///
+    /// Can a single buffer satisfy both discriminators at once?
+    ///
+    /// Each key is a constraint of the form "these bytes appear at this offset",
+    /// or, for a size discriminator, "the buffer is exactly this long". Two
+    /// constraints are jointly satisfiable unless they disagree somewhere they
+    /// overlap, so the check is a byte-wise comparison over the intersection of
+    /// the two windows.
+    ///
+    /// Non-overlapping windows are jointly satisfiable, which is the interesting
+    /// case: two discriminators at different offsets never contradict each other,
+    /// so one buffer can match both and the emitted arm order silently decides
+    /// which instruction wins.
+    ///
+    fn jointly_satisfiable(a: &DiscriminatorKey, b: &DiscriminatorKey) -> bool {
+        match (a.to_bytes_offset(), b.to_bytes_offset()) {
+            (Some((a_bytes, a_off)), Some((b_bytes, b_off))) => {
+                let disagrees = a_bytes.iter().enumerate().any(|(i, byte)| {
+                    let pos = a_off + i;
+
+                    pos >= b_off && pos < b_off + b_bytes.len() && *byte != b_bytes[pos - b_off]
+                });
+
+                !disagrees
+            },
+
+            // A size discriminator fixes the total length, so it can only coexist
+            // with a byte window that fits inside it.
+            (None, Some((bytes, off))) | (Some((bytes, off)), None) => {
+                let DiscriminatorKey::Size { size } = (match a {
+                    DiscriminatorKey::Size { .. } => a,
+                    _ => b,
+                }) else {
+                    return true;
+                };
+
+                *size >= off + bytes.len()
+            },
+
+            // Two size discriminators: distinct keys mean distinct lengths.
+            (None, None) => false,
+        }
+    }
+
+    struct Aliasing {
+        same_key: usize,
+        cross_offset: Vec<String>,
+    }
+
+    fn analyse(keys: &[(String, DiscriminatorKey)]) -> Aliasing {
+        let mut same_key = 0;
+        let mut cross_offset = Vec::new();
+
+        for (i, (left_name, left)) in keys.iter().enumerate() {
+            for (right_name, right) in &keys[i + 1..] {
+                if left == right {
+                    same_key += 1;
+
+                    continue;
+                }
+
+                if jointly_satisfiable(left, right) {
+                    cross_offset.push(format!("{left_name} ~ {right_name}"));
+                }
+            }
+        }
+
+        Aliasing {
+            same_key,
+            cross_offset,
+        }
+    }
+
+    ///
+    /// No two *differently keyed* instructions may both match one buffer.
+    ///
+    /// Equal keys are a separate, handled case: the renderer groups them and
+    /// emits `collision_group_match_arm`, which disambiguates on account count.
+    /// Unequal keys get one arm each, tried in order, so an overlap there is
+    /// decided by emission order rather than by anything the IDL states. That is
+    /// the aliasing worth proving absent, and this proves it exhaustively over
+    /// the corpus rather than up to a bound.
+    ///
+    /// One fixture from `tests/idls`, with the discriminator key of each instruction.
+    struct Fixture {
+        name: String,
+        keys: Vec<(String, DiscriminatorKey)>,
+    }
+
+    ///
+    /// Every fixture in `tests/idls`, plus the ones that would not load.
+    ///
+    /// Both corpus tests below walk the same directory and pull the same keys out of
+    /// it; only what they do with the result differs. A fixture that stops loading is
+    /// returned rather than skipped, because both tests read the whole corpus and a
+    /// silent skip would let most of it drop out while they stayed green.
+    ///
+    fn corpus() -> (Vec<Fixture>, Vec<String>) {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/idls");
+
+        let mut fixtures = Vec::new();
+        let mut unreadable = Vec::new();
+
+        for entry in std::fs::read_dir(&dir).expect("tests/idls is readable") {
+            let path = entry.expect("readable dir entry").path();
+
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+
+            let (root, _) = match crate::parse::load_codama_idl(&path) {
+                Ok(loaded) => loaded,
+                Err(err) => {
+                    unreadable.push(format!("{}: {err}", path.display()));
+                    continue;
+                },
+            };
+
+            let keys: Vec<(String, DiscriminatorKey)> = root
+                .program
+                .instructions
+                .iter()
+                .filter_map(|ix| {
+                    extract_ix_discriminator_key(ix).map(|key| (ix.name.to_string(), key))
+                })
+                .collect();
+
+            let name = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            fixtures.push(Fixture { name, keys });
+        }
+
+        (fixtures, unreadable)
+    }
+
+    #[test]
+    fn no_instruction_discriminator_aliases_another() {
+        let (fixtures, unreadable) = corpus();
+
+        let mut offenders = Vec::new();
+        let mut compared = 0;
+
+        for fixture in &fixtures {
+            compared += fixture.keys.len();
+
+            for pair in analyse(&fixture.keys).cross_offset {
+                offenders.push(format!("{}: {pair}", fixture.name));
+            }
+        }
+
+        assert!(
+            unreadable.is_empty(),
+            "fixtures stopped loading: {unreadable:#?}"
+        );
+        assert!(!fixtures.is_empty() && compared > 0, "corpus did not load");
+
+        offenders.sort();
+
+        assert!(
+            offenders.is_empty(),
+            "{} instruction discriminator pair(s) can match the same buffer:\n{}",
+            offenders.len(),
+            offenders.join("\n"),
+        );
+    }
+
+    ///
+    /// The check above is only meaningful if `jointly_satisfiable` can say yes.
+    ///
+    /// A helper that always returned `false` would make the corpus test pass on
+    /// any input, so these pin both answers on hand-built keys.
+    ///
+    #[test]
+    fn joint_satisfiability_detects_real_overlap() {
+        let at = |off: usize, bytes: &[u8]| DiscriminatorKey::Field {
+            offset: off,
+            bytes: bytes.to_vec(),
+        };
+
+        // Same window, different bytes: nothing matches both.
+        assert!(!jointly_satisfiable(&at(0, &[0x01]), &at(0, &[0x02])));
+
+        // Disjoint windows: `01 .. .. .. .. .. .. .. AA` matches both.
+        assert!(jointly_satisfiable(&at(0, &[0x01]), &at(8, &[0xaa])));
+
+        // Overlapping and agreeing on the shared byte.
+        assert!(jointly_satisfiable(
+            &at(0, &[0x01, 0x02]),
+            &at(1, &[0x02, 0x03])
+        ));
+
+        // Overlapping and disagreeing on the shared byte.
+        assert!(!jointly_satisfiable(&at(0, &[0x01, 0x02]), &at(1, &[0x99])));
+
+        // A size discriminator cannot coexist with a window past its end.
+        assert!(!jointly_satisfiable(
+            &DiscriminatorKey::Size { size: 4 },
+            &at(8, &[0xaa])
+        ));
+        assert!(jointly_satisfiable(
+            &DiscriminatorKey::Size { size: 16 },
+            &at(8, &[0xaa])
+        ));
+    }
+
+    ///
+    /// Same-key groups exist and are expected. Pinning the count means a new one
+    /// shows up as a deliberate change rather than passing unnoticed.
+    ///
+    #[test]
+    fn same_key_collision_groups_are_accounted_for() {
+        let (fixtures, unreadable) = corpus();
+
+        let mut with_groups: Vec<&str> = fixtures
+            .iter()
+            .filter(|fixture| analyse(&fixture.keys).same_key > 0)
+            .map(|fixture| fixture.name.as_str())
+            .collect();
+
+        with_groups.sort_unstable();
+
+        assert!(
+            unreadable.is_empty(),
+            "fixtures stopped loading: {unreadable:#?}"
+        );
+
+        assert_eq!(
+            with_groups,
+            [
+                "colliding_envelope",
+                "collision_safe_cpi_event_envelope",
+                "macro_arg_envelope_collision",
+                "raydium_amm_v4_with_swapv2",
+            ],
+            "the set of IDLs relying on account-count disambiguation changed",
+        );
+    }
+}
