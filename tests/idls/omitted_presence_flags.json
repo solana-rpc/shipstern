@@ -1,0 +1,156 @@
+{
+  "kind": "rootNode",
+  "standard": "codama",
+  "version": "1.6.0",
+  "program": {
+    "kind": "programNode",
+    "name": "omittedPresenceFlags",
+    "publicKey": "E2hUTFWHo77yFensjFwkMESg2mnn6WfYDT31RgCmRKH3",
+    "version": "0.1.0",
+    "docs": [],
+    "accounts": [
+      {
+        "kind": "accountNode",
+        "name": "holder",
+        "docs": [],
+        "data": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "discriminator",
+              "docs": [],
+              "defaultValueStrategy": "omitted",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 1,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              },
+              "defaultValue": {
+                "kind": "bytesValueNode",
+                "data": "b7",
+                "encoding": "base16"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "maybeAmount",
+              "docs": [],
+              "type": {
+                "kind": "optionTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u64",
+                  "endian": "le"
+                },
+                "prefix": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "tail",
+              "docs": [],
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u32",
+                "endian": "le"
+              }
+            }
+          ]
+        },
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      }
+    ],
+    "instructions": [
+      {
+        "kind": "instructionNode",
+        "name": "touch",
+        "docs": [],
+        "optionalAccountStrategy": "programId",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "payer",
+            "docs": [],
+            "isWritable": true,
+            "isSigner": true
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "maybeDelegate",
+            "docs": [],
+            "isWritable": false,
+            "isSigner": false
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "docs": [],
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 1,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "b7",
+              "encoding": "base16"
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "maybeFlag",
+            "docs": [],
+            "type": {
+              "kind": "optionTypeNode",
+              "item": {
+                "kind": "booleanTypeNode",
+                "size": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                }
+              },
+              "prefix": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ],
+        "subInstructions": [],
+        "remainingAccounts": [],
+        "byteDeltas": []
+      }
+    ],
+    "definedTypes": [],
+    "errors": [],
+    "pdas": []
+  },
+  "additionalPrograms": []
+}

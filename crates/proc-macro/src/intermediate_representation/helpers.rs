@@ -166,8 +166,10 @@ pub fn materialize_type(
         },
 
         T::Array(array) => {
-            let outer_label = match &array.count {
-                codama_nodes::CountNode::Fixed(fixed) => LabelIr::FixedArray(fixed.value),
+            let outer_label = match &*array.count {
+                codama_nodes::CountNode::Fixed(fixed) => {
+                    LabelIr::FixedArray(crate::utils::as_index(fixed.value))
+                },
                 _ => LabelIr::Repeated,
             };
 
@@ -218,7 +220,7 @@ fn option_encoding(
     ir: &SchemaIr,
     base_name: &str,
 ) -> OptionEncodingIr {
-    use codama_nodes::{Endian, NestedTypeNodeTrait, NumberFormat};
+    use codama_nodes::{Endianness, NestedTypeNodeTrait, NumberFormat};
 
     let prefix_type = option.prefix.get_nested_type_node();
     let prefix = match prefix_type.format {
@@ -231,36 +233,36 @@ fn option_encoding(
         NumberFormat::U16 | NumberFormat::I16 => OptionPrefixIr::FixedWidth {
             byte_len: 2,
             one_value: 1,
-            big_endian: prefix_type.endian == Endian::Big,
+            big_endian: prefix_type.endian == Endianness::Be,
         },
         NumberFormat::U32 | NumberFormat::I32 => OptionPrefixIr::FixedWidth {
             byte_len: 4,
             one_value: 1,
-            big_endian: prefix_type.endian == Endian::Big,
+            big_endian: prefix_type.endian == Endianness::Be,
         },
         NumberFormat::U64 | NumberFormat::I64 => OptionPrefixIr::FixedWidth {
             byte_len: 8,
             one_value: 1,
-            big_endian: prefix_type.endian == Endian::Big,
+            big_endian: prefix_type.endian == Endianness::Be,
         },
         NumberFormat::U128 | NumberFormat::I128 => OptionPrefixIr::FixedWidth {
             byte_len: 16,
             one_value: 1,
-            big_endian: prefix_type.endian == Endian::Big,
+            big_endian: prefix_type.endian == Endianness::Be,
         },
         NumberFormat::F32 => OptionPrefixIr::FixedWidth {
             byte_len: 4,
             one_value: 1.0f32.to_bits() as u128,
-            big_endian: prefix_type.endian == Endian::Big,
+            big_endian: prefix_type.endian == Endianness::Be,
         },
         NumberFormat::F64 => OptionPrefixIr::FixedWidth {
             byte_len: 8,
             one_value: 1.0f64.to_bits() as u128,
-            big_endian: prefix_type.endian == Endian::Big,
+            big_endian: prefix_type.endian == Endianness::Be,
         },
     };
 
-    let none_padding = option.fixed.then(|| {
+    let none_padding = option.fixed.unwrap_or(false).then(|| {
         ir.fixed_size_of_type(&option.item)
             .unwrap_or_else(|| panic!("fixed option `{base_name}` has a variable-size item"))
     });

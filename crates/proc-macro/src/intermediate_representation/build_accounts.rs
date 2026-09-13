@@ -56,7 +56,9 @@ pub fn build_accounts(accounts: &[AccountNode], ir: &mut SchemaIr) {
         ir.types.push(TypeIr {
             name,
             fields,
-            kind: TypeKindIr::Account { len: account.size },
+            kind: TypeKindIr::Account {
+                len: account.size.map(crate::utils::as_index),
+            },
         });
     }
 }
