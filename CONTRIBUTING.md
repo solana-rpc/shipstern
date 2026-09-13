@@ -9,7 +9,8 @@ Thank you for your interest in contributing to Shipstern! This guide will help y
 3. [Making Changes](#making-changes)
 4. [Running Tests](#running-tests)
 5. [Submitting Changes](#submitting-changes)
-6. [Code of Conduct](#code-of-conduct)
+6. [Releasing](#releasing)
+7. [Code of Conduct](#code-of-conduct)
 
 ## Getting Started
 
@@ -96,6 +97,19 @@ cargo test
 3. **Open a Pull Request**
 
 Go to the repository on GitHub and open a pull request. Provide a clear description of the changes you have made and the problem they solve.
+
+## Releasing
+
+Version numbers appear in prose as well as in manifests, and the published
+snippets have to match the crates that were actually released. A release bumps:
+
+- `Cargo.toml` and `Cargo.lock`
+- `CHANGELOG.md`
+- `README.md`, the dependency snippet under *Codegen Macro*
+- `crates/proc-macro/README.md`, the dependency snippet under *Usage*
+- `docs/codama-parser-generation.md`, the dependency snippet in the quick start
+- `docs/codama-parser-walkthrough.md`, the version table and the dependency
+  snippets in *Set up the consuming crate*
 
 ## Code of Conduct
 

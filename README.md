@@ -220,6 +220,7 @@ This applies to every `cargo` invocation inside this workspace. The file is giti
 - [**Usage Examples**](./examples/): A variety of example projects that demonstrate how to use the features.
 - [**Example Shipstern Configuration**](./Shipstern.example.toml): Starter TOML file for pipeline configuration.
 - [**Generate Parsers from IDL**](./docs/codama-parser-generation.md): Generate a Shipstern parser from a Codama IDL with the `include_shipstern_parser!` macro, including how to declare self-CPI event envelopes in Codama.
+- [**Parser Setup Walkthrough**](./docs/codama-parser-walkthrough.md): End-to-end worked example, from an Anchor IDL to a crate that decodes an instruction, an account and an event.
 
 ## Maintainers
 
