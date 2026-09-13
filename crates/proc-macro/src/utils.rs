@@ -96,3 +96,19 @@ pub fn to_pascal_case(str: &str) -> String {
 pub(crate) fn unsuffixed(value: u64) -> proc_macro2::Literal {
     proc_macro2::Literal::u64_unsuffixed(value)
 }
+
+///
+/// Narrow a codama count, size or offset to a buffer index.
+///
+/// codama types these `u64` because that is what its JSON schema says, but every
+/// use here indexes an in-memory slice, where the type is `usize`. Converting at
+/// the boundary keeps that widening out of the rest of the macro.
+///
+/// Panics on a value that does not fit, which on a 64-bit host means never. A
+/// proc-macro panic surfaces as a compile error naming the value, which is the
+/// right outcome for an IDL declaring an offset larger than addressable memory.
+///
+pub(crate) fn as_index(value: u64) -> usize {
+    usize::try_from(value)
+        .unwrap_or_else(|_| panic!("IDL declares offset/size {value}, too large for this target"))
+}
