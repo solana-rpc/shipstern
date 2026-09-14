@@ -34,7 +34,7 @@ fn decode_discriminator_bytes(bytes: &codama_nodes::BytesValueNode) -> Vec<u8> {
 fn discriminator_consts(
     ident: &proc_macro2::Ident,
     bytes: &[u8],
-    offset: usize,
+    offset: &proc_macro2::Literal,
 ) -> Option<TokenStream> {
     if bytes.is_empty() {
         return None;
@@ -155,7 +155,8 @@ pub fn account_parser(
         Some(match discriminator {
             // Handle constant discriminators.
             DiscriminatorNode::Constant(node) => {
-                let offset = node.offset;
+                let offset_at = node.offset;
+                let offset = crate::utils::unsuffixed(offset_at as u64);
 
                 match node.constant.value.as_ref() {
                     // Preserve numeric discriminator behavior for layouts that include the
@@ -182,13 +183,13 @@ pub fn account_parser(
                             }
                         };
 
-                        (arm, discriminator_consts(&account_ident, &[value_u8], offset))
+                        (arm, discriminator_consts(&account_ident, &[value_u8], &offset))
                     },
 
                     // Byte discriminators are a prefix and are not part of the account struct.
                     ValueNode::Bytes(bytes) => {
                         let discriminator = decode_discriminator_bytes(bytes);
-                        let end = offset + discriminator.len();
+                        let end = crate::utils::unsuffixed((offset_at + discriminator.len()) as u64);
 
                         let arm = quote! {
                             if let Some(slice) = data.get(#offset..#end) {
@@ -205,7 +206,7 @@ pub fn account_parser(
                             }
                         };
 
-                        (arm, discriminator_consts(&account_ident, &discriminator, offset))
+                        (arm, discriminator_consts(&account_ident, &discriminator, &offset))
                     },
 
                     _ => return None,
@@ -214,7 +215,8 @@ pub fn account_parser(
 
             // Handle multi-byte discriminators (like Anchor's 8 byte discriminators)
             DiscriminatorNode::Field(node) => {
-                let offset = node.offset;
+                let offset_at = node.offset;
+                let offset = crate::utils::unsuffixed(offset_at as u64);
 
                 // Skip if not a struct
                 let NestedTypeNode::Value(struct_node) = &account.data else {
@@ -252,7 +254,7 @@ pub fn account_parser(
                 // Decode expected discriminator bytes
                 let discriminator = decode_discriminator_bytes(bytes);
 
-                let end = offset + size;
+                let end = crate::utils::unsuffixed((offset_at + size) as u64);
 
                 // Empty discriminator (size 0) matches any data — skip the
                 // byte comparison and match unconditionally on data length.
@@ -281,7 +283,7 @@ pub fn account_parser(
                 // default bytes, so a length mismatch can never match. Expose no
                 // constant for a discriminator the parser cannot honor.
                 let disc_const = if discriminator.len() == size {
-                    discriminator_consts(&account_ident, &discriminator, offset)
+                    discriminator_consts(&account_ident, &discriminator, &offset)
                 } else {
                     None
                 };
@@ -291,7 +293,7 @@ pub fn account_parser(
 
             // Handle accounts based on size only (e.g the account is 558 Bytes long)
             DiscriminatorNode::Size(node) => {
-                let size = node.size;
+                let size = crate::utils::unsuffixed(node.size as u64);
 
                 let arm = quote! {
                     if data.len() == #size {

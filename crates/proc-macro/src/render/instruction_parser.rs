@@ -345,7 +345,8 @@ fn extract_discriminator_info(
     match discriminator {
         // Constant discriminator at offset
         DiscriminatorNode::Constant(cn) => {
-            let offset = cn.offset;
+            let offset_at = cn.offset;
+            let offset = crate::utils::unsuffixed(offset_at as u64);
 
             match cn.constant.value.as_ref() {
                 // 1-byte number discriminator
@@ -354,7 +355,7 @@ fn extract_discriminator_info(
                         return None;
                     };
 
-                    let args_start = offset + 1;
+                    let args_start = crate::utils::unsuffixed((offset_at + 1) as u64);
 
                     let args_expr = if has_args {
                         Some(quote! {
@@ -384,7 +385,7 @@ fn extract_discriminator_info(
                 ValueNode::Bytes(bv) => {
                     let discriminator_bytes = decode_discriminator_field_bytes(bv);
                     let size = discriminator_bytes.len();
-                    let end = offset + size;
+                    let end = crate::utils::unsuffixed((offset_at + size) as u64);
 
                     let args_expr = if has_args {
                         Some(quote! {
@@ -416,14 +417,15 @@ fn extract_discriminator_info(
 
         // Field-based discriminator (Anchor 8-byte sighash or Shank u8 index)
         DiscriminatorNode::Field(node) => {
-            let offset = node.offset;
+            let offset_at = node.offset;
+            let offset = crate::utils::unsuffixed(offset_at as u64);
             let resolved = resolve_field(&node.name)?;
 
             match &resolved.r#type {
                 // Anchor-style: fixed-size bytes discriminator
                 TypeNode::FixedSize(fixed_size_node) => {
                     let size = fixed_size_node.size;
-                    let end = offset + size;
+                    let end = crate::utils::unsuffixed((offset_at + size) as u64);
 
                     let discriminator_bytes = resolved.bytes?;
 
@@ -456,7 +458,7 @@ fn extract_discriminator_info(
                     let bytes = resolved.bytes?;
                     let value = bytes.first().copied()? as u64;
 
-                    let args_start = offset + 1;
+                    let args_start = crate::utils::unsuffixed((offset_at + 1) as u64);
 
                     let args_expr = if has_args {
                         Some(quote! {
@@ -488,7 +490,7 @@ fn extract_discriminator_info(
 
         // Discriminator by total size only
         DiscriminatorNode::Size(sn) => {
-            let size = sn.size;
+            let size = crate::utils::unsuffixed(sn.size as u64);
 
             let args_expr = if has_args {
                 Some(quote! {
@@ -553,10 +555,11 @@ fn single_instruction_helper_fn(
         .enumerate()
         .map(|(idx, account)| {
             let field_name = format_ident!("{}", crate::utils::to_snake_case(&account.name));
+            let at = crate::utils::unsuffixed(idx as u64);
 
             if account.is_optional {
                 quote! {
-                    #field_name: accounts.get(#idx).and_then(|a| {
+                    #field_name: accounts.get(#at).and_then(|a| {
                         if a == &::shipstern_core::Pubkey::new(PROGRAM_ID) {
                             None
                         } else {
@@ -567,11 +570,11 @@ fn single_instruction_helper_fn(
             } else {
                 let error_msg = format!("Account does not exist at index {idx}");
 
-                quote! { #field_name: *accounts.get(#idx).ok_or(ParseError::from(#error_msg))? }
+                quote! { #field_name: *accounts.get(#at).ok_or(ParseError::from(#error_msg))? }
             }
         });
 
-    let num_defined_accounts = instruction.accounts.len();
+    let num_defined_accounts = crate::utils::unsuffixed(instruction.accounts.len() as u64);
 
     let has_explicit_remaining = instruction
         .accounts
@@ -689,6 +692,7 @@ pub(crate) fn collision_group_match_arm(
             let ix_name_snake = crate::utils::to_snake_case(&ixs[0].name);
 
             let fn_ident = format_ident!("parse_{}", ix_name_snake);
+            let count = crate::utils::unsuffixed(count as u64);
 
             inner_arms.push(quote! {
                 if accounts.len() >= #count {
@@ -802,6 +806,8 @@ pub fn instruction_parser(
                 disc_ident,
             );
 
+            let offset = crate::utils::unsuffixed(offset as u64);
+
             Some(quote! {
                 #[doc = #disc_doc]
                 pub const #disc_ident: &'static [u8] = &[#(#bytes),*];
@@ -852,7 +858,7 @@ pub fn instruction_parser(
     // When program-events feature is active and the IDL has events,
     // InstructionParser outputs ProgramEventOutput instead of Instructions.
     let event_ix_tag = cpi_event_config.discriminator.iter().copied();
-    let event_payload_offset = cpi_event_config.payload_offset;
+    let event_payload_offset = crate::utils::unsuffixed(cpi_event_config.payload_offset as u64);
 
     let instruction_parser_impl = if has_events {
         let output_ident = format_ident!("ProgramEventOutput");
