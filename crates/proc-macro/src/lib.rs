@@ -590,3 +590,251 @@ mod literal_width_tests {
         assert!(suffixed_literals("let swap_v2usize = 1 ;").is_empty());
     }
 }
+
+#[cfg(test)]
+mod field_presence_tests {
+    use codama_nodes::{InstructionAccountNode, OptionTypeNode};
+
+    ///
+    /// An IDL with one optional-typed account field and one optional instruction
+    /// account, where `fixed` and `isOptional` are spliced in per test case.
+    ///
+    /// `flags` is inserted verbatim into both nodes, so passing `""` omits the
+    /// field entirely and `"\"fixed\": false,"` states it explicitly.
+    ///
+    fn idl_json(option_flag: &str, account_flag: &str) -> String {
+        format!(
+            r#"{{
+  "kind": "rootNode",
+  "standard": "codama",
+  "version": "1.6.0",
+  "program": {{
+    "kind": "programNode",
+    "name": "presenceMatrix",
+    "publicKey": "11111111111111111111111111111111",
+    "version": "0.1.0",
+    "origin": "shank",
+    "accounts": [
+      {{
+        "kind": "accountNode",
+        "name": "holder",
+        "data": {{
+          "kind": "structTypeNode",
+          "fields": [
+            {{
+              "kind": "structFieldTypeNode",
+              "name": "discriminator",
+              "type": {{ "kind": "fixedSizeTypeNode", "size": 1,
+                         "type": {{ "kind": "bytesTypeNode" }} }},
+              "defaultValue": {{ "kind": "bytesValueNode", "data": "07", "encoding": "base16" }}
+            }},
+            {{
+              "kind": "structFieldTypeNode",
+              "name": "maybeAmount",
+              "type": {{
+                "kind": "optionTypeNode",
+                {option_flag}
+                "item": {{ "kind": "numberTypeNode", "format": "u64", "endian": "le" }},
+                "prefix": {{ "kind": "numberTypeNode", "format": "u8", "endian": "le" }}
+              }}
+            }},
+            {{
+              "kind": "structFieldTypeNode",
+              "name": "tail",
+              "type": {{ "kind": "numberTypeNode", "format": "u32", "endian": "le" }}
+            }}
+          ]
+        }},
+        "discriminators": [
+          {{ "kind": "fieldDiscriminatorNode", "name": "discriminator", "offset": 0 }}
+        ]
+      }}
+    ],
+    "instructions": [
+      {{
+        "kind": "instructionNode",
+        "name": "touch",
+        "accounts": [
+          {{ "kind": "instructionAccountNode", "name": "payer",
+             "isWritable": true, "isSigner": true }},
+          {{ "kind": "instructionAccountNode", "name": "maybeDelegate",
+             "isWritable": false, "isSigner": false,
+             {account_flag}
+             "docs": [] }}
+        ],
+        "arguments": [
+          {{
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "docs": [],
+            "type": {{ "kind": "fixedSizeTypeNode", "size": 1,
+                       "type": {{ "kind": "bytesTypeNode" }} }},
+            "defaultValue": {{ "kind": "bytesValueNode", "data": "07", "encoding": "base16" }}
+          }}
+        ],
+        "discriminators": [
+          {{ "kind": "fieldDiscriminatorNode", "name": "discriminator", "offset": 0 }}
+        ]
+      }}
+    ],
+    "definedTypes": [],
+    "errors": [],
+    "constants": []
+  }},
+  "additionalPrograms": []
+}}"#
+        )
+    }
+
+    fn expand_with(option_flag: &str, account_flag: &str) -> String {
+        // One directory per call. Keying the name on the flag lengths stopped being
+        // injective once a flag reached 31 characters, and libtest runs these cases on
+        // threads of one process, so two colliding cases shared a file and the equality
+        // assertion passed without proving anything.
+        static CASE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+        let dir = std::env::temp_dir().join(format!(
+            "shipstern-presence-{}-{}",
+            std::process::id(),
+            CASE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ));
+
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let path = dir.join("presence.json");
+        std::fs::write(&path, idl_json(option_flag, account_flag)).expect("write fixture");
+
+        super::expand_parser_tokens(
+            &path,
+            crate::render::shipstern_parser::ParserConfig::default(),
+            false,
+        )
+        .to_string()
+    }
+
+    ///
+    /// An absent `fixed` must deserialize the same as an explicit `false`.
+    ///
+    /// codama 0.9 types the field `bool` with `#[serde(default)]`, so absent is
+    /// `false`. codama 0.13 retypes it `Option<bool>`, where absent is `None` and
+    /// the migration shim reads it as `.unwrap_or(false)`. This pins the 0.9 half
+    /// of that equality: if absent ever stopped meaning `false` here, the shim
+    /// would silently change every layout that omits the flag.
+    ///
+    #[test]
+    fn absent_fixed_deserializes_as_false() {
+        let absent: OptionTypeNode = serde_json::from_str(
+            r#"{"kind":"optionTypeNode",
+                "item":{"kind":"numberTypeNode","format":"u64","endian":"le"},
+                "prefix":{"kind":"numberTypeNode","format":"u8","endian":"le"}}"#,
+        )
+        .expect("absent fixed parses");
+
+        let explicit_false: OptionTypeNode = serde_json::from_str(
+            r#"{"kind":"optionTypeNode","fixed":false,
+                "item":{"kind":"numberTypeNode","format":"u64","endian":"le"},
+                "prefix":{"kind":"numberTypeNode","format":"u8","endian":"le"}}"#,
+        )
+        .expect("explicit false parses");
+
+        let explicit_true: OptionTypeNode = serde_json::from_str(
+            r#"{"kind":"optionTypeNode","fixed":true,
+                "item":{"kind":"numberTypeNode","format":"u64","endian":"le"},
+                "prefix":{"kind":"numberTypeNode","format":"u8","endian":"le"}}"#,
+        )
+        .expect("explicit true parses");
+
+        // codama 0.13 types this `Option<bool>` with no serde default, so absent is
+        // `None`. The shim reads it as `.unwrap_or(false)`, which has to land on the
+        // value codama 0.9 produced for an absent field: `false`.
+        assert_eq!(absent.fixed, None);
+        assert!(!absent.fixed.unwrap_or(false));
+
+        assert_eq!(
+            absent.fixed.unwrap_or(false),
+            explicit_false.fixed.unwrap_or(false),
+            "absent must read as false, the way codama 0.9 deserialized it",
+        );
+
+        assert!(
+            explicit_true.fixed.unwrap_or(false),
+            "true must stay distinguishable from absent",
+        );
+    }
+
+    /// Same equality for the instruction-account flag.
+    #[test]
+    fn absent_is_optional_deserializes_as_false() {
+        let absent: InstructionAccountNode = serde_json::from_str(
+            r#"{"kind":"instructionAccountNode","name":"a","isWritable":false,"isSigner":false}"#,
+        )
+        .expect("absent isOptional parses");
+
+        let explicit_false: InstructionAccountNode = serde_json::from_str(
+            r#"{"kind":"instructionAccountNode","name":"a","isWritable":false,
+                "isSigner":false,"isOptional":false}"#,
+        )
+        .expect("explicit false parses");
+
+        let explicit_true: InstructionAccountNode = serde_json::from_str(
+            r#"{"kind":"instructionAccountNode","name":"a","isWritable":false,
+                "isSigner":false,"isOptional":true}"#,
+        )
+        .expect("explicit true parses");
+
+        // codama 0.13 types this `Option<bool>` with no serde default, so absent is
+        // `None`. The shim reads it as `.unwrap_or(false)`, which has to land on the
+        // value codama 0.9 produced for an absent field: `false`.
+        assert_eq!(absent.is_optional, None);
+        assert!(!absent.is_optional.unwrap_or(false));
+
+        assert_eq!(
+            absent.is_optional.unwrap_or(false),
+            explicit_false.is_optional.unwrap_or(false),
+            "absent must read as false, the way codama 0.9 deserialized it",
+        );
+
+        assert!(
+            explicit_true.is_optional.unwrap_or(false),
+            "true must stay distinguishable from absent",
+        );
+    }
+
+    ///
+    /// The presence distinction has to survive all the way to the emitted parser,
+    /// not just to the node.
+    ///
+    /// Deserializing absent as `false` is only meaningful if the renderer then
+    /// lays the bytes out identically. Comparing whole token streams covers the
+    /// layout decisions that read these flags — the fixed-option padding branch
+    /// and the optional-account branch — without asserting on their internals.
+    ///
+    #[test]
+    fn absent_flags_generate_the_same_parser_as_explicit_false() {
+        let absent = expand_with("", "");
+        let explicit_false = expand_with(r#""fixed": false,"#, r#""isOptional": false,"#);
+
+        assert_eq!(
+            absent, explicit_false,
+            "omitting fixed/isOptional must render exactly like stating them false",
+        );
+    }
+
+    ///
+    /// The guard on the test above: an explicit `true` must render differently,
+    /// or the comparison would pass for a renderer that ignores the flags.
+    ///
+    #[test]
+    fn explicit_true_flags_generate_a_different_parser() {
+        let absent = expand_with("", "");
+        let fixed_true = expand_with(r#""fixed": true,"#, "");
+        let optional_true = expand_with("", r#""isOptional": true,"#);
+
+        assert_ne!(absent, fixed_true, "fixed: true must change the layout");
+        assert_ne!(
+            absent, optional_true,
+            "isOptional: true must change the accounts"
+        );
+    }
+}

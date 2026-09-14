@@ -6,72 +6,45 @@ disk and no build script is involved.
 
 ```
 Codama JSON ──> include_shipstern_parser! ──> generated parser
-  (complete)        (compile time)       (accounts, instructions, events)
+                    (compile time)       (accounts, instructions, events)
 ```
 
 ## Quick start
 
 **1. Convert your IDL to Codama JSON.** The macro reads Codama nodes, not a raw Anchor IDL.
 
-One wrinkle makes this more than a one-liner. The macro deserialises through `codama-nodes`
-(pinned to `=0.9.1`), whose serde requires most node fields to be present rather than
-defaulting them, while Codama's JavaScript tooling omits empty and default-valued fields.
-Feeding `JSON.stringify(rootNodeFromAnchor(idl))` straight to the macro fails with
-`missing field 'additionalPrograms'` or `missing field 'accounts'`, depending on which
-collection happens to be empty. Codama also freezes its nodes, so the tree has to be cloned
-before those fields can be added.
+```bash
+pnpm install @codama/nodes-from-anchor
+```
 
 ```javascript
-// convert.cjs
-const fs = require("node:fs");
-const path = require("node:path");
-const { rootNodeFromAnchor } = require("@codama/nodes-from-anchor");
+// convert.mjs
+import { readFileSync, writeFileSync } from "node:fs";
+import { rootNodeFromAnchor } from "@codama/nodes-from-anchor";
 
-const DEFAULTS = {
-    rootNode: { additionalPrograms: [] },
-    programNode: { accounts: [], definedTypes: [], errors: [], pdas: [], docs: [] },
-    instructionNode: {
-        accounts: [], arguments: [], discriminators: [],
-        docs: [], subInstructions: [], remainingAccounts: [],
-    },
-    accountNode: { discriminators: [], docs: [] },
-    eventNode: { discriminators: [], docs: [] },
-    definedTypeNode: { docs: [] },
-    structFieldTypeNode: { docs: [] },
-    instructionArgumentNode: { docs: [] },
-    instructionAccountNode: { docs: [] },
-    errorNode: { docs: [] },
-};
+const idl = JSON.parse(readFileSync("idl.json", "utf8"));
 
-function backfill(node) {
-    if (Array.isArray(node)) return node.forEach(backfill);
-    if (!node || typeof node !== "object") return;
-
-    for (const [key, value] of Object.entries(DEFAULTS[node.kind] ?? {})) {
-        if (!(key in node)) node[key] = value;
-    }
-
-    Object.values(node).forEach(backfill);
-}
-
-const idl = JSON.parse(fs.readFileSync(path.join(__dirname, "idl.json"), "utf8"));
-
-// Codama freezes its nodes, so round-trip through JSON for a mutable tree.
-const tree = JSON.parse(JSON.stringify(rootNodeFromAnchor(idl)));
-backfill(tree);
-
-fs.writeFileSync(path.join(__dirname, "codama.json"), JSON.stringify(tree, null, 2));
+writeFileSync("codama.json", JSON.stringify(rootNodeFromAnchor(idl), null, 2));
 ```
 
 ```bash
-pnpm install @codama/nodes-from-anchor
-node convert.cjs
+node convert.mjs
 ```
 
-If your IDL is already in complete Codama form, skip this step. `tests/idls/*.json` in this
-repository are all in that shape and make a useful reference.
+The `.mjs` extension keeps the file ESM whatever the nearest `package.json` says. Node
+also detects the `import` syntax in a plain `.js` file, but a project that sets
+`"type": "commonjs"` overrides that detection and the same code fails to parse.
 
-If your IDL is already in complete Codama form, continue to step 2.
+That output loads as it is. Codama's JavaScript omits empty and default-valued
+collections when it serializes, and `codama-nodes` (pinned to `=0.13.2`) defaults
+them on the way back in, so there is nothing to add by hand.
+
+One constraint to know about: if `programNode.origin` is present it has to be
+`"anchor"` or `"shank"`, which is the closed set Codama models. Any other value is
+rejected when the IDL loads. Leaving the field out is fine.
+
+If your IDL is already in complete Codama form, skip this step. `tests/idls/*.json`
+in this repository are all in that shape and make a useful reference.
 
 **2. Add the dependencies.**
 

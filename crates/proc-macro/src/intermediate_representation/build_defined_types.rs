@@ -14,13 +14,13 @@ pub fn build_defined_types(defined_types: &[DefinedTypeNode], ir: &mut SchemaIr)
     for defined_type in defined_types {
         let name = crate::utils::to_pascal_case(&defined_type.name);
 
-        ir.register_defined_type(name, defined_type.r#type.clone());
+        ir.register_defined_type(name, (*defined_type.r#type).clone());
     }
 
     // Concrete user-defined types must keep their names even when generated
     // helpers are emitted before the type itself.
     ir.reserve_type_names(defined_types.iter().filter_map(|defined_type| {
-        let is_concrete = match &defined_type.r#type {
+        let is_concrete = match &*defined_type.r#type {
             TypeNode::Struct(_) | TypeNode::Enum(_) => true,
             TypeNode::Tuple(tuple) => tuple.items.len() != 1,
             _ => false,
@@ -36,7 +36,7 @@ pub fn build_defined_types(defined_types: &[DefinedTypeNode], ir: &mut SchemaIr)
     for defined_type in defined_types {
         let name = crate::utils::to_pascal_case(&defined_type.name);
 
-        match &defined_type.r#type {
+        match &*defined_type.r#type {
             TypeNode::Tuple(tuple_type) if tuple_type.items.len() == 1 => {
                 ir.register_type_alias(
                     name.clone(),
@@ -63,7 +63,7 @@ pub fn build_defined_types(defined_types: &[DefinedTypeNode], ir: &mut SchemaIr)
     for defined_type in defined_types {
         let name = crate::utils::to_pascal_case(&defined_type.name);
 
-        match &defined_type.r#type {
+        match &*defined_type.r#type {
             TypeNode::Struct(struct_type) => build_defined_type_struct(&name, struct_type, ir),
             TypeNode::Enum(enum_type) => build_defined_type_enum(&name, enum_type, ir),
             TypeNode::Tuple(tuple_type) if tuple_type.items.len() != 1 => {

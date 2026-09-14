@@ -132,7 +132,7 @@ To parse events, including self-CPI events, enable the `program-events` feature.
 shipstern-proc-macro = { version = "0.10.0", features = ["program-events"] }
 ```
 
-The macro reads a **Codama** JSON IDL, not a raw Anchor IDL, and it must carry the full node structure that `codama-nodes` requires. See [Generate a Shipstern Parser from a Codama IDL](./docs/codama-parser-generation.md).
+The macro reads a **Codama** JSON IDL, not a raw Anchor IDL. Output from Codama's own converter loads as it is, since `codama-nodes` defaults the collections its serializer omits. See [Generate a Shipstern Parser from a Codama IDL](./docs/codama-parser-generation.md).
 
 Then, import and invoke the macro in your code. Specify the path to your Codama JSON IDL file relative to your crate root:
 
