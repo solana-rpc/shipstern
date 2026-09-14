@@ -55,6 +55,44 @@ jobs:
         with:
           command: check advisories bans
 
+  # The macro reads codama's node types directly, so the pin is a correctness
+  # constraint, not hygiene: a second codama version in the graph type-checks and
+  # then misparses IDLs. Each workspace resolves its own lockfile, so both are
+  # checked. See .github/deny-codama.toml for the full rationale.
+  codama-pin:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: codama-nodes is pinned to an exact version
+        run: |
+          grep -qE '^[[:space:]]*codama-nodes[[:space:]]*=.*"=[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml \
+            || { echo "::error file=Cargo.toml::codama-nodes must use an exact pin (=X.Y.Z)"; exit 1; }
+
+      # Both runs pass the deny config through `arguments`, not `command-arguments`:
+      # cargo-deny 0.20 moved --config from `check` to the top level, and the action
+      # appends `command-arguments` after the command's positional, where 0.20 rejects
+      # it. The action is pinned to a tag rather than @v2 because it hardcodes its own
+      # cargo-deny version, so a floating major can move the CLI out from under this
+      # job -- which is how it broke the first time.
+      - name: No duplicate codama versions (root workspace)
+        uses: EmbarkStudios/cargo-deny-action@v2.1.1
+        with:
+          arguments: --all-features --config .github/deny-codama.toml
+          command: check bans
+
+      # Excluded from the root workspace, so it resolves its own lockfile and the
+      # root cargo-deny run says nothing about it.
+      - name: No duplicate codama versions (events workspace)
+        uses: EmbarkStudios/cargo-deny-action@v2.1.1
+        with:
+          manifest-path: tests/proc-macro-events/Cargo.toml
+          arguments: --all-features --config .github/deny-codama.toml
+          command: check bans
+
   test:
     runs-on: ubuntu-24.04
     steps:
