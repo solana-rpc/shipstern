@@ -103,7 +103,10 @@ pub fn shipstern_parser(
 
         let proto_lit = syn::LitStr::new(&output.schema, proc_macro2::Span::call_site());
 
-        let account_dispatch_const = match output.account_dispatch_index {
+        let account_dispatch_const = match output
+            .account_dispatch_index
+            .map(|i| crate::utils::unsuffixed(i as u64))
+        {
             Some(account_idx) => quote! {
                 /// 0-based index of the account dispatch message in the proto file descriptor.
                 pub const ACCOUNT_DISPATCH_MESSAGE_INDEX: Option<usize> = Some(#account_idx);
@@ -114,7 +117,10 @@ pub fn shipstern_parser(
             },
         };
 
-        let instruction_dispatch_const = match output.instruction_dispatch_index {
+        let instruction_dispatch_const = match output
+            .instruction_dispatch_index
+            .map(|i| crate::utils::unsuffixed(i as u64))
+        {
             Some(instruction_idx) => quote! {
                 /// 0-based index of the instruction dispatch message in the proto file descriptor.
                 pub const INSTRUCTION_DISPATCH_MESSAGE_INDEX: Option<usize> = Some(#instruction_idx);
@@ -125,7 +131,10 @@ pub fn shipstern_parser(
             },
         };
 
-        let program_event_output_const = match output.program_event_output_index {
+        let program_event_output_const = match output
+            .program_event_output_index
+            .map(|i| crate::utils::unsuffixed(i as u64))
+        {
             Some(idx) => quote! {
                 /// 0-based index of the ProgramEventOutput wrapper message in the proto file descriptor.
                 pub const PROGRAM_EVENT_OUTPUT_MESSAGE_INDEX: Option<usize> = Some(#idx);
