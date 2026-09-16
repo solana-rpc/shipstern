@@ -1,0 +1,40 @@
+# Codama version guard — applied to every workspace in the repo.
+#
+# The proc-macro reads codama's node types directly, so their Rust shapes are part
+# of its API surface rather than an implementation detail. codama is pre-1.0 and
+# rewrote those shapes once already, in 0.9.3, a patch release on the 0.9.1 this
+# repo was pinned to: children became boxed, counts/sizes/offsets went usize ->
+# u64, `fixed`/`isOptional` went bool -> Option<bool>, and `origin` became a
+# closed anchor|shank enum. 0.10 through 0.13 carry that shape forward unchanged.
+# It is pre-1.0 and will do it again, in a patch release if it likes, which is
+# why the pin is exact rather than a caret. Two codama versions in one graph
+# means the macro reads nodes deserialized against a different schema than the
+# one it was compiled against, which type-checks and then misparses on-chain data.
+#
+# This lives in its own config because the repo has more than one lockfile:
+# tests/proc-macro-events is an excluded workspace and resolves independently, and
+# the root deny.toml carries workspace-specific bans that do not hold there. Keeping
+# only this rule here lets the same guard run against every manifest unchanged.
+#
+# codama-nodes is pinned `=0.13.2` in the root Cargo.toml. Moving that pin is a
+# deliberate migration, and the practice is to diff generated parser output against
+# the previous version first. CI does not enforce that: the codama-pin job checks
+# that the pin is exact and that one version resolves, not which version, and not
+# that anyone diffed anything.
+#
+# The `deny` list below is also a silent no-op for any crate absent from the graph --
+# cargo-deny reports `bans ok` with no diagnostic rather than flagging the dead rule.
+# The exact-pin grep is what keeps this check fail-closed if codama ever leaves.
+
+[graph]
+all-features = true
+
+[bans]
+# The Solana stack duplicates ~191 crates; a blanket duplicate check is pure noise.
+multiple-versions = "allow"
+deny = [
+    { name = "codama-nodes", deny-multiple-versions = true, reason = "the macro reads these node types directly; a split graph misparses IDLs" },
+    { name = "codama-nodes-derive", deny-multiple-versions = true, reason = "must track codama-nodes exactly" },
+    { name = "codama-errors", deny-multiple-versions = true, reason = "must track codama-nodes exactly" },
+    { name = "codama-syn-helpers", deny-multiple-versions = true, reason = "must track codama-nodes exactly" },
+]
