@@ -383,3 +383,71 @@ async fn instruction_const_matches_real_mainnet_bytes() {
 
     assert_eq!(checked, 1, "expected exactly one Buy in the fixture");
 }
+
+///
+/// Hostile buffers against a real Anchor IDL.
+///
+/// `parser_robustness.rs` drives synthetic fixtures; this drives the one already
+/// expanded in this binary, so it adds no compile time. pump_fun is the IDL that
+/// closes the two gaps those fixtures leave: all six accounts carry an 8-byte
+/// discriminator at offset 0 with no zero-width or size-only arm, so `try_unpack`
+/// walks a real byte window, and the instructions declare real account lists, so a
+/// short account vector actually reaches a generated accessor.
+///
+#[test]
+fn hostile_buffers_never_panic() {
+    struct Rng(u64);
+
+    impl Rng {
+        fn fill(&mut self, len: usize) -> Vec<u8> {
+            (0..len)
+                .map(|_| {
+                    self.0 ^= self.0 >> 12;
+                    self.0 ^= self.0 << 25;
+                    self.0 ^= self.0 >> 27;
+
+                    (self.0.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 24) as u8
+                })
+                .collect()
+        }
+    }
+
+    let path = shipstern_core::instruction::Path::new_single(0);
+
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+
+    let accounts: Vec<Pubkey> = (0..20)
+        .map(|_| Pubkey::new(rng.fill(32).try_into().expect("32 bytes")))
+        .collect();
+
+    let disc = pump_fun::Instructions::BUY_DISCRIMINATOR;
+
+    let mut reached = 0_usize;
+
+    for len in 0..=96_usize {
+        let garbage = rng.fill(len);
+
+        // A random buffer satisfies an 8-byte discriminator with probability 2^-64,
+        // so half the corpus is primed with a real one to get past the first compare.
+        let mut primed = disc.to_vec();
+
+        primed.extend_from_slice(&garbage);
+
+        for data in [&garbage, &primed] {
+            for n in [0_usize, 1, 8, accounts.len()] {
+                if pump_fun::resolve_instruction_default(&accounts[..n], data, &path).is_ok() {
+                    reached += 1;
+                }
+            }
+
+            if pump_fun::PumpFunAccount::try_unpack(data).is_ok() {
+                reached += 1;
+            }
+        }
+    }
+
+    assert!(
+        reached > 0,
+        "no buffer reached a decoder, so this corpus proves nothing about truncation",
+    );
+}
