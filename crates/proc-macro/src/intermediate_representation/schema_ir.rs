@@ -278,13 +278,13 @@ impl SchemaIr {
             T::Tuple(tuple) => tuple.items.iter().try_fold(0usize, |size, item| {
                 size.checked_add(self.fixed_size_of_type_inner(item, visiting_links)?)
             }),
-            T::Array(array) => match &array.count {
+            T::Array(array) => match &*array.count {
                 CountNode::Fixed(count) => self
                     .fixed_size_of_type_inner(&array.item, visiting_links)?
-                    .checked_mul(count.value),
+                    .checked_mul(crate::utils::as_index(count.value)),
                 _ => None,
             },
-            T::Option(option) if option.fixed => {
+            T::Option(option) if option.fixed.unwrap_or(false) => {
                 option_prefix_wire_size(option.prefix.get_nested_type_node().format)?
                     .checked_add(self.fixed_size_of_type_inner(&option.item, visiting_links)?)
             },

@@ -194,7 +194,7 @@ pub fn envelope_of(event: &codama_nodes::EventNode) -> Result<Option<CpiEventEnv
         let bytes = constant_discriminator_bytes(node)
             .map_err(|reason| format!("event `{}` has a {reason}", *event.name))?;
 
-        decoded.push((node.offset, bytes));
+        decoded.push((crate::utils::as_index(node.offset), bytes));
     }
 
     // Overlap makes at least one arm unmatchable. Gaps are allowed: padded
@@ -621,5 +621,65 @@ mod tests {
         let instructions = vec![instruction("route", "0102030405060708", 0)];
 
         assert!(envelope_instruction_collision(&anchor, &instructions).is_none());
+    }
+
+    fn idl_with_origin(origin: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("shipstern-origin-tests");
+
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        // Hex-encode the name: macOS is case-insensitive, so `Anchor.json` and
+        // `anchor.json` would be the same file and the cases would clobber each other.
+        let stem: String = origin.bytes().map(|b| format!("{b:02x}")).collect();
+
+        let path = dir.join(format!("{stem}.json"));
+
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"kind":"rootNode","standard":"codama","version":"1.6.0",
+                   "program":{{"kind":"programNode","name":"p",
+                   "publicKey":"11111111111111111111111111111111","version":"0.1.0",
+                   "origin":"{origin}","accounts":[],"instructions":[],
+                   "definedTypes":[],"errors":[],"constants":[]}},
+                   "additionalPrograms":[]}}"#
+            ),
+        )
+        .expect("write fixture");
+
+        path
+    }
+
+    ///
+    /// codama owns the origin invariant from 0.13 on, so the macro does not
+    /// re-check it.
+    ///
+    /// `origin` was a free-form `Option<String>` on codama 0.9, which meant a
+    /// generator-specific value deserialized and was then silently dropped. It is
+    /// a closed enum now, so the same IDL fails to parse and the message names
+    /// both the offending value and the accepted set. A wrapper check here would
+    /// only restate that, worse.
+    ///
+    #[test]
+    fn codama_rejects_an_unknown_program_origin() {
+        let err = load_codama_idl(idl_with_origin("custom")).expect_err("custom is not an origin");
+
+        let message = err.to_string();
+
+        assert!(message.contains("custom"), "{message}");
+        assert!(message.contains("anchor"), "{message}");
+        assert!(message.contains("shank"), "{message}");
+    }
+
+    /// The enum is lowercase-tagged, so a case variant is a different token.
+    #[test]
+    fn codama_rejects_a_case_variant_origin() {
+        assert!(load_codama_idl(idl_with_origin("Anchor")).is_err());
+    }
+
+    #[test]
+    fn codama_accepts_the_two_real_origins() {
+        assert!(load_codama_idl(idl_with_origin("anchor")).is_ok());
+        assert!(load_codama_idl(idl_with_origin("shank")).is_ok());
     }
 }

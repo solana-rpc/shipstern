@@ -155,7 +155,7 @@ pub fn account_parser(
         Some(match discriminator {
             // Handle constant discriminators.
             DiscriminatorNode::Constant(node) => {
-                let offset_at = node.offset;
+                let offset_at = crate::utils::as_index(node.offset);
                 let offset = crate::utils::unsuffixed(offset_at as u64);
 
                 match node.constant.value.as_ref() {
@@ -215,7 +215,7 @@ pub fn account_parser(
 
             // Handle multi-byte discriminators (like Anchor's 8 byte discriminators)
             DiscriminatorNode::Field(node) => {
-                let offset_at = node.offset;
+                let offset_at = crate::utils::as_index(node.offset);
                 let offset = crate::utils::unsuffixed(offset_at as u64);
 
                 // Skip if not a struct
@@ -232,7 +232,7 @@ pub fn account_parser(
                 };
 
                 // Skip if discriminator field isn't fixed-size bytes
-                let TypeNode::FixedSize(fixed_size_node) = &field.r#type else {
+                let TypeNode::FixedSize(fixed_size_node) = &*field.r#type else {
                     return None;
                 };
 
@@ -293,7 +293,7 @@ pub fn account_parser(
 
             // Handle accounts based on size only (e.g the account is 558 Bytes long)
             DiscriminatorNode::Size(node) => {
-                let size = crate::utils::unsuffixed(node.size as u64);
+                let size = crate::utils::unsuffixed(node.size);
 
                 let arm = quote! {
                     if data.len() == #size {

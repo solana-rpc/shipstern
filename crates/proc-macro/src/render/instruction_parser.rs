@@ -57,11 +57,11 @@ fn resolve_ix_field(
 ) -> Option<ResolvedFieldDiscriminator> {
     let field = ix.arguments.iter().find(|f| &f.name == name)?;
 
-    let bytes = match field.default_value.as_ref()? {
-        codama_nodes::InstructionInputValueNode::Bytes(b) => {
+    let bytes = match (*field.default_value).as_ref()? {
+        codama_nodes::InstructionInputValueNode::BytesValue(b) => {
             Some(decode_discriminator_field_bytes(b))
         },
-        codama_nodes::InstructionInputValueNode::Number(nn) => {
+        codama_nodes::InstructionInputValueNode::NumberValue(nn) => {
             let Number::UnsignedInteger(value) = nn.number else {
                 return None;
             };
@@ -72,7 +72,7 @@ fn resolve_ix_field(
     };
 
     Some(ResolvedFieldDiscriminator {
-        r#type: field.r#type.clone(),
+        r#type: (*field.r#type).clone(),
         bytes,
     })
 }
@@ -85,13 +85,13 @@ fn resolve_event_field(
 
     let field = struct_node.fields.iter().find(|f| &f.name == name)?;
 
-    let bytes = match field.default_value.as_ref()? {
+    let bytes = match (*field.default_value).as_ref()? {
         ValueNode::Bytes(b) => Some(decode_discriminator_field_bytes(b)),
         _ => None,
     };
 
     Some(ResolvedFieldDiscriminator {
-        r#type: field.r#type.clone(),
+        r#type: (*field.r#type).clone(),
         bytes,
     })
 }
@@ -161,14 +161,14 @@ fn rebased_event_discriminators(
             }
 
             let mut node = node.clone();
-            node.offset -= envelope.payload_offset;
+            node.offset -= envelope.payload_offset as u64;
 
             Some(DiscriminatorNode::Constant(node))
         })
         .collect();
 
     rebased.sort_by_key(|discriminator| match discriminator {
-        DiscriminatorNode::Constant(node) => node.offset,
+        DiscriminatorNode::Constant(node) => crate::utils::as_index(node.offset),
         _ => 0,
     });
 
@@ -276,7 +276,7 @@ fn extract_discriminator_key(
                 };
 
                 Some(DiscriminatorKey::Constant {
-                    offset: cn.offset,
+                    offset: crate::utils::as_index(cn.offset),
                     value,
                 })
             },
@@ -285,7 +285,7 @@ fn extract_discriminator_key(
                 let bytes = decode_discriminator_field_bytes(bv);
 
                 Some(DiscriminatorKey::Field {
-                    offset: cn.offset,
+                    offset: crate::utils::as_index(cn.offset),
                     bytes,
                 })
             },
@@ -301,7 +301,7 @@ fn extract_discriminator_key(
                     let bytes = resolved.bytes?;
 
                     Some(DiscriminatorKey::Field {
-                        offset: node.offset,
+                        offset: crate::utils::as_index(node.offset),
                         bytes,
                     })
                 },
@@ -312,7 +312,7 @@ fn extract_discriminator_key(
                     let value = bytes.first().copied()? as u64;
 
                     Some(DiscriminatorKey::Constant {
-                        offset: node.offset,
+                        offset: crate::utils::as_index(node.offset),
                         value,
                     })
                 },
@@ -320,7 +320,9 @@ fn extract_discriminator_key(
                 _ => None,
             }
         },
-        DiscriminatorNode::Size(sn) => Some(DiscriminatorKey::Size { size: sn.size }),
+        DiscriminatorNode::Size(sn) => Some(DiscriminatorKey::Size {
+            size: crate::utils::as_index(sn.size),
+        }),
     }
 }
 
@@ -345,7 +347,7 @@ fn extract_discriminator_info(
     match discriminator {
         // Constant discriminator at offset
         DiscriminatorNode::Constant(cn) => {
-            let offset_at = cn.offset;
+            let offset_at = crate::utils::as_index(cn.offset);
             let offset = crate::utils::unsuffixed(offset_at as u64);
 
             match cn.constant.value.as_ref() {
@@ -417,7 +419,7 @@ fn extract_discriminator_info(
 
         // Field-based discriminator (Anchor 8-byte sighash or Shank u8 index)
         DiscriminatorNode::Field(node) => {
-            let offset_at = node.offset;
+            let offset_at = crate::utils::as_index(node.offset);
             let offset = crate::utils::unsuffixed(offset_at as u64);
             let resolved = resolve_field(&node.name)?;
 
@@ -490,7 +492,7 @@ fn extract_discriminator_info(
 
         // Discriminator by total size only
         DiscriminatorNode::Size(sn) => {
-            let size = crate::utils::unsuffixed(sn.size as u64);
+            let size = crate::utils::unsuffixed(sn.size);
 
             let args_expr = if has_args {
                 Some(quote! {
@@ -557,7 +559,7 @@ fn single_instruction_helper_fn(
             let field_name = format_ident!("{}", crate::utils::to_snake_case(&account.name));
             let at = crate::utils::unsuffixed(idx as u64);
 
-            if account.is_optional {
+            if account.is_optional.unwrap_or(false) {
                 quote! {
                     #field_name: accounts.get(#at).and_then(|a| {
                         if a == &::shipstern_core::Pubkey::new(PROGRAM_ID) {
