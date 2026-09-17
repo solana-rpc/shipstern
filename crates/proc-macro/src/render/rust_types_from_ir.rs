@@ -147,6 +147,17 @@ fn render_struct_type(t: &TypeIr, local_names: Option<&HashSet<&str>>) -> TokenS
         .map(|f| render_field(f, local_names))
         .collect();
 
+    let codecs: TokenStream = t
+        .fields
+        .iter()
+        .map(|f| super::size_prefixed_bytes::methods(f, local_names.is_some()))
+        .collect();
+    let codecs = if codecs.is_empty() {
+        quote! {}
+    } else {
+        quote! { impl #ident { #codecs } }
+    };
+
     if cfg!(feature = "proto") {
         let prost_impl = super::manual_prost::manual_prost_struct_impl(t, local_names);
 
@@ -158,6 +169,7 @@ fn render_struct_type(t: &TypeIr, local_names: Option<&HashSet<&str>>) -> TokenS
             }
 
             #prost_impl
+            #codecs
         }
     } else {
         quote! {
@@ -166,6 +178,7 @@ fn render_struct_type(t: &TypeIr, local_names: Option<&HashSet<&str>>) -> TokenS
             pub struct #ident {
                 #(#fields),*
             }
+            #codecs
         }
     }
 }
@@ -520,9 +533,13 @@ pub fn render_field(f: &FieldIr, local_names: Option<&HashSet<&str>>) -> TokenSt
     let path_prefix = if in_module { "super::" } else { "" };
 
     // Custom borsh attrs for fields whose on-chain encoding differs from the Rust type.
-    // With native types, we no longer need widening borsh attrs — only fixed-bytes,
-    // float, and fixed-array helpers remain.
-    let borsh_attr = {
+    // Public Rust types and protobuf fields stay independent of these wire codecs.
+    let borsh_attr = if matches!(
+        f.field_type,
+        FieldTypeIr::Scalar(ScalarIr::SizePrefixedBytes { .. })
+    ) {
+        super::size_prefixed_bytes::attrs(f)
+    } else {
         let option = option_borsh_attrs(&f.label, &f.field_type, path_prefix);
 
         if !option.is_empty() {
@@ -901,7 +918,9 @@ pub(super) fn map_ir_type_to_native(field_type: &FieldTypeIr, in_module: bool) -
             ScalarIr::U128 => quote!(u128),
             ScalarIr::I128 => quote!(i128),
             ScalarIr::String => quote!(String),
-            ScalarIr::Bytes | ScalarIr::FixedBytes(_) => quote!(Vec<u8>),
+            ScalarIr::Bytes | ScalarIr::SizePrefixedBytes { .. } | ScalarIr::FixedBytes(_) => {
+                quote!(Vec<u8>)
+            },
             ScalarIr::PublicKey => {
                 if in_module {
                     quote!(super::Pubkey)

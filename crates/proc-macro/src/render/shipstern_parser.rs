@@ -57,7 +57,9 @@ pub fn shipstern_parser(
             matches!(
                 &field.label,
                 crate::intermediate_representation::LabelIr::Optional(encoding)
-                    if !encoding.uses_native_borsh()
+                    if !encoding.uses_native_borsh() || matches!(field.field_type,
+                        crate::intermediate_representation::FieldTypeIr::Scalar(
+                            crate::intermediate_representation::ScalarIr::SizePrefixedBytes { .. }))
             )
         }) {
         option_borsh_helpers()

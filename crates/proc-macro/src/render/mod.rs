@@ -10,6 +10,7 @@ pub mod program_pubkey;
 pub mod proto_schema_string;
 pub mod rust_types_from_ir;
 pub mod shipstern_parser;
+mod size_prefixed_bytes;
 
 pub use account_parser::account_parser;
 pub use event_parser::event_parser;

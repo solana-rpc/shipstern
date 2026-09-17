@@ -347,12 +347,22 @@ fn materialize_tuple_message(
 ///
 /// Wrappers like Option/Array and Tuple are handled by `materialize_type`.
 fn map_type(t: &codama_nodes::TypeNode) -> FieldTypeIr {
-    use codama_nodes::{NumberFormat as NF, TypeNode as T};
+    use codama_nodes::{Endianness, NestedTypeNodeTrait, NumberFormat as NF, TypeNode as T};
 
     match t {
         T::String(_) => FieldTypeIr::Scalar(ScalarIr::String),
         T::SizePrefix(sp) => match sp.r#type.as_ref() {
-            T::Bytes(_) => FieldTypeIr::Scalar(ScalarIr::Bytes),
+            T::Bytes(_) => {
+                let prefix = sp.prefix.get_nested_type_node();
+                if prefix.format == NF::U32 && prefix.endian == Endianness::Le {
+                    FieldTypeIr::Scalar(ScalarIr::Bytes)
+                } else {
+                    FieldTypeIr::Scalar(ScalarIr::SizePrefixedBytes {
+                        format: prefix.format,
+                        endian: prefix.endian,
+                    })
+                }
+            },
             _ => FieldTypeIr::Scalar(ScalarIr::String),
         },
         T::Bytes(_) => FieldTypeIr::Scalar(ScalarIr::Bytes),
