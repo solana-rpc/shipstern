@@ -6,8 +6,6 @@ include_shipstern_parser!("../idls/size_prefixed_bytes.json");
 
 #[test]
 fn preserves_the_full_protocol_cpi_payload() {
-    // Mainnet slot 447727788: opcode 7, u64 length 16, Offerbook discriminator,
-    // and requested amount 1. A u32 decoder silently shifts/truncates this data.
     let wire = hex::decode("071000000000000000b7cc0e45114cdf690100000000000000").unwrap();
     let path = shipstern_core::instruction::Path::new_single(0);
     let parsed = size_prefixed_bytes::resolve_instruction_default(&[], &wire, &path).unwrap();
