@@ -13,7 +13,9 @@ Thank you for your interest in contributing to Shipstern! This guide will help y
 
 ## Getting Started
 
-To contribute to this project, you'll need to have Rust installed on your machine. This project builds successfully with the latest **stable** Rust, and also with the latest **nightly**. We also use a workspace structure with multiple crates.
+To contribute to this project, you'll need Rust installed on your machine. The toolchain is pinned in [`rust-toolchain.toml`](/rust-toolchain.toml), so `rustup` installs and selects the right version on the first `cargo` command inside the repo, so you do not pick one yourself. Formatting is the exception: it runs on a separate pinned nightly, described under [Making Changes](#making-changes).
+
+The repo is a cargo workspace. Three directories sit outside it and resolve their own lockfiles: `examples/multi-dex-stream`, `tests/idls`, and `tests/proc-macro-events` (excluded so its `program-events` feature does not unify into the rest of the workspace). `--workspace` does not reach them.
 
 ## Setting Up Your Environment
 
@@ -48,31 +50,38 @@ To contribute to this project, you'll need to have Rust installed on your machin
 
 2. **Make Your Changes**
 
-   Make your changes in the appropriate crate(s) within the `crates` directory. Use the `crates/test` crate to try out and verify your changes.
+   Make your changes in the appropriate crate(s) within the `crates` directory. The projects under [`examples/`](/examples) are runnable pipelines; use one of those to try a change end to end.
 
 3. **Format Your Code**
 
-   Ensure that your code is properly formatted. We use `rustfmt` with nightly toolchain for formatting.
+   Ensure that your code is properly formatted. `.rustfmt.toml` sets nightly-only rustfmt options, so formatting needs a nightly toolchain, and CI pins an exact one. A different nightly reformats differently and the check then fails, so use the pinned one:
 
    ```sh
-   cargo +nightly fmt --all
+   rustup toolchain install nightly-2026-02-25 --component rustfmt
+   cargo +nightly-2026-02-25 fmt --all
    ```
 
 4. **Run Clippy**
 
-   Run Clippy to catch common mistakes and ensure code quality.
+   Run Clippy to catch common mistakes and ensure code quality. CI runs exactly this, and the feature flag matters: the experimental account parser is off by default and its code is only linted when it is on.
 
    ```sh
-   cargo clippy --all-targets --tests -- -Dwarnings
+   cargo clippy --all-targets --tests --no-deps \
+     --features shipstern-kafka-sink/experimental-account-parser -- -Dwarnings
    ```
 
 ## Running Tests
 
-Before submitting your changes, make sure all tests pass.
+Before submitting your changes, make sure all tests pass. CI runs four suites, and a bare `cargo test` covers only the first, because the other three are feature-gated or live in the excluded workspace:
 
 ```sh
-cargo test
+cargo test --workspace --lib --tests
+cargo test -p shipstern-proto --lib --features parser,stream
+cargo test -p shipstern-kafka-sink --features experimental-account-parser --lib --tests
+cargo test --tests --manifest-path tests/proc-macro-events/Cargo.toml
 ```
+
+Parser tests fetch fixture data over RPC. See [Running Tests](/README.md#running-tests) in the README for pointing them at your own endpoint with `RPC_ENDPOINT`.
 
 ## Submitting Changes
 

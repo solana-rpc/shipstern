@@ -81,7 +81,7 @@ fn main() {
     let config = std::fs::read_to_string(config).expect("Error reading config file");
     let config = toml::from_str(&config).expect("Error parsing config");
 
-    shipstern::Runtime<YellowstoneGrpcSource>::builder()
+    shipstern::Runtime::<YellowstoneGrpcSource>::builder()
         .account(Pipeline::new(AccountParser, [Logger]))
         .instruction(Pipeline::new(InstructionParser, [Logger]))
         .build(config)
@@ -93,7 +93,7 @@ fn main() {
 RUST_LOG=info cargo run -- --config "./Shipstern.toml"
 ```
 
-Prometheus metrics are served on the `/metrics` endpoint. To collect metrics, we have setup a prometheus server as a docker container. You can access the metrics at `http://localhost:9090` after running the prometheus server using docker-compose.
+Metrics are collected into a `prometheus::Registry` you hand to the runtime with `.metrics(registry)`. The runtime serves no HTTP endpoint of its own; push the gathered metrics to a Pushgateway, as [`examples/prometheus`](./examples/prometheus) does on a 30-second interval. `docker-compose.yaml` starts a Pushgateway on `:9091` and a Prometheus that scrapes it, so the metrics show up at `http://localhost:9090`.
 
 To run prometheus, you need to have docker and docker-compose installed on your machine. To start the services, run the following command:
 
@@ -105,10 +105,17 @@ sudo docker-compose up
 
 ### Built-in
 
-| Address                                       | Public Name          | Parser                                                                                                                                      |
-| --------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` | **Token Program**    | [shipstern-spl-token-parser](https://github.com/solana-rpc/shipstern/tree/main/crates/spl-token-parser)                        |
-| `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb` | **Token Extensions** | [shipstern-spl-token-extensions-parser](https://github.com/solana-rpc/shipstern/tree/main/crates/spl-token-extensions-program) |
+| Address                                       | Public Name              | Parser                                                                                |
+| --------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------- |
+| `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` | **Token Program**        | [shipstern-spl-token-parser](./crates/spl-token-parser)                               |
+| `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb` | **Token Extensions**     | [shipstern-spl-token-extensions-parser](./crates/spl-token-extensions-parser)         |
+| `SPoo1Ku8WFXoNDMHPsrGSTSG1Y47rzgn41SLUNakuHy` | **SPL Stake Pool**       | [shipstern-stake-pool-parser](./crates/stake-pool-parser)                             |
+| `BPFLoaderUpgradeab1e11111111111111111111111` | **BPF Loader Upgradeable** | [shipstern-bpf-loader-parser](./crates/bpf-loader-parser)                           |
+
+Two more parsers carry no program address, because they read block-level updates
+rather than a program's accounts and instructions:
+[shipstern-block-meta-parser](./crates/block-meta-parser) for `BlockMeta` and
+[shipstern-slot-parser](./crates/slot-parser) for `Slot`.
 
 ### Codegen Macro
 
@@ -188,8 +195,9 @@ Shipstern supports several official data sources for ingesting Solana account an
 | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`yellowstone-grpc-source`](./crates/yellowstone-grpc-source)         | **Dragon's Mouth (gRPC Source)**: Scalable and reliable streaming of account and transaction data from Solana nodes via the Dragon's Mouth Geyser plugin. Can be self-hosted or accessed via commercial vendors. See the [Dragon's Mouth documentation](https://docs.triton.one/project-yellowstone/dragons-mouth-grpc-subscriptions) and [Yellowstone repository](https://github.com/rpcpool/yellowstone-grpc) for more details.                                                                              |
 | [`yellowstone-fumarole-source`](./crates/yellowstone-fumarole-source) | **Fumarole Reliable Streams**: Scalable, reliable, and persistent streaming of Solana accounts and transactions. Fumarole merges data from multiple nodes for high availability, supports consumer groups for horizontal scalability, and allows clients to resume streams after interruptions. Currently in limited beta—contact Triton support for access. [Learn more](https://blog.triton.one/introducing-yellowstone-fumarole) or see the [GitHub repo](https://github.com/rpcpool/yellowstone-fumarole). |
-| [`solana-rpc-source`](./crates/solana-rpc-source)                     | **Solana RPC Source**: Pulls account data directly from a Solana node's JSON-RPC API using `getProgramAccounts`.                                                                                                                                                                                                                                                                                                                                                                                               |
-| [`solana-snapshot-source`](./crates/solana-snapshot-source)           | **Solana Snapshot Source**: Loads and processes Solana ledger snapshots for offline or historical analysis.                                                                                                                                                                                                                                                                                                                                                                                                    |
+| [`solana-rpc-source`](./crates/solana-rpc-source)                     | **Solana RPC Source**: Pulls account data directly from a Solana node's JSON-RPC API using `getProgramAccounts`. It dispatches on a prefilter's account **owners** only: the `accounts` pubkey set and the `filters` comparisons (`Memcmp`, `DataSize`, and the rest) are not translated into the RPC request, so a prefilter that narrows on those still fetches every account the owner holds.                                                                                                                                                                                                                                                                                                                                                                                               |
+| [`solana-snapshot-source`](./crates/solana-snapshot-source)           | **Solana Snapshot Source**: Loads and processes Solana ledger snapshots for offline or historical analysis. Like the RPC source, it selects on account owners only.                                                                                                                                                                                                                                                                                                                                                                                                    |
+| [`jetstreamer-source`](./crates/jetstreamer-source)                   | **Jetstreamer Source**: Replays historical blocks from [Old Faithful](https://github.com/rpcpool/yellowstone-faithful) archives over a slot or epoch range, emitting the same `SubscribeUpdate` messages as a live stream. Archives hold only finalized history, so replayed slots report `SLOT_FINALIZED`. The crate is published as `shipstern-jetstream-source`. See [`examples/jetstreamer`](./examples/jetstreamer).                                                                |
 
 Refer to the crate documentation for setup instructions and configuration options.
 
@@ -213,6 +221,8 @@ RPC_ENDPOINT = "https://my-rpc.example.com"
 ```
 
 This applies to every `cargo` invocation inside this workspace. The file is gitignored so each developer can use their own RPC provider.
+
+A bare `cargo test` does not cover everything CI runs. See [Running Tests](./CONTRIBUTING.md#running-tests) in the contributing guide for the full set.
 
 ## Developer Resources
 
