@@ -16,7 +16,7 @@ resolver = "2"
 authors = ["Triton One", "ABK-Labs", "Jupiter Exchange"]
 edition = "2024"
 license = "MIT"
-version = "0.10.0"
+version = "0.11.0"
 repository = "https://github.com/solana-rpc/shipstern"
 publish = false
 
@@ -114,31 +114,31 @@ yellowstone-grpc-proto = { version = "12.6", default-features = false }
 rdkafka = { version = "0.36", features = ["cmake-build", "ssl", "zstd"] }
 reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
 
-shipstern = { path = "crates/runtime", version = "0.10.0" }
-shipstern-proc-macro = { path = "crates/proc-macro", version = "0.10.0" }
-shipstern-stream = { path = "crates/stream", version = "0.10.0" }
-shipstern-core = { path = "crates/core", version = "0.10.0" }
-shipstern-mock = { path = "crates/mock", version = "0.10.0" }
-shipstern-parser = { path = "crates/parser", version = "0.10.0" }
-shipstern-proto = { path = "crates/proto", version = "0.10.0" }
+shipstern = { path = "crates/runtime", version = "0.11.0" }
+shipstern-proc-macro = { path = "crates/proc-macro", version = "0.11.0" }
+shipstern-stream = { path = "crates/stream", version = "0.11.0" }
+shipstern-core = { path = "crates/core", version = "0.11.0" }
+shipstern-mock = { path = "crates/mock", version = "0.11.0" }
+shipstern-parser = { path = "crates/parser", version = "0.11.0" }
+shipstern-proto = { path = "crates/proto", version = "0.11.0" }
 
 # Parsers
-shipstern-bpf-loader-parser = { path = "crates/bpf-loader-parser", version = "0.10.0" }
-shipstern-spl-token-extensions-parser = { path = "crates/spl-token-extensions-parser", version = "0.10.0" }
-shipstern-spl-token-parser = { path = "crates/spl-token-parser", version = "0.10.0" }
-shipstern-block-meta-parser = { path = "crates/block-meta-parser", version = "0.10.0" }
-shipstern-slot-parser = { path = "crates/slot-parser", version = "0.10.0" }
-shipstern-stake-pool-parser = { path = "crates/stake-pool-parser", version = "0.10.0" }
+shipstern-bpf-loader-parser = { path = "crates/bpf-loader-parser", version = "0.11.0" }
+shipstern-spl-token-extensions-parser = { path = "crates/spl-token-extensions-parser", version = "0.11.0" }
+shipstern-spl-token-parser = { path = "crates/spl-token-parser", version = "0.11.0" }
+shipstern-block-meta-parser = { path = "crates/block-meta-parser", version = "0.11.0" }
+shipstern-slot-parser = { path = "crates/slot-parser", version = "0.11.0" }
+shipstern-stake-pool-parser = { path = "crates/stake-pool-parser", version = "0.11.0" }
 
 # Sources
-shipstern-solana-rpc-source = { path = "crates/solana-rpc-source", version = "0.10.0" }
-shipstern-yellowstone-grpc-source = { path = "crates/yellowstone-grpc-source", version = "0.10.0" }
-shipstern-yellowstone-fumarole-source = { path = "crates/yellowstone-fumarole-source", version = "0.10.0" }
-shipstern-solana-snapshot-source = { path = "crates/solana-snapshot-source", version = "0.10.0" }
-shipstern-jetstream-source = { path = "crates/jetstreamer-source", version = "0.10.0" }
+shipstern-solana-rpc-source = { path = "crates/solana-rpc-source", version = "0.11.0" }
+shipstern-yellowstone-grpc-source = { path = "crates/yellowstone-grpc-source", version = "0.11.0" }
+shipstern-yellowstone-fumarole-source = { path = "crates/yellowstone-fumarole-source", version = "0.11.0" }
+shipstern-solana-snapshot-source = { path = "crates/solana-snapshot-source", version = "0.11.0" }
+shipstern-jetstream-source = { path = "crates/jetstreamer-source", version = "0.11.0" }
 
 # Coordinators
-shipstern-block-coordinator = { path = "crates/block-coordinator", version = "0.10.0" }
+shipstern-block-coordinator = { path = "crates/block-coordinator", version = "0.11.0" }
 
 # Sinks
-shipstern-kafka-sink = { path = "crates/kafka-sink", version = "0.10.0" }
+shipstern-kafka-sink = { path = "crates/kafka-sink", version = "0.11.0" }

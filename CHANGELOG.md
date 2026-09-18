@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.11.0] - 2026-09-18
 
 ### Changed
 
@@ -187,6 +187,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 - Make `AccountKeys` get method public (https://github.com/rpcpool/yellowstone-vixen/pull/60)
 
-[Unreleased]: https://github.com/solana-rpc/shipstern/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/solana-rpc/shipstern/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/solana-rpc/shipstern/releases/tag/v0.11.0
 [0.10.0]: https://github.com/solana-rpc/shipstern/releases/tag/v0.10.0
 [0.2.0]: https://github.com/solana-rpc/shipstern/releases/tag/v0.2.0
