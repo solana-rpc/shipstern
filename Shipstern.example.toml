@@ -48,26 +48,24 @@ timeout = 60
 # x-token = "<X-TOKEN>"
 # subscriber-name = "my_subscribe_group"
 
-# Metrics configuration section.
-# Uncomment the following lines if you are running Prometheus 
+# Job scheduler configuration. Optional: omitting the whole section uses the
+# defaults below.
+#[buffer]
 
-#[metrics]
-# The endpoint of the metrics stream.
-# Metrics data is pushed to this endpoint and consumed by Prometheus.
-#endpoint = "http://localhost:3030"
+# The maximum number of concurrent jobs to run.
+# Defaults to the number of CPUs when unset.
+#jobs = 8
 
-# The job name of the metrics stream.
-# This is used to identify the metrics stream in Prometheus.
-#job = "example"
+# The maximum number of concurrent sources to run.
+#sources-channel-size = 100
 
-# The username for the metrics stream.
-# This is used for authentication purposes.
-#username = "foo"
-
-# The password for the metrics stream.
-# This is used for authentication purposes.
-#password = "bar"
-
-# The metrics export interval in seconds.
-# This defines how often metrics data is exported.
-#export-interval = 60
+# Metrics are not configured from this file. The runtime takes a
+# `prometheus::Registry` through the builder instead:
+#
+#     Runtime::<YellowstoneGrpcSource>::builder()
+#         .metrics(prometheus::Registry::new())
+#         .build(config)
+#
+# and it serves no HTTP endpoint of its own. `examples/prometheus` gathers that
+# registry on an interval and pushes it to a Pushgateway; `docker-compose.yaml`
+# runs the Pushgateway on :9091 and a Prometheus that scrapes it on :9090.
