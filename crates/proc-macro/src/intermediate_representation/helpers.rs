@@ -347,13 +347,28 @@ fn materialize_tuple_message(
 ///
 /// Wrappers like Option/Array and Tuple are handled by `materialize_type`.
 fn map_type(t: &codama_nodes::TypeNode) -> FieldTypeIr {
-    use codama_nodes::{NumberFormat as NF, TypeNode as T};
+    use codama_nodes::{Endianness, NestedTypeNodeTrait, NumberFormat as NF, TypeNode as T};
 
     match t {
         T::String(_) => FieldTypeIr::Scalar(ScalarIr::String),
-        T::SizePrefix(sp) => match sp.r#type.as_ref() {
-            T::Bytes(_) => FieldTypeIr::Scalar(ScalarIr::Bytes),
-            _ => FieldTypeIr::Scalar(ScalarIr::String),
+        T::SizePrefix(sp) => {
+            let prefix = sp.prefix.get_nested_type_node();
+
+            // u32 LE is what borsh writes natively, for both Vec<u8> and String.
+            let native = prefix.format == NF::U32 && prefix.endian == Endianness::Le;
+
+            match (sp.r#type.as_ref(), native) {
+                (T::Bytes(_), true) => FieldTypeIr::Scalar(ScalarIr::Bytes),
+                (T::Bytes(_), false) => FieldTypeIr::Scalar(ScalarIr::SizePrefixedBytes {
+                    format: prefix.format,
+                    endian: prefix.endian,
+                }),
+                (_, true) => FieldTypeIr::Scalar(ScalarIr::String),
+                (_, false) => FieldTypeIr::Scalar(ScalarIr::SizePrefixedString {
+                    format: prefix.format,
+                    endian: prefix.endian,
+                }),
+            }
         },
         T::Bytes(_) => FieldTypeIr::Scalar(ScalarIr::Bytes),
         T::PublicKey(_) => FieldTypeIr::Scalar(ScalarIr::PublicKey),

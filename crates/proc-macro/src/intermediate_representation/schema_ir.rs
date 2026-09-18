@@ -157,6 +157,16 @@ pub enum ScalarIr {
     Double,
     String,
     Bytes,
+    /// Bytes with an explicit Codama length prefix; still Vec<u8> / protobuf bytes.
+    SizePrefixedBytes {
+        format: codama_nodes::NumberFormat,
+        endian: codama_nodes::Endianness,
+    },
+    /// UTF-8 string with an explicit Codama length prefix; still String / protobuf string.
+    SizePrefixedString {
+        format: codama_nodes::NumberFormat,
+        endian: codama_nodes::Endianness,
+    },
 
     /// Fixed-size byte array with known size (no length prefix on-chain).
     /// Stored as `Vec<u8>` in Rust for prost compatibility, but borsh
