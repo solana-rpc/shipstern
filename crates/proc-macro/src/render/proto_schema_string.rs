@@ -305,7 +305,7 @@ fn scalar_to_proto(s: &ScalarIr) -> &'static str {
         ScalarIr::Int64 => "int64",
         ScalarIr::Float => "float",
         ScalarIr::Double => "double",
-        ScalarIr::String => "string",
+        ScalarIr::String | ScalarIr::SizePrefixedString { .. } => "string",
         ScalarIr::Bytes
         | ScalarIr::SizePrefixedBytes { .. }
         | ScalarIr::FixedBytes(_)

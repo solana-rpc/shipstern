@@ -10,7 +10,10 @@ fn preserves_the_full_protocol_cpi_payload() {
     let path = shipstern_core::instruction::Path::new_single(0);
     let parsed = size_prefixed_bytes::resolve_instruction_default(&[], &wire, &path).unwrap();
     let size_prefixed_bytes::instruction::Instruction::ProtocolCpi { args, .. } =
-        parsed.instruction;
+        parsed.instruction
+    else {
+        panic!("expected ProtocolCpi")
+    };
     assert_eq!(
         args.data,
         hex::decode("b7cc0e45114cdf690100000000000000").unwrap()
@@ -140,4 +143,63 @@ fn composes_with_option_and_array_encodings() {
         ..empty
     };
     assert!(borsh::to_vec(&wrong_count).is_err());
+}
+
+#[test]
+fn honors_the_prefix_on_strings_too() {
+    use size_prefixed_bytes::{ShortU16LeString, U64BeString, U8LeString};
+    macro_rules! check {
+        ($ty:ident, $prefix:expr) => {{
+            let value = $ty {
+                data: "hé".to_string(),
+                sentinel: 0xee,
+            };
+            let mut wire = $prefix.to_vec();
+            wire.extend_from_slice(&[0x68, 0xc3, 0xa9, 0xee]);
+            assert_eq!(borsh::to_vec(&value).unwrap(), wire);
+            assert_eq!($ty::try_from_slice(&wire).unwrap(), value);
+
+            for end in 0..wire.len() {
+                assert!($ty::try_from_slice(&wire[..end]).is_err());
+            }
+
+            // The payload is a string, so invalid UTF-8 is rejected, not lossily decoded.
+            let mut invalid = wire.clone();
+            invalid[$prefix.len()] = 0xff;
+            assert!($ty::try_from_slice(&invalid).is_err());
+        }};
+    }
+    check!(U8LeString, [3]);
+    check!(U64BeString, 3_u64.to_be_bytes());
+    check!(ShortU16LeString, [3]);
+
+    assert!(size_prefixed_bytes::PROTOBUF_SCHEMA.contains("string data = 1;"));
+}
+
+#[test]
+fn resolves_the_helpers_from_the_instruction_module() {
+    let bytes = |v: &[u8]| {
+        let mut out = (v.len() as u64).to_le_bytes().to_vec();
+        out.extend_from_slice(v);
+        out
+    };
+
+    let mut wire = vec![0x08, 1];
+    wire.extend(bytes(&[1, 2]));
+    wire.extend(bytes(&[3]));
+    wire.extend(bytes(&[]));
+    wire.extend(bytes(b"label"));
+
+    let path = shipstern_core::instruction::Path::new_single(0);
+    let parsed = size_prefixed_bytes::resolve_instruction_default(&[], &wire, &path).unwrap();
+    let size_prefixed_bytes::instruction::Instruction::ContainerCpi { args, .. } =
+        parsed.instruction
+    else {
+        panic!("expected ContainerCpi")
+    };
+
+    assert_eq!(args.optional, Some(vec![1, 2]));
+    assert_eq!(args.fixed, vec![vec![3], vec![]]);
+    assert_eq!(args.label, "label");
+    assert_eq!(borsh::to_vec(&args).unwrap(), wire[1..]);
 }

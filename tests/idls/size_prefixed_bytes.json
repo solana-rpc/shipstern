@@ -28,6 +28,44 @@
           }
         ],
         "discriminators": [{"kind": "fieldDiscriminatorNode", "name": "discriminator", "offset": 0}]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "containerCpi",
+        "accounts": [],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {"kind": "fixedSizeTypeNode", "size": 1, "type": {"kind": "bytesTypeNode"}},
+            "defaultValue": {"kind": "bytesValueNode", "encoding": "base16", "data": "08"}
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "optional",
+            "type": {
+              "kind": "optionTypeNode",
+              "item": {"kind": "sizePrefixTypeNode", "type": {"kind": "bytesTypeNode"}, "prefix": {"kind": "numberTypeNode", "format": "u64", "endian": "le"}},
+              "prefix": {"kind": "numberTypeNode", "format": "u8", "endian": "le"}
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "fixed",
+            "type": {
+              "kind": "arrayTypeNode",
+              "item": {"kind": "sizePrefixTypeNode", "type": {"kind": "bytesTypeNode"}, "prefix": {"kind": "numberTypeNode", "format": "u64", "endian": "le"}},
+              "count": {"kind": "fixedCountNode", "value": 2}
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "label",
+            "type": {"kind": "sizePrefixTypeNode", "type": {"kind": "stringTypeNode", "encoding": "utf8"}, "prefix": {"kind": "numberTypeNode", "format": "u64", "endian": "le"}}
+          }
+        ],
+        "discriminators": [{"kind": "fieldDiscriminatorNode", "name": "discriminator", "offset": 0}]
       }
     ],
     "definedTypes": [
@@ -222,6 +260,51 @@
                 "item": {"kind": "sizePrefixTypeNode", "type": {"kind": "bytesTypeNode"}, "prefix": {"kind": "numberTypeNode", "format": "u64", "endian": "le"}},
                 "count": {"kind": "fixedCountNode", "value": 2}
               }
+            },
+            {"kind": "structFieldTypeNode", "name": "sentinel", "type": {"kind": "numberTypeNode", "format": "u8", "endian": "le"}}
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "u8LeString",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "data",
+              "type": {"kind": "sizePrefixTypeNode", "type": {"kind": "stringTypeNode", "encoding": "utf8"}, "prefix": {"kind": "numberTypeNode", "format": "u8", "endian": "le"}}
+            },
+            {"kind": "structFieldTypeNode", "name": "sentinel", "type": {"kind": "numberTypeNode", "format": "u8", "endian": "le"}}
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "u64BeString",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "data",
+              "type": {"kind": "sizePrefixTypeNode", "type": {"kind": "stringTypeNode", "encoding": "utf8"}, "prefix": {"kind": "numberTypeNode", "format": "u64", "endian": "be"}}
+            },
+            {"kind": "structFieldTypeNode", "name": "sentinel", "type": {"kind": "numberTypeNode", "format": "u8", "endian": "le"}}
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "shortU16LeString",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "data",
+              "type": {"kind": "sizePrefixTypeNode", "type": {"kind": "stringTypeNode", "encoding": "utf8"}, "prefix": {"kind": "numberTypeNode", "format": "shortU16", "endian": "le"}}
             },
             {"kind": "structFieldTypeNode", "name": "sentinel", "type": {"kind": "numberTypeNode", "format": "u8", "endian": "le"}}
           ]

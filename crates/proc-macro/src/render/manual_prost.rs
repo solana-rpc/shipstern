@@ -233,7 +233,9 @@ fn prost_encoding_mod(scalar: &ScalarIr) -> TokenStream {
         ScalarIr::Int64 => quote!(::prost::encoding::int64),
         ScalarIr::Float => quote!(::prost::encoding::float),
         ScalarIr::Double => quote!(::prost::encoding::double),
-        ScalarIr::String => quote!(::prost::encoding::string),
+        ScalarIr::String | ScalarIr::SizePrefixedString { .. } => {
+            quote!(::prost::encoding::string)
+        },
         ScalarIr::Bytes
         | ScalarIr::SizePrefixedBytes { .. }
         | ScalarIr::FixedBytes(_)
@@ -526,7 +528,9 @@ fn emit_prost_field_codegen(
 
             let default_check = match s {
                 ScalarIr::Bool => quote!(self.#fname != false),
-                ScalarIr::String => quote!(!self.#fname.is_empty()),
+                ScalarIr::String | ScalarIr::SizePrefixedString { .. } => {
+                    quote!(!self.#fname.is_empty())
+                },
                 ScalarIr::Bytes | ScalarIr::SizePrefixedBytes { .. } | ScalarIr::FixedBytes(_) => {
                     quote!(!self.#fname.is_empty())
                 },
@@ -535,7 +539,7 @@ fn emit_prost_field_codegen(
 
             let default_val = match s {
                 ScalarIr::Bool => quote!(false),
-                ScalarIr::String => quote!(String::new()),
+                ScalarIr::String | ScalarIr::SizePrefixedString { .. } => quote!(String::new()),
                 ScalarIr::Bytes | ScalarIr::SizePrefixedBytes { .. } | ScalarIr::FixedBytes(_) => {
                     quote!(Vec::new())
                 },
@@ -546,7 +550,9 @@ fn emit_prost_field_codegen(
 
             let clear_val = match s {
                 ScalarIr::Bool => quote!(self.#fname = false;),
-                ScalarIr::String => quote!(self.#fname.clear();),
+                ScalarIr::String | ScalarIr::SizePrefixedString { .. } => {
+                    quote!(self.#fname.clear();)
+                },
                 ScalarIr::Bytes | ScalarIr::SizePrefixedBytes { .. } | ScalarIr::FixedBytes(_) => {
                     quote!(self.#fname.clear();)
                 },
@@ -915,6 +921,7 @@ fn emit_prost_field_codegen(
             let is_length_delimited = matches!(
                 s,
                 ScalarIr::String
+                    | ScalarIr::SizePrefixedString { .. }
                     | ScalarIr::Bytes
                     | ScalarIr::SizePrefixedBytes { .. }
                     | ScalarIr::FixedBytes(_)

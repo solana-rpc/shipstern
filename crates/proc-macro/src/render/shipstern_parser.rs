@@ -49,6 +49,7 @@ pub fn shipstern_parser(
     let schema_ir = crate::intermediate_representation::build_schema_ir(idl, events);
 
     let schema_types = crate::render::rust_types_from_ir(&schema_ir);
+    let size_prefixed_helpers = crate::render::size_prefixed_helpers(&schema_ir);
     let option_borsh_helpers = if schema_ir
         .types
         .iter()
@@ -59,7 +60,8 @@ pub fn shipstern_parser(
                 crate::intermediate_representation::LabelIr::Optional(encoding)
                     if !encoding.uses_native_borsh() || matches!(field.field_type,
                         crate::intermediate_representation::FieldTypeIr::Scalar(
-                            crate::intermediate_representation::ScalarIr::SizePrefixedBytes { .. }))
+                            crate::intermediate_representation::ScalarIr::SizePrefixedBytes { .. }
+                                | crate::intermediate_representation::ScalarIr::SizePrefixedString { .. }))
             )
         }) {
         option_borsh_helpers()
@@ -166,6 +168,8 @@ pub fn shipstern_parser(
             pub use shipstern_core::Pubkey;
 
             #option_borsh_helpers
+
+            #size_prefixed_helpers
 
             /// Borsh: deserialize N fixed bytes into `Vec<u8>`.
             /// On-chain, fixed-size byte fields (pubkeys, u128, fixed arrays) have no
