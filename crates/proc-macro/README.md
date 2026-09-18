@@ -9,9 +9,9 @@ Add this crate to your `Cargo.toml` (usually as a `proc-macro` dependency):
 ```toml
 [dependencies]
 borsh = { version = "^1.0.0", features = ["derive"] }
-shipstern-core = { version = "0.10.0" }
-shipstern-parser = { version = "0.10.0" }
-shipstern-proc-macro = { version = "0.10.0" }
+shipstern-core = { version = "0.11.0" }
+shipstern-parser = { version = "0.11.0" }
+shipstern-proc-macro = { version = "0.11.0" }
 ```
 
 `shipstern-core` is required: the generated code imports it directly.
@@ -32,7 +32,7 @@ This macro will generate Rust modules containing type-safe account and instructi
 Event parsing is gated behind the `program-events` feature. Without it the macro emits no event types, whatever the IDL declares:
 
 ```toml
-shipstern-proc-macro = { version = "0.10.0", features = ["program-events"] }
+shipstern-proc-macro = { version = "0.11.0", features = ["program-events"] }
 ```
 
 Enabling it changes `InstructionParser::Output` from `Instructions` to `ProgramEventOutput`, which carries the decoded instruction alongside any events found on inner instructions. Because that is a public type, the feature propagates through Cargo's feature unification to every crate sharing the dependency.
