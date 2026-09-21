@@ -2387,16 +2387,19 @@ mod tests {
     #[test]
     fn every_account_filter_variant_collapses_when_repeated() {
         let cases = [
-            AccountFilter::Memcmp {
+            ("memcmp", AccountFilter::Memcmp {
                 offset: 8,
                 data: MemcmpData::Bytes(vec![1, 2, 3]),
-            },
-            AccountFilter::DataSize(165),
-            AccountFilter::TokenAccountState(true),
-            AccountFilter::Lamports(LamportsCmp::Gt(1_000)),
+            }),
+            ("data size", AccountFilter::DataSize(165)),
+            (
+                "token account state",
+                AccountFilter::TokenAccountState(true),
+            ),
+            ("lamports", AccountFilter::Lamports(LamportsCmp::Gt(1_000))),
         ];
 
-        for case in cases {
+        for (name, case) in cases {
             let prefilter = Prefilter::builder()
                 .account_owners([Pubkey::new([9; 32])])
                 .account_filters([case.clone(), case.clone()])
@@ -2407,8 +2410,8 @@ mod tests {
 
             assert_eq!(
                 account.filters,
-                vec![case.clone()],
-                "repeating {case:?} must leave one copy"
+                vec![case],
+                "repeating a {name} filter must leave one copy"
             );
         }
     }
