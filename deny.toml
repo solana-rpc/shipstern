@@ -66,13 +66,20 @@ ignore = [
     # workspace never does; 0.9.18 is the latest release on the pinned line.
     "RUSTSEC-2026-0204",
 
-    # im 15.1.0 is pulled by solana-runtime 3.1.4, and bitmaps / sized-chunks are
-    # im's own dependencies, so all three arrive through that single root. im is
-    # unmaintained with no successor on the 15.x line; track until the Solana/Agave
-    # runtime stack drops it. Nothing in this workspace uses im directly.
+    # solana-runtime 4.2.2 moved this root from im 15.1.0 to imbl 7.0.1, the
+    # maintained fork, so im and sized-chunks have left the graph entirely and
+    # imbl / imbl-sized-chunks / bitmaps arrive in their place. bitmaps is shared
+    # by both. Nothing in this workspace uses any of them directly.
+    #
+    # imbl-sized-chunks is held at 0.1.3 because imbl 7.0.1 requires ^0.1, so the
+    # 0.2.0 that carries the fix is semver-unreachable until the Solana/Agave
+    # stack bumps imbl; `cargo update -p imbl-sized-chunks` resolves to nothing.
+    # The double free needs an element whose `Drop` panics. Nothing here touches
+    # these chunks directly, so the exposure is whatever solana-runtime stores in
+    # an imbl collection, not anything this workspace builds. Track until that
+    # bump lands.
     "RUSTSEC-2026-0247", # bitmaps
-    "RUSTSEC-2026-0248", # im
-    "RUSTSEC-2026-0251", # sized-chunks
+    "RUSTSEC-2026-0292", # imbl-sized-chunks
 
     # h2 0.4.x is pinned at 0.4.17, above the 0.4.16 fix, leaving only h2 0.3.27.
     # Its direct parents are hyper 0.14, reqwest 0.11 and tonic 0.9, all reached
