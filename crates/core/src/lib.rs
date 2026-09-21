@@ -1010,6 +1010,15 @@ impl AccountFilter {
     /// size appears at most once. A list whose entries each pass
     /// [`Self::validate`] can still be refused on either count.
     ///
+    /// This takes the list exactly as given and does not collapse repeats, so
+    /// two identical entries count twice and two identical data sizes are
+    /// [`PrefilterError::RepeatedDataSize`]. That is deliberate: it reports on
+    /// the list it was handed. [`PrefilterBuilder::account_filters`] drops
+    /// repeats before calling this, so a list built through the builder is
+    /// already collapsed by the time it arrives. A prefilter assembled as a
+    /// struct literal reaches the server exactly as written, because nothing
+    /// on the `SubscribeRequest` path validates.
+    ///
     /// # Errors
     ///
     /// See [`PrefilterError::TooManyAccountFilters`],
@@ -1281,7 +1290,23 @@ impl PrefilterBuilder {
     ///
     pub fn account_filters<I: IntoIterator<Item = AccountFilter>>(self, it: I) -> Self {
         self.mutate(|this| {
-            let filters: Vec<_> = it.into_iter().collect();
+            // The server `ANDs` the list, so a comparison spelled twice
+            // narrows no further than one copy of it, but it still spends a
+            // slot against `MAX_FILTERS`. Collapse before the count check, so
+            // a config that repeats itself is not refused for being too long.
+            //
+            // Linear rather than a `HashSet`: a list worth writing holds a
+            // handful of entries against a limit of four, so the scan needs no
+            // allocation and keeps first-seen order without a second pass. It
+            // is quadratic in whatever the caller passes, which the count
+            // check has not bounded yet.
+            let mut filters: Vec<AccountFilter> = Vec::new();
+
+            for filter in it {
+                if !filters.contains(&filter) {
+                    filters.push(filter);
+                }
+            }
 
             AccountFilter::validate_all(&filters)?;
 
@@ -2273,6 +2298,172 @@ mod tests {
                 AccountFilter::DataSize(82)
             ]),
             Err(PrefilterError::RepeatedDataSize)
+        ));
+    }
+
+    /// The server `ANDs` the list, so a comparison spelled twice narrows no
+    /// further than one copy of it. Repeats must not spend a slot against the
+    /// limit, or a config that fits is refused for how it was written.
+    #[test]
+    fn duplicate_account_filters_collapse_before_the_limit() {
+        // Five entries, four distinct: over the limit only by the repeat.
+        let request = account_with(|b| {
+            let memcmp = || AccountFilter::Memcmp {
+                offset: 8,
+                data: MemcmpData::Bytes(vec![1, 2, 3]),
+            };
+
+            b.account_filters([
+                memcmp(),
+                memcmp(),
+                AccountFilter::DataSize(165),
+                AccountFilter::TokenAccountState(true),
+                AccountFilter::Lamports(LamportsCmp::Gt(1_000)),
+            ])
+        });
+
+        let filters = &request.accounts.get("p").expect("account filter").filters;
+
+        assert_eq!(
+            filters.len(),
+            4,
+            "the repeat must be gone from the request, not just from the vec"
+        );
+
+        // First-seen order survives, so the encoding stays deterministic.
+        assert!(matches!(
+            filters[0].filter,
+            Some(wire_filter::Filter::Memcmp(ref m)) if m.offset == 8
+        ));
+        assert!(matches!(
+            filters[1].filter,
+            Some(wire_filter::Filter::Datasize(165))
+        ));
+        assert!(matches!(
+            filters[2].filter,
+            Some(wire_filter::Filter::TokenAccountState(true))
+        ));
+        assert!(matches!(
+            filters[3].filter,
+            Some(wire_filter::Filter::Lamports(ref cmp))
+                if cmp.cmp == Some(wire_lamports::Cmp::Gt(1_000))
+        ));
+    }
+
+    /// Two of the *same* size are one comparison written twice, so the builder
+    /// collapses them. `validate_all` still refuses the pair on its own, which
+    /// its doc comment records.
+    #[test]
+    fn repeated_identical_data_size_is_collapsed_not_refused() {
+        let request = account_with(|b| {
+            b.account_filters([AccountFilter::DataSize(165), AccountFilter::DataSize(165)])
+        });
+
+        let filters = &request.accounts.get("p").expect("account filter").filters;
+
+        assert_eq!(filters.len(), 1, "one size, however many times it was said");
+        assert!(matches!(
+            filters[0].filter,
+            Some(wire_filter::Filter::Datasize(165))
+        ));
+    }
+
+    /// Two *different* sizes can never both hold, so this stays an error: the
+    /// dedup collapses repeats, it does not reconcile disagreement.
+    #[test]
+    fn repeated_differing_data_size_is_still_refused() {
+        assert!(matches!(
+            Prefilter::builder()
+                .account_owners([Pubkey::new([9; 32])])
+                .account_filters([AccountFilter::DataSize(165), AccountFilter::DataSize(82)])
+                .build(),
+            Err(PrefilterError::RepeatedDataSize)
+        ));
+    }
+
+    /// Every variant is idempotent under the server's `AND`, so a repeat of
+    /// any of them collapses. The limit test only exercises two, which would
+    /// let a variant-specific mistake through.
+    #[test]
+    fn every_account_filter_variant_collapses_when_repeated() {
+        let cases = [
+            AccountFilter::Memcmp {
+                offset: 8,
+                data: MemcmpData::Bytes(vec![1, 2, 3]),
+            },
+            AccountFilter::DataSize(165),
+            AccountFilter::TokenAccountState(true),
+            AccountFilter::Lamports(LamportsCmp::Gt(1_000)),
+        ];
+
+        for case in cases {
+            let prefilter = Prefilter::builder()
+                .account_owners([Pubkey::new([9; 32])])
+                .account_filters([case.clone(), case.clone()])
+                .build()
+                .expect("prefilter must build");
+
+            let account = prefilter.account.expect("account prefilter");
+
+            assert_eq!(
+                account.filters,
+                vec![case.clone()],
+                "repeating {case:?} must leave one copy"
+            );
+        }
+    }
+
+    /// The dedup must not disturb the merge. Two builders naming the same
+    /// comparisons in different orders, one of them repeating itself, collapse
+    /// to the same multiset, so `same_account_filters` agrees and the merge
+    /// keeps the comparisons instead of widening to none.
+    #[test]
+    fn dedup_leaves_reordered_merges_agreeing() {
+        let size = AccountFilter::DataSize(165);
+        let lamports = AccountFilter::Lamports(LamportsCmp::Gt(0));
+
+        let built = |filters: [AccountFilter; 3]| {
+            Prefilter::builder()
+                .account_owners([Pubkey::new([9; 32])])
+                .account_filters(filters)
+                .build()
+                .expect("prefilter must build")
+                .account
+                .expect("account prefilter")
+        };
+
+        // [size, lamports, size] and [lamports, size, lamports] both collapse
+        // to the same pair, differing only in order.
+        let mut repeated = built([size.clone(), lamports.clone(), size.clone()]);
+        repeated.merge(built([lamports.clone(), size.clone(), lamports.clone()]));
+
+        assert_eq!(
+            repeated.filters,
+            vec![size, lamports],
+            "a reordered repeat still narrows identically, so the merge keeps it"
+        );
+    }
+
+    ///
+    /// Collapsing repeats must not lift the limit. Five *distinct* comparisons
+    /// are still five after the dedup, so the builder has to refuse them:
+    /// [`AccountFilter::validate_all`] is reached through the builder, not
+    /// around it.
+    ///
+    #[test]
+    fn dedup_does_not_lift_the_filter_limit() {
+        assert!(matches!(
+            Prefilter::builder()
+                .account_owners([Pubkey::new([9; 32])])
+                .account_filters([
+                    AccountFilter::DataSize(165),
+                    AccountFilter::TokenAccountState(true),
+                    AccountFilter::Lamports(LamportsCmp::Gt(0)),
+                    AccountFilter::Lamports(LamportsCmp::Lt(9)),
+                    AccountFilter::Lamports(LamportsCmp::Ne(3)),
+                ])
+                .build(),
+            Err(PrefilterError::TooManyAccountFilters { count: 5, max: 4 })
         ));
     }
 
