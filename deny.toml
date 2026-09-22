@@ -66,14 +66,6 @@ ignore = [
     # workspace never does; 0.9.18 is the latest release on the pinned line.
     "RUSTSEC-2026-0204",
 
-    # im 15.1.0 is pulled by solana-runtime 3.1.4, and bitmaps / sized-chunks are
-    # im's own dependencies, so all three arrive through that single root. im is
-    # unmaintained with no successor on the 15.x line; track until the Solana/Agave
-    # runtime stack drops it. Nothing in this workspace uses im directly.
-    "RUSTSEC-2026-0247", # bitmaps
-    "RUSTSEC-2026-0248", # im
-    "RUSTSEC-2026-0251", # sized-chunks
-
     # h2 0.4.x is pinned at 0.4.17, above the 0.4.16 fix, leaving only h2 0.3.27.
     # Its direct parents are hyper 0.14, reqwest 0.11 and tonic 0.9, all reached
     # through the legacy Solana BigTable and download stacks; 0.3.27 is newest on
