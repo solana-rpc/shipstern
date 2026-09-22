@@ -1286,9 +1286,11 @@ impl PrefilterBuilder {
     ///
     /// Repeats are dropped before the list is counted against the server's
     /// limit of four, since a comparison spelled twice narrows no further than
-    /// one copy of it. The first of each run is kept, so the entries reach the
-    /// server in the order they were written. Matching is by value, so the
-    /// same bytes in two encodings are two comparisons and spend two slots.
+    /// one copy of it, and a repeat is dropped rather than reported because
+    /// one copy asks for exactly what two do. The first occurrence of each
+    /// distinct comparison is kept, so the entries reach the server in the
+    /// order they were written. Matching is by value, so the same bytes in
+    /// two encodings are two comparisons and spend two slots.
     /// [`AccountFilter::validate_all`] does not collapse, so it can refuse a
     /// list this accepts.
     ///
@@ -1308,15 +1310,6 @@ impl PrefilterBuilder {
     ///
     pub fn account_filters<I: IntoIterator<Item = AccountFilter>>(self, it: I) -> Self {
         self.mutate(|this| {
-            // The server `ANDs` the list, so a comparison spelled twice
-            // narrows no further than one copy of it, but it still spends a
-            // slot against `MAX_FILTERS`. Collapse before the count check, so
-            // a config that repeats itself is not refused for being too long.
-            //
-            // Collapsed silently rather than reported: a repeat asks for
-            // exactly what one copy asks for, so an error would only repeat
-            // what the request already says.
-            //
             // Linear rather than a `HashSet`: the limit is four, so the scan
             // is a handful of comparisons and keeps first-seen order without
             // a side table or a second pass. Quadratic when every entry is
