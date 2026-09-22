@@ -7,6 +7,10 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `shipstern-yellowstone-grpc-source`: `compress-account-filters-from` sends large account sets as a cuckoo filter on yellowstone-grpc-geyser 13.1.0+, built by the new `shipstern-core` `AccountPrefilter::to_compressed_account_filter` and `Filters::to_compressed_subscribe_request` ([#334](https://github.com/solana-rpc/shipstern/pull/334) closing [#330](https://github.com/solana-rpc/shipstern/issues/330) by @senzenn).
+
 ### Changed
 
 - `shipstern-core`: merging two prefilters that name the same comparison, one of them written with a repeat, now keeps the comparison instead of dropping it and widening ([#333](https://github.com/solana-rpc/shipstern/pull/333) by @senzenn).
