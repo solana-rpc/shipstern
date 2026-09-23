@@ -9,15 +9,11 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- `shipstern-core`: a merged account prefilter can now narrow where it used to widen. `AccountPrefilter::merge` keeps a comparison only when both sides hold the same entries, and `Prefilter::builder().account_filters(..)` now collapses repeats, so two prefilters for one parser naming the same comparison, one of them written with a repeat, agree where they used to differ. The merge keeps the comparison instead of dropping it and delivering every account under the owner. Updates that arrive today stop arriving: measured against mainnet, the merged subscription delivered 2739 account updates in a 60 second window against 4623 for the same subscription with the comparison dropped, so 1884 updates stopped arriving. Both sides asked for the comparison, so this is the subscription the two parsers described, but it is the one change here that removes deliveries. Mixed construction goes the other way: a prefilter built through the builder no longer holds the same entries as a struct literal naming the same repeat, so the merge drops the comparison and widens ([#333](https://github.com/solana-rpc/shipstern/pull/333) by @senzenn).
+- `shipstern-core`: merging two prefilters that name the same comparison, one of them written with a repeat, now keeps the comparison instead of dropping it and widening ([#333](https://github.com/solana-rpc/shipstern/pull/333) by @senzenn).
 
 ### Fixed
 
-- `shipstern-core`: `Prefilter::builder().account_filters(..)` now drops repeated comparisons before counting them against the server's limit of four. The server `ANDs` the list, so a comparison spelled twice narrows no further than one copy of it, but `validate_all` counted the raw entries: a config naming four distinct comparisons was refused with `TooManyAccountFilters { count: 5, max: 4 }` if it happened to write one of them twice. A list holding no repeats emits exactly the request it did before, and the survivors keep their original relative order. What the builder does and does not collapse is recorded on `PrefilterBuilder::account_filters` and `AccountFilter::validate_all` ([#333](https://github.com/solana-rpc/shipstern/pull/333) closing [#331](https://github.com/solana-rpc/shipstern/issues/331) by @senzenn). Visible changes:
-  - A list that repeats a comparison reaches the server shorter. It narrows identically, because the entries are `AND`ed.
-  - `[DataSize(x), DataSize(x)]` now builds where it previously returned `RepeatedDataSize`. Two *different* sizes can never both hold and are still refused.
-  - The count check now runs on the collapsed list, so it reports fewer filters or stops firing altogether. Six entries with one repeat report `TooManyAccountFilters { count: 5, max: 4 }` where they reported `count: 6`. Five copies of an empty memcmp report `EmptyMemcmpData`, and a repeated size alongside a different one reports `RepeatedDataSize`, where both reported `TooManyAccountFilters { count: 5, max: 4 }`.
-  - `RepeatedDataSize`'s message is reworded to "More than one data size comparison, which the server accepts only once", since through the builder the variant can now only mean two *different* sizes.
+- `shipstern-core`: `Prefilter::builder().account_filters(..)` drops repeated comparisons before checking the limit of four, so a config that repeats one is no longer refused ([#333](https://github.com/solana-rpc/shipstern/pull/333) closing [#331](https://github.com/solana-rpc/shipstern/issues/331) by @senzenn).
 
 ## [0.11.0] - 2026-09-18
 
