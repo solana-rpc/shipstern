@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- `shipstern-core`: merging two prefilters that name the same comparison, one of them written with a repeat, now keeps the comparison instead of dropping it and widening ([#333](https://github.com/solana-rpc/shipstern/pull/333) by @senzenn).
+
+### Fixed
+
+- `shipstern-core`: `Prefilter::builder().account_filters(..)` drops repeated comparisons before checking the limit of four, so a config that repeats one is no longer refused ([#333](https://github.com/solana-rpc/shipstern/pull/333) closing [#331](https://github.com/solana-rpc/shipstern/issues/331) by @senzenn).
+
 ## [0.11.0] - 2026-09-18
 
 ### Changed

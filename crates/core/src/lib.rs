@@ -1265,6 +1265,9 @@ impl PrefilterBuilder {
     /// further. Validated here, so a bad encoding fails the build rather than
     /// the subscription.
     ///
+    /// Repeats are dropped before the server's limit of four is checked, since
+    /// the server `ANDs` the list. Matching is by value, not decoded bytes.
+    ///
     /// Pair these with [`Self::accounts`] or [`Self::account_owners`]. The
     /// server decides whether a subscription is filtered at all by looking
     /// only at the account and owner keys, so a prefilter carrying nothing but
@@ -1281,7 +1284,8 @@ impl PrefilterBuilder {
     ///
     pub fn account_filters<I: IntoIterator<Item = AccountFilter>>(self, it: I) -> Self {
         self.mutate(|this| {
-            let filters: Vec<_> = it.into_iter().collect();
+            let filters: Vec<AccountFilter> =
+                it.into_iter().collect::<HashSet<_>>().into_iter().collect();
 
             AccountFilter::validate_all(&filters)?;
 
@@ -1931,20 +1935,21 @@ mod tests {
 
         let filters = &request.accounts.get("p").expect("account filter").filters;
 
+        // The builder collapses repeats through a set, so order is not kept.
+        let has = |pred: fn(&wire_filter::Filter) -> bool| {
+            filters.iter().any(|f| f.filter.as_ref().is_some_and(pred))
+        };
+
         assert_eq!(filters.len(), 3);
-        assert!(matches!(
-            filters[0].filter,
-            Some(wire_filter::Filter::Datasize(165))
-        ));
-        assert!(matches!(
-            filters[1].filter,
-            Some(wire_filter::Filter::TokenAccountState(true))
-        ));
-        assert!(matches!(
-            filters[2].filter,
-            Some(wire_filter::Filter::Lamports(ref cmp))
-                if cmp.cmp == Some(wire_lamports::Cmp::Gt(1_000))
-        ));
+        assert!(has(|f| matches!(f, wire_filter::Filter::Datasize(165))));
+        assert!(has(|f| matches!(
+            f,
+            wire_filter::Filter::TokenAccountState(true)
+        )));
+        assert!(has(|f| matches!(
+            f,
+            wire_filter::Filter::Lamports(cmp) if cmp.cmp == Some(wire_lamports::Cmp::Gt(1_000))
+        )));
     }
 
     #[test]
@@ -2273,6 +2278,51 @@ mod tests {
                 AccountFilter::DataSize(82)
             ]),
             Err(PrefilterError::RepeatedDataSize)
+        ));
+    }
+
+    /// A repeat must not spend a slot, or a config that fits is refused.
+    #[test]
+    fn duplicate_account_filters_collapse_before_the_limit() {
+        // Five entries, four distinct: over the limit only by the repeat.
+        let memcmp = AccountFilter::Memcmp {
+            offset: 8,
+            data: MemcmpData::Bytes(vec![1, 2, 3]),
+        };
+        let distinct = [
+            memcmp.clone(),
+            AccountFilter::DataSize(165),
+            AccountFilter::TokenAccountState(true),
+            AccountFilter::Lamports(LamportsCmp::Gt(1_000)),
+        ];
+
+        let account = Prefilter::builder()
+            .account_owners([Pubkey::new([9; 32])])
+            .account_filters(std::iter::once(memcmp).chain(distinct.clone()))
+            .build()
+            .expect("prefilter must build")
+            .account
+            .expect("account prefilter");
+
+        assert_eq!(account.filters.len(), 4);
+        assert!(distinct.iter().all(|f| account.filters.contains(f)));
+    }
+
+    /// The collapse runs before the limit check, never instead of it.
+    #[test]
+    fn dedup_does_not_lift_the_filter_limit() {
+        assert!(matches!(
+            Prefilter::builder()
+                .account_owners([Pubkey::new([9; 32])])
+                .account_filters([
+                    AccountFilter::DataSize(165),
+                    AccountFilter::TokenAccountState(true),
+                    AccountFilter::Lamports(LamportsCmp::Gt(0)),
+                    AccountFilter::Lamports(LamportsCmp::Lt(9)),
+                    AccountFilter::Lamports(LamportsCmp::Ne(3)),
+                ])
+                .build(),
+            Err(PrefilterError::TooManyAccountFilters { count: 5, max: 4 })
         ));
     }
 
