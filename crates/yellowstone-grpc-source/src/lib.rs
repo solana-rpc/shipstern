@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use clap::ValueEnum;
@@ -7,11 +10,11 @@ use shipstern::{
     sources::{FilterUpdateSource, SourceExitStatus, SourceTrait},
     CommitmentLevel, Error as ShipsternError,
 };
-use shipstern_core::{AccountsDataSlice, Filters, PrefilterError};
+use shipstern_core::{AccountsDataSlice, Filters, PrefilterError, Pubkey};
 use tokio::sync::{mpsc::Sender, oneshot, watch};
 use yellowstone_grpc_client::{Backoff, GeyserGrpcClient, ReconnectConfig};
 use yellowstone_grpc_proto::{
-    geyser::{SubscribeRequest, SubscribeUpdate},
+    geyser::{subscribe_update::UpdateOneof, SubscribeRequest, SubscribeUpdate},
     tonic::{codec::CompressionEncoding, transport::ClientTlsConfig, Status},
 };
 
@@ -107,6 +110,12 @@ pub struct YellowstoneGrpcConfig {
     /// library default when unset.
     #[arg(long, env)]
     pub reconnect_slot_retention: Option<usize>,
+
+    /// Send a parser's accounts as a cuckoo filter once it names at least this
+    /// many, on yellowstone-grpc-geyser 13.1.0+ only. False positives are dropped
+    /// before handlers, so they see the same updates. Unset, nothing is compressed.
+    #[arg(long, env)]
+    pub compress_account_filters_from: Option<usize>,
 }
 
 impl YellowstoneGrpcConfig {
@@ -187,8 +196,163 @@ pub struct YellowstoneGrpcSource {
     config: YellowstoneGrpcConfig,
 }
 
+/// The first release that matches `cuckoo_accounts_filter`. An older server
+/// reads a cuckoo with no account list as "every account".
+const COMPRESSED_ACCOUNTS_SINCE: (u64, u64, u64) = (13, 1, 0);
+const COMPRESSED_ACCOUNTS_PACKAGE: &str = "yellowstone-grpc-geyser";
+
+/// The part of the `GetVersion` JSON this reads.
+#[derive(serde::Deserialize)]
+struct ServerVersion {
+    version: ServerVersionFields,
+}
+
+#[derive(serde::Deserialize)]
+struct ServerVersionFields {
+    package: String,
+    version: String,
+}
+
+/// Whether a server reporting `reported` matches `cuckoo_accounts_filter`.
+/// Anything unclear is a no, since a wrong yes subscribes to the whole cluster.
+fn matches_compressed_accounts(reported: &str) -> bool {
+    let Ok(ServerVersion { version }) = serde_json::from_str::<ServerVersion>(reported) else {
+        return false;
+    };
+
+    if version.package != COMPRESSED_ACCOUNTS_PACKAGE {
+        return false;
+    }
+
+    let Ok(reported) = semver::Version::parse(&version.version) else {
+        return false;
+    };
+
+    let (major, minor, patch) = COMPRESSED_ACCOUNTS_SINCE;
+
+    reported >= semver::Version::new(major, minor, patch)
+}
+
+/// Returns `threshold` only if the server says it matches cuckoo filters.
+async fn negotiate_compressed_accounts(
+    client: &mut GeyserGrpcClient,
+    threshold: usize,
+) -> Option<usize> {
+    let reported = match client.get_version().await {
+        Ok(response) => response.version,
+        Err(err) => {
+            tracing::warn!(
+                %err,
+                "Could not read the server version, so account filters stay uncompressed"
+            );
+
+            return None;
+        },
+    };
+
+    if !matches_compressed_accounts(&reported) {
+        tracing::warn!(
+            server = %reported,
+            "Server does not match cuckoo account filters, so they stay uncompressed"
+        );
+
+        return None;
+    }
+
+    tracing::debug!(
+        server = %reported,
+        threshold,
+        "Compressing an account set naming at least this many keys"
+    );
+
+    Some(threshold)
+}
+
+/// Drops per window past which the server cannot be reading the cuckoo: its
+/// false-positive rate is about 1 in 8k. Auto-reconnect can land on an older
+/// pool member without asking the version again, and this catches that.
+const DROP_BUDGET: usize = 10_000;
+const DROP_BUDGET_WINDOW: Duration = Duration::from_secs(10);
+
+/// Exact account sets behind the cuckoo filters on the live subscription,
+/// keyed by parser id. Empty when nothing went out compressed.
+#[derive(Debug, Default)]
+struct CompressedAccounts {
+    exact: HashMap<String, HashSet<Pubkey>>,
+    dropped: usize,
+    window_opened: Option<std::time::Instant>,
+}
+
+impl CompressedAccounts {
+    fn new(filters: &Filters, compressed_ids: &HashSet<String>) -> Self {
+        Self {
+            exact: compressed_ids
+                .iter()
+                .filter_map(|parser_id| {
+                    let account = filters.get(parser_id)?.account.as_ref()?;
+
+                    Some((parser_id.clone(), account.accounts.clone()))
+                })
+                .collect(),
+            dropped: 0,
+            window_opened: None,
+        }
+    }
+
+    /// Counted per window, since a long-lived connection accumulates honest
+    /// false positives without bound.
+    fn over_drop_budget(&mut self) -> bool {
+        let now = std::time::Instant::now();
+
+        match self.window_opened {
+            Some(opened) if now.duration_since(opened) < DROP_BUDGET_WINDOW => {},
+            _ => {
+                self.window_opened = Some(now);
+                self.dropped = 0;
+            },
+        }
+
+        self.dropped += 1;
+
+        self.dropped > DROP_BUDGET
+    }
+
+    /// Drop from `update` every compressed parser that did not name the
+    /// account, and report whether any parser still matches. Other axes are
+    /// still matched exactly server-side, so the account check is enough.
+    fn retain_exact_matches(&self, update: &mut SubscribeUpdate) -> bool {
+        if self.exact.is_empty() {
+            return true;
+        }
+
+        let Some(UpdateOneof::Account(account)) = &update.update_oneof else {
+            return true;
+        };
+
+        // Not a valid pubkey, so there is nothing to check it against.
+        let Some(Ok(pubkey)) = account
+            .account
+            .as_ref()
+            .map(|info| Pubkey::try_from_ref(&info.pubkey))
+        else {
+            return true;
+        };
+
+        update.filters.retain(|parser_id| {
+            self.exact
+                .get(parser_id)
+                .is_none_or(|accounts| accounts.contains(&pubkey))
+        });
+
+        !update.filters.is_empty()
+    }
+}
+
 /// Build the wire subscription for `filters`, layering on the commitment the
 /// `From<Filters>` conversion leaves unset.
+///
+/// `compress_accounts_from` is the negotiated threshold, not the configured
+/// one. Also returns the ids of the parsers that went out compressed.
 ///
 /// `from_slot` is deliberately not applied here. It is a one-time start
 /// position rather than a steady-state setting, and repeating it on a
@@ -200,8 +364,15 @@ pub struct YellowstoneGrpcSource {
 /// reconnect rather than reusing the configured value. Only the initial
 /// subscribe sets it.
 ///
-fn build_subscribe_request(filters: Filters, config: &YellowstoneGrpcConfig) -> SubscribeRequest {
-    let mut request: SubscribeRequest = filters.into();
+fn build_subscribe_request(
+    filters: Filters,
+    config: &YellowstoneGrpcConfig,
+    compress_accounts_from: Option<usize>,
+) -> (SubscribeRequest, HashSet<String>) {
+    let (mut request, compressed_ids) = match compress_accounts_from {
+        Some(threshold) => filters.to_compressed_subscribe_request(threshold),
+        None => (filters.into(), HashSet::new()),
+    };
 
     if let Some(commitment_level) = config.commitment_level {
         request.commitment = Some(commitment_level as i32);
@@ -218,7 +389,7 @@ fn build_subscribe_request(filters: Filters, config: &YellowstoneGrpcConfig) -> 
         .map(Into::into)
         .collect();
 
-    request
+    (request, compressed_ids)
 }
 
 /// Yield the newest filter set once it changes, or never resolve when the
@@ -239,6 +410,48 @@ async fn next_filter_update(
             Some(rx.borrow_and_update().clone())
         },
         None => std::future::pending().await,
+    }
+}
+
+/// What became of a filter set handed to the sink.
+#[derive(Debug)]
+enum SendOutcome {
+    /// The server has it. This is now the live set.
+    Sent {
+        filters: Filters,
+        /// Parsers whose account list went out as a cuckoo filter.
+        compressed_ids: HashSet<String>,
+    },
+    /// The sink refused it and a reconnect can still land it.
+    Held(Filters),
+    /// The sink refused it and nothing can land it, so it is gone.
+    Dropped,
+}
+
+/// Record an accepted set as the live one and return whatever is still owed to
+/// the server. A held set leaves the compression state alone, since the server
+/// is still matching the previous one.
+fn adopt(
+    outcome: SendOutcome,
+    live_filters: &mut Filters,
+    compressed: &mut CompressedAccounts,
+) -> Option<Filters> {
+    match outcome {
+        SendOutcome::Sent {
+            filters,
+            mut compressed_ids,
+        } => {
+            // Updates matched under the previous cuckoo can still be in flight,
+            // so a parser once compressed stays checked.
+            compressed_ids.extend(compressed.exact.keys().cloned());
+
+            *compressed = CompressedAccounts::new(&filters, &compressed_ids);
+            *live_filters = filters;
+
+            None
+        },
+        SendOutcome::Held(filters) => Some(filters),
+        SendOutcome::Dropped => None,
     }
 }
 
@@ -278,12 +491,14 @@ async fn send_or_hold<S>(
     filters: Filters,
     filter_updates_sent: &mut u64,
     attempt: SendAttempt,
-) -> Option<Filters>
+    compress_accounts_from: Option<usize>,
+) -> SendOutcome
 where
     S: SinkExt<SubscribeRequest> + Unpin,
     S::Error: std::fmt::Display,
 {
-    let request = build_subscribe_request(filters.clone(), config);
+    let (request, compressed_ids) =
+        build_subscribe_request(filters.clone(), config, compress_accounts_from);
 
     tracing::debug!(
         // Entry counts, one per parser, not pubkey counts.
@@ -306,7 +521,7 @@ where
                  and the subscription cannot recover; it keeps its previous filters"
             );
 
-            return None;
+            return SendOutcome::Dropped;
         }
 
         // A retry re-offers a set already reported, so it stays quiet. The
@@ -322,12 +537,15 @@ where
             },
         }
 
-        return Some(filters);
+        return SendOutcome::Held(filters);
     }
 
     *filter_updates_sent += 1;
 
-    None
+    SendOutcome::Sent {
+        filters,
+        compressed_ids,
+    }
 }
 
 #[async_trait]
@@ -396,8 +614,19 @@ impl YellowstoneGrpcSource {
 
         let mut client = builder.connect().await?;
 
-        let mut subscribe_request = build_subscribe_request(filters, &config);
+        let mut compress_accounts_from = match config.compress_account_filters_from {
+            None => None,
+            Some(threshold) => negotiate_compressed_accounts(&mut client, threshold).await,
+        };
+
+        let (mut subscribe_request, compressed_ids) =
+            build_subscribe_request(filters.clone(), &config, compress_accounts_from);
         subscribe_request.from_slot = config.from_slot;
+
+        let mut compressed = CompressedAccounts::new(&filters, &compressed_ids);
+
+        // What a downgrade rebuilds from.
+        let mut live_filters = filters;
 
         tracing::debug!(
             has_accounts = !subscribe_request.accounts.is_empty(),
@@ -434,7 +663,46 @@ impl YellowstoneGrpcSource {
         let exit_status = loop {
             tokio::select! {
                 update = stream.next() => match update {
-                    Some(Ok(update)) => {
+                    Some(Ok(mut update)) => {
+                        if !compressed.retain_exact_matches(&mut update) {
+                            if compress_accounts_from.is_some() && compressed.over_drop_budget() {
+                                tracing::warn!(
+                                    dropped = DROP_BUDGET,
+                                    window_secs = DROP_BUDGET_WINDOW.as_secs(),
+                                    "Dropping far more accounts than a cuckoo filter can \
+                                     explain, so this server is not matching one; resending \
+                                     the subscription with explicit account lists"
+                                );
+
+                                compress_accounts_from = None;
+
+                                // Held like any rejected set, so a failed resend retries
+                                // on the timer instead of on every dropped update.
+                                let filters =
+                                    pending_filters.take().unwrap_or_else(|| live_filters.clone());
+
+                                pending_filters = adopt(
+                                    send_or_hold(
+                                        &mut sink,
+                                        &config,
+                                        filters,
+                                        &mut filter_updates_sent,
+                                        SendAttempt::First,
+                                        None,
+                                    )
+                                    .await,
+                                    &mut live_filters,
+                                    &mut compressed,
+                                );
+
+                                if pending_filters.is_some() {
+                                    retry.reset();
+                                }
+                            }
+
+                            continue;
+                        }
+
                         if tx.send(Ok(update)).await.is_err() {
                             tracing::info!("Receiver dropped, stopping source");
                             // Defensive only - normally unreachable because Signal/Buffer
@@ -473,15 +741,19 @@ impl YellowstoneGrpcSource {
                 _ = retry.tick(), if pending_filters.is_some() => {
                     let Some(filters) = pending_filters.take() else { continue };
 
-                    pending_filters =
+                    pending_filters = adopt(
                         send_or_hold(
                             &mut sink,
                             &config,
                             filters,
                             &mut filter_updates_sent,
                             SendAttempt::Retry,
+                            compress_accounts_from,
                         )
-                            .await;
+                            .await,
+                        &mut live_filters,
+                        &mut compressed,
+                    );
                 },
 
                 update = next_filter_update(&mut filter_updates_rx) => {
@@ -499,15 +771,19 @@ impl YellowstoneGrpcSource {
 
                     // A newer set supersedes anything still held, because every
                     // set is complete rather than a delta.
-                    pending_filters =
+                    pending_filters = adopt(
                         send_or_hold(
                             &mut sink,
                             &config,
                             filters,
                             &mut filter_updates_sent,
                             SendAttempt::First,
+                            compress_accounts_from,
                         )
-                            .await;
+                            .await,
+                        &mut live_filters,
+                        &mut compressed,
+                    );
 
                     // An interval's first tick is immediate, so without this a
                     // rejected set retries at once, inside the same reconnect
@@ -536,8 +812,9 @@ mod tests {
     use shipstern_core::{AccountPrefilter, Filters, Prefilter, Pubkey};
 
     use super::{
-        build_subscribe_request, send_or_hold, CommitmentLevel, SendAttempt, SubscribeRequest,
-        YellowstoneGrpcConfig,
+        adopt, build_subscribe_request, matches_compressed_accounts, send_or_hold, CommitmentLevel,
+        CompressedAccounts, SendAttempt, SendOutcome, SubscribeRequest, SubscribeUpdate,
+        UpdateOneof, YellowstoneGrpcConfig,
     };
 
     fn config_from(toml_src: &str) -> YellowstoneGrpcConfig {
@@ -638,6 +915,24 @@ mod tests {
         }
     }
 
+    /// Only asks whether a set was held, with compression off.
+    async fn send(
+        sink: &mut TestSink,
+        config: &YellowstoneGrpcConfig,
+        filters: Filters,
+        sent: &mut u64,
+        attempt: SendAttempt,
+    ) -> Option<Filters> {
+        let mut live = Filters::new(HashMap::new());
+        let mut compressed = CompressedAccounts::default();
+
+        adopt(
+            send_or_hold(sink, config, filters, sent, attempt, None).await,
+            &mut live,
+            &mut compressed,
+        )
+    }
+
     fn reconnecting_config() -> YellowstoneGrpcConfig {
         config_from(
             r#"
@@ -665,7 +960,7 @@ mod tests {
         let mut sink = TestSink::default();
         let mut sent = 0;
 
-        let held = send_or_hold(
+        let held = send(
             &mut sink,
             &reconnecting_config(),
             filters_owned_by(1),
@@ -692,7 +987,7 @@ mod tests {
         let mut sink = TestSink::disconnected();
         let mut sent = 0;
 
-        let held = send_or_hold(
+        let held = send(
             &mut sink,
             &reconnecting_config(),
             filters_owned_by(2),
@@ -714,7 +1009,7 @@ mod tests {
         let mut sink = TestSink::disconnected();
         let mut sent = 0;
 
-        let held = send_or_hold(
+        let held = send(
             &mut sink,
             &reconnecting_config(),
             filters_owned_by(3),
@@ -727,7 +1022,7 @@ mod tests {
 
         sink.recover();
 
-        let still_held = send_or_hold(
+        let still_held = send(
             &mut sink,
             &reconnecting_config(),
             held,
@@ -751,7 +1046,7 @@ mod tests {
         let mut sink = TestSink::disconnected();
         let mut sent = 0;
 
-        let held = send_or_hold(
+        let held = send(
             &mut sink,
             &non_reconnecting_config(),
             filters_owned_by(4),
@@ -778,7 +1073,7 @@ mod tests {
         "#,
         );
 
-        let request = build_subscribe_request(Filters::new(HashMap::new()), &config);
+        let request = build_subscribe_request(Filters::new(HashMap::new()), &config, None).0;
 
         assert_eq!(request.commitment, Some(CommitmentLevel::Finalized as i32));
     }
@@ -797,7 +1092,7 @@ mod tests {
         "#,
         );
 
-        let request = build_subscribe_request(Filters::new(HashMap::new()), &config);
+        let request = build_subscribe_request(Filters::new(HashMap::new()), &config, None).0;
 
         assert_eq!(request.from_slot, None);
     }
@@ -813,7 +1108,7 @@ mod tests {
         "#,
         );
 
-        let request = build_subscribe_request(Filters::new(HashMap::new()), &config);
+        let request = build_subscribe_request(Filters::new(HashMap::new()), &config, None).0;
 
         assert_eq!(request.commitment, None);
     }
@@ -858,7 +1153,7 @@ mod tests {
         )
         .expect("config must deserialize");
 
-        let request = build_subscribe_request(Filters::new(HashMap::new()), &config);
+        let request = build_subscribe_request(Filters::new(HashMap::new()), &config, None).0;
         let windows: Vec<_> = request
             .accounts_data_slice
             .iter()
@@ -880,7 +1175,7 @@ mod tests {
         )
         .expect("config must deserialize");
 
-        let request = build_subscribe_request(Filters::new(HashMap::new()), &config);
+        let request = build_subscribe_request(Filters::new(HashMap::new()), &config, None).0;
 
         assert!(request.accounts_data_slice.is_empty());
         assert_eq!(request.commitment, None);
@@ -1072,5 +1367,101 @@ mod tests {
 
         assert_eq!(reconnect.backoff.max_retries, 25);
         assert_eq!(reconnect.slot_retention, 300);
+    }
+
+    /// richat is built against a proto with the field but is not geyser, so a
+    /// version check alone would let it through.
+    #[test]
+    fn only_geyser_13_1_or_newer_gets_a_cuckoo() {
+        let geyser = |version| {
+            format!(
+                r#"{{"version":{{"package":"yellowstone-grpc-geyser","version":"{version}"}}}}"#
+            )
+        };
+
+        assert!(matches_compressed_accounts(&geyser("13.1.0")));
+        assert!(matches_compressed_accounts(&geyser(
+            "16.0.0-rc9+solana.4.3.0.rc.1"
+        )));
+        assert!(!matches_compressed_accounts(&geyser("13.1.0-rc1")));
+        assert!(!matches_compressed_accounts(&geyser("13.0.9")));
+        assert!(!matches_compressed_accounts(
+            r#"{"version":{"package":"richat","version":"13.0.2"}}"#
+        ));
+        assert!(!matches_compressed_accounts("not json"));
+    }
+
+    fn account_update(pubkey: Pubkey, filters: &[&str]) -> SubscribeUpdate {
+        SubscribeUpdate {
+            filters: filters.iter().map(|f| (*f).to_owned()).collect(),
+            created_at: None,
+            update_oneof: Some(UpdateOneof::Account(
+                yellowstone_grpc_proto::geyser::SubscribeUpdateAccount {
+                    account: Some(yellowstone_grpc_proto::geyser::SubscribeUpdateAccountInfo {
+                        pubkey: pubkey.to_vec(),
+                        ..Default::default()
+                    }),
+                    slot: 1,
+                    is_startup: false,
+                },
+            )),
+        }
+    }
+
+    fn compressed_for(parser_id: &str, accounts: &[Pubkey]) -> CompressedAccounts {
+        let filters = Filters::new(HashMap::from([(parser_id.to_owned(), Prefilter {
+            account: Some(AccountPrefilter {
+                accounts: accounts.iter().copied().collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })]));
+
+        CompressedAccounts::new(&filters, &HashSet::from([parser_id.to_owned()]))
+    }
+
+    #[test]
+    fn false_positives_are_dropped_before_the_handler() {
+        let watched = Pubkey::new([1; 32]);
+        let compressed = compressed_for("compressed", &[watched]);
+
+        let mut hit = account_update(watched, &["compressed", "exact"]);
+        assert!(compressed.retain_exact_matches(&mut hit));
+        assert_eq!(hit.filters, ["compressed", "exact"]);
+
+        let mut shared = account_update(Pubkey::new([2; 32]), &["compressed", "exact"]);
+        assert!(compressed.retain_exact_matches(&mut shared));
+        assert_eq!(shared.filters, ["exact"]);
+
+        let mut miss = account_update(Pubkey::new([2; 32]), &["compressed"]);
+        assert!(!compressed.retain_exact_matches(&mut miss));
+    }
+
+    /// Updates the old server matched under the cuckoo are still in flight
+    /// after the explicit resend lands, so they still have to be dropped.
+    #[test]
+    fn an_explicit_resend_keeps_dropping_accounts_outside_the_set() {
+        let watched = Pubkey::new([1; 32]);
+        let mut compressed = compressed_for("compressed", &[watched]);
+
+        let filters = Filters::new(HashMap::from([("compressed".to_owned(), Prefilter {
+            account: Some(AccountPrefilter {
+                accounts: HashSet::from([watched]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })]));
+
+        let mut live = Filters::new(HashMap::new());
+
+        let resent = SendOutcome::Sent {
+            filters,
+            compressed_ids: HashSet::new(),
+        };
+
+        assert!(adopt(resent, &mut live, &mut compressed).is_none());
+
+        let mut in_flight = account_update(Pubkey::new([2; 32]), &["compressed"]);
+        assert!(!compressed.retain_exact_matches(&mut in_flight));
     }
 }

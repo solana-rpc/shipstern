@@ -27,17 +27,20 @@ use std::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::Deserialize;
-use yellowstone_grpc_proto::geyser::{
-    self, subscribe_request_filter_accounts_filter as wire_filter,
-    subscribe_request_filter_accounts_filter_lamports as wire_lamports,
-    subscribe_request_filter_accounts_filter_memcmp as wire_memcmp, SubscribeRequest,
-    SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
-    SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
-    SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
-    SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
-    SubscribeRequestFilterTransactions, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-    SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateSlot,
-    SubscribeUpdateTransaction,
+use yellowstone_grpc_proto::{
+    cuckoo::CuckooFilter,
+    geyser::{
+        self, subscribe_request_filter_accounts_filter as wire_filter,
+        subscribe_request_filter_accounts_filter_lamports as wire_lamports,
+        subscribe_request_filter_accounts_filter_memcmp as wire_memcmp, SubscribeRequest,
+        SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+        SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
+        SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
+        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
+        SubscribeRequestFilterTransactions, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
+        SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateSlot,
+        SubscribeUpdateTransaction,
+    },
 };
 
 pub extern crate bs58;
@@ -358,6 +361,30 @@ impl AccountPrefilter {
         if *nonempty_txn_signature != other.nonempty_txn_signature {
             *nonempty_txn_signature = None;
         }
+    }
+
+    /// This prefilter with its accounts sent as a cuckoo filter, so the server may
+    /// deliver accounts outside [`Self::accounts`]. Geyser 13.1.0+ only: older
+    /// servers match every account. `None` for an empty or unencodable set.
+    #[must_use]
+    pub fn to_compressed_account_filter(&self) -> Option<SubscribeRequestFilterAccounts> {
+        if self.accounts.is_empty() {
+            return None;
+        }
+
+        let mut cuckoo = CuckooFilter::<[u8; 32]>::with_capacity(self.accounts.len()).ok()?;
+
+        for account in &self.accounts {
+            cuckoo.insert(account).ok()?;
+        }
+
+        Some(SubscribeRequestFilterAccounts {
+            account: vec![],
+            owner: self.owners.iter().map(ToString::to_string).collect(),
+            filters: self.filters.iter().map(Into::into).collect(),
+            nonempty_txn_signature: self.nonempty_txn_signature,
+            cuckoo_accounts_filter: Some((&cuckoo).into()),
+        })
     }
 }
 
@@ -1561,6 +1588,37 @@ impl Filters {
     pub fn remove(&mut self, parser_id: &str) -> Option<Prefilter> {
         self.parsers_filters.remove(parser_id)
     }
+
+    /// The wire subscription with each account set of at least
+    /// `min_compressed_accounts` keys sent as a cuckoo filter, plus the ids of
+    /// the parsers that went out compressed.
+    #[must_use]
+    pub fn to_compressed_subscribe_request(
+        self,
+        min_compressed_accounts: usize,
+    ) -> (SubscribeRequest, HashSet<String>) {
+        let compressed: HashMap<String, SubscribeRequestFilterAccounts> = self
+            .parsers_filters
+            .iter()
+            .filter_map(|(parser_id, prefilter)| {
+                let account = prefilter.account.as_ref()?;
+
+                if account.accounts.len() < min_compressed_accounts {
+                    return None;
+                }
+
+                Some((parser_id.clone(), account.to_compressed_account_filter()?))
+            })
+            .collect();
+
+        let compressed_ids = compressed.keys().cloned().collect();
+
+        // Replaces the explicit entry `From` wrote for the same parser.
+        let mut request: SubscribeRequest = self.into();
+        request.accounts.extend(compressed);
+
+        (request, compressed_ids)
+    }
 }
 
 /// Type mirroring the `CommitmentLevel` enum in the `geyser` crate but serializable.
@@ -2324,6 +2382,70 @@ mod tests {
                 .build(),
             Err(PrefilterError::TooManyAccountFilters { count: 5, max: 4 })
         ));
+    }
+
+    fn accounts_prefilter(count: usize) -> AccountPrefilter {
+        AccountPrefilter {
+            accounts: (0..count)
+                .map(|i| {
+                    let mut bytes = [0; 32];
+                    bytes[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                    Pubkey::new(bytes)
+                })
+                .collect(),
+            owners: HashSet::from([Pubkey::new([9; 32])]),
+            filters: vec![AccountFilter::DataSize(165)],
+            nonempty_txn_signature: Some(true),
+        }
+    }
+
+    /// A wrong yes is dropped downstream, but a wrong no loses an account for
+    /// good. Decoded the way the server decodes it.
+    #[test]
+    fn a_compressed_account_set_never_misses_a_member() {
+        let prefilter = accounts_prefilter(5_000);
+
+        let wire = prefilter
+            .to_compressed_account_filter()
+            .expect("five thousand accounts must encode");
+
+        assert!(wire.account.is_empty());
+        assert_eq!(wire.owner, vec![Pubkey::new([9; 32]).to_string()]);
+        assert_eq!(wire.filters.len(), 1);
+
+        let proto = wire
+            .cuckoo_accounts_filter
+            .expect("the encoded filter carries a cuckoo");
+
+        let server_side: CuckooFilter<[u8; 32]> = (&proto).into();
+
+        assert!(prefilter.accounts.iter().all(|a| server_side.contains(a)));
+    }
+
+    #[test]
+    fn a_set_below_the_threshold_keeps_its_explicit_list() {
+        let filters = Filters::new(HashMap::from([
+            ("small".to_owned(), Prefilter {
+                account: Some(accounts_prefilter(4)),
+                ..Default::default()
+            }),
+            ("large".to_owned(), Prefilter {
+                account: Some(accounts_prefilter(100)),
+                ..Default::default()
+            }),
+        ]));
+
+        let (request, compressed) = filters.to_compressed_subscribe_request(10);
+
+        assert_eq!(compressed, HashSet::from(["large".to_owned()]));
+
+        let small = request.accounts.get("small").expect("account filter");
+        assert_eq!(small.account.len(), 4);
+        assert!(small.cuckoo_accounts_filter.is_none());
+
+        let large = request.accounts.get("large").expect("account filter");
+        assert!(large.account.is_empty());
+        assert!(large.cuckoo_accounts_filter.is_some());
     }
 
     /// The server reads the windows as one ordered cut through the account
