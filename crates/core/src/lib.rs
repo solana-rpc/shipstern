@@ -1310,18 +1310,13 @@ impl PrefilterBuilder {
     ///
     pub fn account_filters<I: IntoIterator<Item = AccountFilter>>(self, it: I) -> Self {
         self.mutate(|this| {
-            // Linear rather than a `HashSet`: the limit is four, so the scan
-            // is a handful of comparisons and keeps first-seen order without
-            // a side table or a second pass. Quadratic when every entry is
-            // distinct, which the count check only bounds afterwards, and
-            // accepted because these lists are written by hand.
-            let mut filters: Vec<AccountFilter> = Vec::new();
-
-            for filter in it {
-                if !filters.contains(&filter) {
-                    filters.push(filter);
-                }
-            }
+            // Filtered through the set rather than collected into it, so the
+            // first-seen order and the index a limit error reports stay stable.
+            let mut seen = HashSet::new();
+            let filters: Vec<AccountFilter> = it
+                .into_iter()
+                .filter(|filter| seen.insert(filter.clone()))
+                .collect();
 
             AccountFilter::validate_all(&filters)?;
 
