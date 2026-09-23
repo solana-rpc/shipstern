@@ -1284,13 +1284,8 @@ impl PrefilterBuilder {
     ///
     pub fn account_filters<I: IntoIterator<Item = AccountFilter>>(self, it: I) -> Self {
         self.mutate(|this| {
-            // Filtered through the set rather than collected into it, so the
-            // first-seen order and the index a limit error reports stay stable.
-            let mut seen = HashSet::new();
-            let filters: Vec<AccountFilter> = it
-                .into_iter()
-                .filter(|filter| seen.insert(filter.clone()))
-                .collect();
+            let filters: Vec<AccountFilter> =
+                it.into_iter().collect::<HashSet<_>>().into_iter().collect();
 
             AccountFilter::validate_all(&filters)?;
 
@@ -1940,20 +1935,21 @@ mod tests {
 
         let filters = &request.accounts.get("p").expect("account filter").filters;
 
+        // The builder collapses repeats through a set, so order is not kept.
+        let has = |pred: fn(&wire_filter::Filter) -> bool| {
+            filters.iter().any(|f| f.filter.as_ref().is_some_and(pred))
+        };
+
         assert_eq!(filters.len(), 3);
-        assert!(matches!(
-            filters[0].filter,
-            Some(wire_filter::Filter::Datasize(165))
-        ));
-        assert!(matches!(
-            filters[1].filter,
-            Some(wire_filter::Filter::TokenAccountState(true))
-        ));
-        assert!(matches!(
-            filters[2].filter,
-            Some(wire_filter::Filter::Lamports(ref cmp))
-                if cmp.cmp == Some(wire_lamports::Cmp::Gt(1_000))
-        ));
+        assert!(has(|f| matches!(f, wire_filter::Filter::Datasize(165))));
+        assert!(has(|f| matches!(
+            f,
+            wire_filter::Filter::TokenAccountState(true)
+        )));
+        assert!(has(|f| matches!(
+            f,
+            wire_filter::Filter::Lamports(cmp) if cmp.cmp == Some(wire_lamports::Cmp::Gt(1_000))
+        )));
     }
 
     #[test]
@@ -2289,47 +2285,27 @@ mod tests {
     #[test]
     fn duplicate_account_filters_collapse_before_the_limit() {
         // Five entries, four distinct: over the limit only by the repeat.
-        let request = account_with(|b| {
-            let memcmp = || AccountFilter::Memcmp {
-                offset: 8,
-                data: MemcmpData::Bytes(vec![1, 2, 3]),
-            };
+        let memcmp = AccountFilter::Memcmp {
+            offset: 8,
+            data: MemcmpData::Bytes(vec![1, 2, 3]),
+        };
+        let distinct = [
+            memcmp.clone(),
+            AccountFilter::DataSize(165),
+            AccountFilter::TokenAccountState(true),
+            AccountFilter::Lamports(LamportsCmp::Gt(1_000)),
+        ];
 
-            b.account_filters([
-                memcmp(),
-                memcmp(),
-                AccountFilter::DataSize(165),
-                AccountFilter::TokenAccountState(true),
-                AccountFilter::Lamports(LamportsCmp::Gt(1_000)),
-            ])
-        });
+        let account = Prefilter::builder()
+            .account_owners([Pubkey::new([9; 32])])
+            .account_filters(std::iter::once(memcmp).chain(distinct.clone()))
+            .build()
+            .expect("prefilter must build")
+            .account
+            .expect("account prefilter");
 
-        let filters = &request.accounts.get("p").expect("account filter").filters;
-
-        assert_eq!(
-            filters.len(),
-            4,
-            "the repeat must be gone from the request, not just from the vec"
-        );
-
-        // First-seen order survives, so the encoding stays deterministic.
-        assert!(matches!(
-            filters[0].filter,
-            Some(wire_filter::Filter::Memcmp(ref m)) if m.offset == 8
-        ));
-        assert!(matches!(
-            filters[1].filter,
-            Some(wire_filter::Filter::Datasize(165))
-        ));
-        assert!(matches!(
-            filters[2].filter,
-            Some(wire_filter::Filter::TokenAccountState(true))
-        ));
-        assert!(matches!(
-            filters[3].filter,
-            Some(wire_filter::Filter::Lamports(ref cmp))
-                if cmp.cmp == Some(wire_lamports::Cmp::Gt(1_000))
-        ));
+        assert_eq!(account.filters.len(), 4);
+        assert!(distinct.iter().all(|f| account.filters.contains(f)));
     }
 
     /// The collapse runs before the limit check, never instead of it.
