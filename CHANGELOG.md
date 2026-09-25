@@ -9,8 +9,8 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- `codama-nodes-from-anchor`: converts an Anchor IDL (spec 0.1.0) to Codama nodes in Rust, producing the same generated parser as `npx codama convert` ([#TBD](https://github.com/solana-rpc/shipstern/pull/TBD) closing [#329](https://github.com/solana-rpc/shipstern/issues/329) by @senzenn).
-- `shipstern-proc-macro`: `include_shipstern_parser!` accepts an Anchor IDL (spec 0.1.0) directly, with no `codama convert` step. Older Anchor IDLs still need converting to Codama JSON first ([#TBD](https://github.com/solana-rpc/shipstern/pull/TBD) by @senzenn).
+- `codama-nodes-from-anchor`: converts an Anchor IDL (spec 0.1.0) to Codama nodes in Rust, producing the same generated parser as `npx codama convert` ([#337](https://github.com/solana-rpc/shipstern/pull/337) closing [#329](https://github.com/solana-rpc/shipstern/issues/329) by @senzenn).
+- `shipstern-proc-macro`: `include_shipstern_parser!` accepts an Anchor IDL (spec 0.1.0) directly, with no `codama convert` step. Older Anchor IDLs still need converting to Codama JSON first ([#337](https://github.com/solana-rpc/shipstern/pull/337) by @senzenn).
 
 ### Changed
 
