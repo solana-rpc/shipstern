@@ -1,7 +1,5 @@
-//! Error paths no fixture can hold: an unsupported spec, a PDA seed naming a
-//! missing argument, nesting past the limit, a missing program address and
-//! enum variant fields that are not an array.
-//! Conversion rules are covered end to end by `fixtures/shapes.anchor.json`.
+//! Error paths no fixture can hold. Conversion rules are covered end to end
+//! by `fixtures/shapes.anchor.json`.
 
 use serde_json::{json, Value};
 use shipstern_codama_from_anchor::{root_node_from_anchor, Error};
