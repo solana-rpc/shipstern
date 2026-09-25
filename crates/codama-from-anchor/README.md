@@ -1,10 +1,10 @@
-# codama-nodes-from-anchor
+# shipstern-codama-from-anchor
 
 Converts an Anchor IDL into [`codama-nodes`](https://crates.io/crates/codama-nodes), so a Shipstern parser can be generated from an Anchor program without running `npx codama convert` first.
 
 ```rust
 let idl = std::fs::read("idls/my_program.json")?;
-let root = codama_nodes_from_anchor::root_node_from_anchor(&idl)?;
+let root = shipstern_codama_from_anchor::root_node_from_anchor(&idl)?;
 ```
 
 `root_node_from_anchor_idl` takes an already deserialized `idl::Idl` instead.

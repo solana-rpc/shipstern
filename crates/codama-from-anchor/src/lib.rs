@@ -3,7 +3,7 @@
 //! parser.
 //!
 //! ```rust, ignore
-//! let root = codama_nodes_from_anchor::root_node_from_anchor(&std::fs::read("idl.json")?)?;
+//! let root = shipstern_codama_from_anchor::root_node_from_anchor(&std::fs::read("idl.json")?)?;
 //! ```
 
 use codama_nodes::RootNode;
@@ -22,6 +22,7 @@ pub const SUPPORTED_SPEC: &str = "0.1.0";
 pub const NESTING_LIMIT: usize = 128;
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     #[error("invalid Anchor IDL JSON: {0}")]
     Json(#[from] serde_json::Error),

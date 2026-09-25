@@ -79,7 +79,7 @@ fn converted_nodes_match_the_js_converter_field_for_field() {
 
         let idl = std::fs::read(fixtures().join(format!("{name}.anchor.json"))).expect("read IDL");
 
-        let actual = match codama_nodes_from_anchor::root_node_from_anchor(&idl) {
+        let actual = match shipstern_codama_from_anchor::root_node_from_anchor(&idl) {
             Ok(root) => root,
             Err(err) => {
                 failures.push(format!("{name}: conversion failed: {err}"));

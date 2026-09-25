@@ -1,9 +1,7 @@
 use shipstern_proc_macro::include_shipstern_parser;
 
 // A raw Anchor IDL, converted in-process: no Codama JSON in between.
-include_shipstern_parser!(
-    "../../crates/codama-nodes-from-anchor/tests/fixtures/dex_v1.anchor.json"
-);
+include_shipstern_parser!("../../crates/codama-from-anchor/tests/fixtures/dex_v1.anchor.json");
 
 #[test]
 fn a_parser_generated_from_an_anchor_idl_decodes_instructions() {

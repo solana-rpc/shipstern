@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../codama-nodes-from-anchor/tests/fixtures")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../codama-from-anchor/tests/fixtures")
 }
 
 fn tokens(idl: &Path) -> proc_macro2::TokenStream {

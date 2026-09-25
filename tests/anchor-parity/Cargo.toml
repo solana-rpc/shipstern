@@ -10,7 +10,7 @@ publish = false
 
 [dependencies]
 codama-nodes = "=0.13.2"
-codama-nodes-from-anchor = { path = "../../crates/codama-nodes-from-anchor" }
+shipstern-codama-from-anchor = { path = "../../crates/codama-from-anchor" }
 serde = { version = "^1.0.198", features = ["derive"] }
 # u128 values above u64::MAX need arbitrary precision to reach JSON intact.
 serde_json = { version = "^1.0.0", features = ["arbitrary_precision"] }

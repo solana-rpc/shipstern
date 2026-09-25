@@ -1691,17 +1691,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codama-nodes-from-anchor"
-version = "0.11.0"
-dependencies = [
- "bs58",
- "codama-nodes",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "codama-syn-helpers"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6864,6 +6853,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "shipstern-codama-from-anchor"
+version = "0.11.0"
+dependencies = [
+ "bs58",
+ "codama-nodes",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "shipstern-core"
 version = "0.11.0"
 dependencies = [
@@ -7084,13 +7084,13 @@ dependencies = [
  "base64 0.22.1",
  "bs58",
  "codama-nodes",
- "codama-nodes-from-anchor",
  "hex",
  "prettyplease",
  "proc-macro2",
  "quote",
  "serde",
  "serde_json",
+ "shipstern-codama-from-anchor",
  "shipstern-core",
  "syn 2.0.119",
 ]

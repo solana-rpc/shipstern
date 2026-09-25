@@ -1,4 +1,4 @@
-# Real-world parity for codama-nodes-from-anchor against @codama/nodes-from-anchor.
+# Real-world parity for shipstern-codama-from-anchor against @codama/nodes-from-anchor.
 # Needs node >= 22 and PARITY_RPC_URL pointing at a mainnet RPC.
 
 cache := ".cache"

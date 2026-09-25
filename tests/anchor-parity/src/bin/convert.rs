@@ -42,8 +42,9 @@ fn main() -> ExitCode {
             continue;
         };
 
-        let result =
-            std::panic::catch_unwind(|| codama_nodes_from_anchor::root_node_from_anchor(&bytes));
+        let result = std::panic::catch_unwind(|| {
+            shipstern_codama_from_anchor::root_node_from_anchor(&bytes)
+        });
 
         let outcome = match result {
             Ok(Ok(root)) => serde_json::to_vec_pretty(&root)

@@ -292,7 +292,8 @@ fn enum_type(variants: &Value, generics: &Generics<'_>, depth: usize) -> Result<
 
         let fields = match variant.get("fields") {
             Some(Value::Array(fields)) => fields.as_slice(),
-            _ => &[],
+            None | Some(Value::Null) => &[],
+            Some(_) => return Err(unrecognized(variant)),
         };
 
         let Some(first) = fields.first() else {

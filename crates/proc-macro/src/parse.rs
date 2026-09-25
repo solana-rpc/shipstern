@@ -6,7 +6,7 @@ use codama_nodes::{EventNode, RootNode};
 pub enum IdlError {
     ReadFile(std::io::Error),
     ParseFile(serde_json::Error),
-    ConvertAnchor(codama_nodes_from_anchor::Error),
+    ConvertAnchor(shipstern_codama_from_anchor::Error),
 }
 
 impl std::fmt::Display for IdlError {
@@ -15,7 +15,7 @@ impl std::fmt::Display for IdlError {
             IdlError::ReadFile(e) => write!(f, "Failed to read file: {}", e),
             IdlError::ParseFile(e) => write!(f, "Failed to parse JSON: {}", e),
             IdlError::ConvertAnchor(
-                e @ codama_nodes_from_anchor::Error::UnsupportedSpec { .. },
+                e @ shipstern_codama_from_anchor::Error::UnsupportedSpec { .. },
             ) => {
                 write!(
                     f,
@@ -44,7 +44,7 @@ pub fn load_idl<P: AsRef<Path>>(path: P) -> Result<(RootNode, Vec<EventNode>), I
 
         serde_json::from_value::<RootNode>(value).map_err(IdlError::ParseFile)?
     } else {
-        codama_nodes_from_anchor::root_node_from_anchor(data.as_bytes())
+        shipstern_codama_from_anchor::root_node_from_anchor(data.as_bytes())
             .map_err(IdlError::ConvertAnchor)?
     };
 

@@ -18,9 +18,9 @@ dependencies = [
  "base64",
  "borsh",
  "codama-nodes",
- "codama-nodes-from-anchor",
  "serde",
  "serde_json",
+ "shipstern-codama-from-anchor",
  "shipstern-core",
  "shipstern-parser",
  "shipstern-proc-macro",
@@ -234,17 +234,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "codama-nodes-from-anchor"
-version = "0.11.0"
-dependencies = [
- "bs58",
- "codama-nodes",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -840,6 +829,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "shipstern-codama-from-anchor"
+version = "0.11.0"
+dependencies = [
+ "bs58",
+ "codama-nodes",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "shipstern-core"
 version = "0.11.0"
 dependencies = [
@@ -870,12 +870,12 @@ dependencies = [
  "base64",
  "bs58",
  "codama-nodes",
- "codama-nodes-from-anchor",
  "hex",
  "proc-macro2",
  "quote",
  "serde",
  "serde_json",
+ "shipstern-codama-from-anchor",
  "shipstern-core",
  "syn 2.0.119",
 ]

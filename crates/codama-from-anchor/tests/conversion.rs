@@ -1,9 +1,10 @@
 //! Error paths no fixture can hold: an unsupported spec, a PDA seed naming a
-//! missing argument, nesting past the limit and a missing program address.
+//! missing argument, nesting past the limit, a missing program address and
+//! enum variant fields that are not an array.
 //! Conversion rules are covered end to end by `fixtures/shapes.anchor.json`.
 
-use codama_nodes_from_anchor::{root_node_from_anchor, Error};
 use serde_json::{json, Value};
+use shipstern_codama_from_anchor::{root_node_from_anchor, Error};
 
 /// A minimal spec-0.1.0 IDL with `extra` merged over its top-level keys.
 fn convert(extra: Value) -> Result<Value, Error> {
@@ -130,4 +131,16 @@ fn an_idl_without_an_address_is_rejected() {
         .expect_err("must fail");
 
     assert!(err.to_string().contains("address"), "{err}");
+}
+
+/// Reading these as an empty variant would skip the variant's bytes on decode.
+#[test]
+fn an_enum_variant_with_non_array_fields_is_rejected() {
+    let types = |fields: Value| json!({ "types": [{ "name": "E", "type": { "kind": "enum", "variants": [{ "name": "A", "fields": fields }] } }] });
+
+    assert!(matches!(
+        convert(types(json!({}))),
+        Err(Error::UnrecognizedType(_))
+    ));
+    assert!(convert(types(json!(null))).is_ok());
 }

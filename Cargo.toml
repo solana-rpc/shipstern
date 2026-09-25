@@ -117,7 +117,7 @@ reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
 
 shipstern = { path = "crates/runtime", version = "0.11.0" }
 shipstern-proc-macro = { path = "crates/proc-macro", version = "0.11.0" }
-codama-nodes-from-anchor = { path = "crates/codama-nodes-from-anchor", version = "0.11.0" }
+shipstern-codama-from-anchor = { path = "crates/codama-from-anchor", version = "0.11.0" }
 shipstern-stream = { path = "crates/stream", version = "0.11.0" }
 shipstern-core = { path = "crates/core", version = "0.11.0" }
 shipstern-mock = { path = "crates/mock", version = "0.11.0" }

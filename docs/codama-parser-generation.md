@@ -14,7 +14,7 @@ Codama JSON ─────────────┘       (compile time)     
 
 **1. Point the macro at your IDL.** An Anchor IDL from Anchor 0.30 or later, where
 `metadata.spec` is `"0.1.0"`, works as it is: the macro converts it in-process with
-`codama-nodes-from-anchor`, which produces the same parser as
+`shipstern-codama-from-anchor`, which produces the same parser as
 `@codama/nodes-from-anchor@1.5.6`. No Node and no intermediate file.
 
 An older Anchor IDL has no `metadata.spec` and fails to compile with a message saying so.

@@ -1,6 +1,6 @@
 //! Anchor IDL spec `0.1.0`, mirroring `nodes-from-anchor/src/v01/idl.ts`. Type
-//! positions stay `Value` so [`crate::types`] can probe keys in the JS order and
-//! fail on the same shapes.
+//! positions stay `Value` so the type conversion can probe keys in the JS order
+//! and fail on the same shapes.
 
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
@@ -22,6 +22,7 @@ pub(crate) fn docs<'de, D: Deserializer<'de>>(de: D) -> Result<Vec<String>, D::E
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Idl {
     pub address: String,
     pub metadata: Metadata,
@@ -46,6 +47,7 @@ pub struct Idl {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Metadata {
     pub name: String,
     pub version: String,
@@ -53,6 +55,7 @@ pub struct Metadata {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Instruction {
     pub name: String,
     pub discriminator: Vec<u8>,
@@ -70,18 +73,21 @@ pub struct Instruction {
 /// A single account, or a named group of accounts (an Anchor composite).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum InstructionAccountItem {
     Group(InstructionAccounts),
     Single(InstructionAccount),
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct InstructionAccounts {
     pub name: String,
     pub accounts: Vec<InstructionAccountItem>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct InstructionAccount {
     pub name: String,
 
@@ -102,6 +108,7 @@ pub struct InstructionAccount {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Pda {
     pub seeds: Vec<Seed>,
     pub program: Option<Seed>,
@@ -109,6 +116,7 @@ pub struct Pda {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Seed {
     Const {
         value: Vec<u8>,
@@ -136,18 +144,21 @@ impl Seed {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Account {
     pub name: String,
     pub discriminator: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Event {
     pub name: String,
     pub discriminator: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct ErrorCode {
     pub code: u32,
     pub name: String,
@@ -155,6 +166,7 @@ pub struct ErrorCode {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Field {
     pub name: String,
 
@@ -166,6 +178,7 @@ pub struct Field {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct TypeDef {
     pub name: String,
 
@@ -180,12 +193,14 @@ pub struct TypeDef {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct GenericParam {
     pub kind: String,
     pub name: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct Const {
     pub name: String,
 

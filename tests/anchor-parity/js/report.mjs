@@ -25,7 +25,7 @@ const name = id => byId.get(id)?.name ?? id;
 let rpcHost = 'unset';
 try { rpcHost = new URL(process.env.PARITY_RPC_URL).host; } catch {}
 
-w('# codama-nodes-from-anchor: real-world parity report\n');
+w('# shipstern-codama-from-anchor: real-world parity report\n');
 w(`Generated ${new Date().toISOString()}.\n`);
 
 w('## Versions\n');
