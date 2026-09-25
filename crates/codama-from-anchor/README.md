@@ -15,12 +15,7 @@ Only Anchor IDL spec `0.1.0` is supported, which is what Anchor 0.30 and later e
 
 ## Parity with `@codama/nodes-from-anchor`
 
-The reference is `@codama/nodes-from-anchor@1.5.6` (with `codama@1.11.0` and `@codama/visitors@1.11.0`), which is what existing Shipstern parsers were generated with. Two tests hold the crate to it:
-
-- `shipstern-proc-macro`'s `anchor_parity_tests` expands a parser from the JS CLI output and from this crate's output, and requires the two to be byte-identical.
-- `tests/parity.rs` compares the converted nodes field by field against the JS pipeline minus the passes listed below, and names the JSON path of any difference. It covers every fixture but `pump_fun`, whose second 460 KB copy is not worth keeping.
-
-The second catches things the first cannot see on a given corpus. Replacing the JS `camelCase` port with `codama-rs`'s own case conversion, for example, leaves every real-world fixture's parser unchanged but breaks `shapes`, and the field-level test reports `program.constants[0].name: JS "aRRAY", Rust "array"`.
+The reference is `@codama/nodes-from-anchor@1.5.6` (with `codama@1.11.0` and `@codama/visitors@1.11.0`), which is what existing Shipstern parsers were generated with. `shipstern-proc-macro`'s `anchor_parity_tests` expands a parser from the JS CLI output and from this crate's output for every fixture, and requires the two to be byte-identical.
 
 ### Passes
 
@@ -64,7 +59,7 @@ Some differences from Anchor's own decoder come from shipstern, not from either 
 
 ## Fixtures
 
-`tests/fixtures/<name>.anchor.json` is the input. `<name>.codama.json` is what `codama convert` produced from it. `<name>.parity.codama.json`, absent for `pump_fun`, is that pipeline without the three unported passes. `regenerate.mjs` rebuilds both outputs with the pinned versions; see the header of that file.
+`tests/fixtures/<name>.anchor.json` is the input. `<name>.codama.json` is what `codama convert` produced from it. `regenerate.mjs` rebuilds the outputs with the pinned versions; see the header of that file.
 
 | Fixture | Source |
 |---|---|
