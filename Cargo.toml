@@ -8,7 +8,6 @@ members = ["crates/*", "examples/*", "tests/*"]
 exclude = [
   "examples/multi-dex-stream",
   "tests/idls",
-  "tests/anchor-parity",
   "tests/proc-macro-events",
 ]
 resolver = "2"
