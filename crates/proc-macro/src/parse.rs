@@ -6,6 +6,7 @@ use codama_nodes::{EventNode, RootNode};
 pub enum IdlError {
     ReadFile(std::io::Error),
     ParseFile(serde_json::Error),
+    ConvertAnchor(codama_nodes_from_anchor::Error),
 }
 
 impl std::fmt::Display for IdlError {
@@ -13,22 +14,40 @@ impl std::fmt::Display for IdlError {
         match self {
             IdlError::ReadFile(e) => write!(f, "Failed to read file: {}", e),
             IdlError::ParseFile(e) => write!(f, "Failed to parse JSON: {}", e),
+            IdlError::ConvertAnchor(
+                e @ codama_nodes_from_anchor::Error::UnsupportedSpec { .. },
+            ) => {
+                write!(
+                    f,
+                    "{e}. Convert an older IDL with `npx -p codama -p @codama/nodes-from-anchor \
+                     codama convert` and pass the Codama JSON instead"
+                )
+            },
+            IdlError::ConvertAnchor(e) => write!(f, "Failed to convert Anchor IDL: {}", e),
         }
     }
 }
 
-/// Load a codama IDL file, returning the root node and any events.
-pub fn load_codama_idl<P: AsRef<Path>>(path: P) -> Result<(RootNode, Vec<EventNode>), IdlError> {
+/// Load a Codama JSON file or an Anchor IDL, returning the root node and any
+/// events. Codama JSON always has a top-level `kind`; anything else is read as
+/// an Anchor IDL.
+pub fn load_idl<P: AsRef<Path>>(path: P) -> Result<(RootNode, Vec<EventNode>), IdlError> {
     let data = fs::read_to_string(&path).map_err(IdlError::ReadFile)?;
 
     let mut value: serde_json::Value = serde_json::from_str(&data).map_err(IdlError::ParseFile)?;
 
-    // Some codama generators emit error codes as strings ("6000") instead of
-    // integers (6000). Coerce them before deserialization so `ErrorNode.code`
-    // (which expects `usize`) doesn't fail.
-    fix_string_error_codes(&mut value);
+    let root = if value.get("kind").is_some() {
+        // Some codama generators emit error codes as strings ("6000") instead of
+        // integers (6000). Coerce them before deserialization so `ErrorNode.code`
+        // (which expects `usize`) doesn't fail.
+        fix_string_error_codes(&mut value);
 
-    let root = serde_json::from_value::<RootNode>(value).map_err(IdlError::ParseFile)?;
+        serde_json::from_value::<RootNode>(value).map_err(IdlError::ParseFile)?
+    } else {
+        codama_nodes_from_anchor::root_node_from_anchor(data.as_bytes())
+            .map_err(IdlError::ConvertAnchor)?
+    };
+
     let events = root.program.events.clone();
 
     Ok((root, events))
@@ -662,7 +681,7 @@ mod tests {
     ///
     #[test]
     fn codama_rejects_an_unknown_program_origin() {
-        let err = load_codama_idl(idl_with_origin("custom")).expect_err("custom is not an origin");
+        let err = load_idl(idl_with_origin("custom")).expect_err("custom is not an origin");
 
         let message = err.to_string();
 
@@ -674,12 +693,12 @@ mod tests {
     /// The enum is lowercase-tagged, so a case variant is a different token.
     #[test]
     fn codama_rejects_a_case_variant_origin() {
-        assert!(load_codama_idl(idl_with_origin("Anchor")).is_err());
+        assert!(load_idl(idl_with_origin("Anchor")).is_err());
     }
 
     #[test]
     fn codama_accepts_the_two_real_origins() {
-        assert!(load_codama_idl(idl_with_origin("anchor")).is_ok());
-        assert!(load_codama_idl(idl_with_origin("shank")).is_ok());
+        assert!(load_idl(idl_with_origin("anchor")).is_ok());
+        assert!(load_idl(idl_with_origin("shank")).is_ok());
     }
 }

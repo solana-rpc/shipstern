@@ -1,0 +1,1506 @@
+{
+  "kind": "rootNode",
+  "standard": "codama",
+  "version": "1.9.2",
+  "program": {
+    "kind": "programNode",
+    "name": "external",
+    "publicKey": "Externa111111111111111111111111111111111111",
+    "version": "0.1.0",
+    "origin": "anchor",
+    "accounts": [
+      {
+        "kind": "accountNode",
+        "name": "accountWithGenericField",
+        "size": 40,
+        "data": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "discriminator",
+              "defaultValueStrategy": "omitted",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 8,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              },
+              "defaultValue": {
+                "kind": "bytesValueNode",
+                "data": "03f508dc77a869ac",
+                "encoding": "base16"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "field",
+              "type": {
+                "kind": "structTypeNode",
+                "fields": [
+                  {
+                    "kind": "structFieldTypeNode",
+                    "name": "field",
+                    "type": {
+                      "kind": "arrayTypeNode",
+                      "item": {
+                        "kind": "numberTypeNode",
+                        "format": "u32",
+                        "endian": "le"
+                      },
+                      "count": {
+                        "kind": "fixedCountNode",
+                        "value": 8
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "accountNode",
+        "name": "myAccount",
+        "size": 12,
+        "data": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "discriminator",
+              "defaultValueStrategy": "omitted",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 8,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              },
+              "defaultValue": {
+                "kind": "bytesValueNode",
+                "data": "f61c0657fb2d322a",
+                "encoding": "base16"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "field",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u32",
+                "endian": "le"
+              }
+            }
+          ]
+        },
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "accountNode",
+        "name": "packedAccount",
+        "size": 32,
+        "data": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "discriminator",
+              "defaultValueStrategy": "omitted",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 8,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              },
+              "defaultValue": {
+                "kind": "bytesValueNode",
+                "data": "5781ee820b435f2c",
+                "encoding": "base16"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "a",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 8,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "b",
+              "type": {
+                "kind": "arrayTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u16",
+                  "endian": "le"
+                },
+                "count": {
+                  "kind": "fixedCountNode",
+                  "value": 8
+                }
+              }
+            }
+          ]
+        },
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      }
+    ],
+    "instructions": [
+      {
+        "kind": "instructionNode",
+        "name": "init",
+        "optionalAccountStrategy": "programId",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "authority",
+            "isWritable": true,
+            "isSigner": true,
+            "isOptional": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "myAccount",
+            "isWritable": true,
+            "isSigner": false,
+            "isOptional": false,
+            "defaultValue": {
+              "kind": "pdaValueNode",
+              "pda": {
+                "kind": "pdaNode",
+                "name": "myAccount",
+                "seeds": [
+                  {
+                    "kind": "variablePdaSeedNode",
+                    "name": "authority",
+                    "type": {
+                      "kind": "publicKeyTypeNode"
+                    }
+                  }
+                ]
+              },
+              "seeds": [
+                {
+                  "kind": "pdaSeedValueNode",
+                  "name": "authority",
+                  "value": {
+                    "kind": "accountValueNode",
+                    "name": "authority"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "systemProgram",
+            "isWritable": false,
+            "isSigner": false,
+            "isOptional": false,
+            "defaultValue": {
+              "kind": "publicKeyValueNode",
+              "publicKey": "11111111111111111111111111111111",
+              "identifier": "systemProgram"
+            }
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 8,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "dc3bcfec6cfa2f64",
+              "encoding": "base16"
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "testCompilationDataAsParameterName",
+        "optionalAccountStrategy": "programId",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "signer",
+            "isWritable": false,
+            "isSigner": true,
+            "isOptional": false
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 8,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "e191445c92cef8ce",
+              "encoding": "base16"
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "data",
+            "type": {
+              "kind": "sizePrefixTypeNode",
+              "type": {
+                "kind": "bytesTypeNode"
+              },
+              "prefix": {
+                "kind": "numberTypeNode",
+                "format": "u32",
+                "endian": "le"
+              }
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "testCompilationDefinedTypeParam",
+        "optionalAccountStrategy": "programId",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "signer",
+            "isWritable": false,
+            "isSigner": true,
+            "isOptional": false
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 8,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "3d7657f289615adf",
+              "encoding": "base16"
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "myAccount",
+            "type": {
+              "kind": "definedTypeLinkNode",
+              "name": "myAccount"
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "testCompilationGenericTypes",
+        "optionalAccountStrategy": "programId",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "accountWithGenericField",
+            "isWritable": false,
+            "isSigner": false,
+            "isOptional": false
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 8,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "02c89ac777d0abe1",
+              "encoding": "base16"
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "field",
+            "type": {
+              "kind": "arrayTypeNode",
+              "item": {
+                "kind": "numberTypeNode",
+                "format": "u32",
+                "endian": "le"
+              },
+              "count": {
+                "kind": "fixedCountNode",
+                "value": 8
+              }
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "testCompilationInitializeWithToken2022",
+        "optionalAccountStrategy": "programId",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "signer",
+            "isWritable": false,
+            "isSigner": true,
+            "isOptional": false
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 8,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "e6fa9fe54f2f4a40",
+              "encoding": "base16"
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "testCompilationNoAccounts",
+        "optionalAccountStrategy": "programId",
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 8,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "c25bcdd9330af7c9",
+              "encoding": "base16"
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "testCompilationPackedAccount",
+        "optionalAccountStrategy": "programId",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "packedAccount",
+            "isWritable": false,
+            "isSigner": false,
+            "isOptional": false
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 8,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "38a8992e2ef0839e",
+              "encoding": "base16"
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "testCompilationReturnType",
+        "optionalAccountStrategy": "programId",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "signer",
+            "isWritable": false,
+            "isSigner": true,
+            "isOptional": false
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 8,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "ae333379343d261c",
+              "encoding": "base16"
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "update",
+        "optionalAccountStrategy": "programId",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "authority",
+            "isWritable": false,
+            "isSigner": true,
+            "isOptional": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "myAccount",
+            "isWritable": true,
+            "isSigner": false,
+            "isOptional": false,
+            "defaultValue": {
+              "kind": "pdaValueNode",
+              "pda": {
+                "kind": "pdaNode",
+                "name": "myAccount",
+                "seeds": [
+                  {
+                    "kind": "variablePdaSeedNode",
+                    "name": "authority",
+                    "type": {
+                      "kind": "publicKeyTypeNode"
+                    }
+                  }
+                ]
+              },
+              "seeds": [
+                {
+                  "kind": "pdaSeedValueNode",
+                  "name": "authority",
+                  "value": {
+                    "kind": "accountValueNode",
+                    "name": "authority"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 8,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "dbc858b09e3ffd7f",
+              "encoding": "base16"
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "value",
+            "type": {
+              "kind": "numberTypeNode",
+              "format": "u32",
+              "endian": "le"
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "updateComposite",
+        "optionalAccountStrategy": "programId",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "authority",
+            "isWritable": false,
+            "isSigner": true,
+            "isOptional": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "myAccount",
+            "isWritable": true,
+            "isSigner": false,
+            "isOptional": false,
+            "defaultValue": {
+              "kind": "pdaValueNode",
+              "pda": {
+                "kind": "pdaNode",
+                "name": "myAccount",
+                "seeds": [
+                  {
+                    "kind": "variablePdaSeedNode",
+                    "name": "authority",
+                    "type": {
+                      "kind": "publicKeyTypeNode"
+                    }
+                  }
+                ]
+              },
+              "seeds": [
+                {
+                  "kind": "pdaSeedValueNode",
+                  "name": "authority",
+                  "value": {
+                    "kind": "accountValueNode",
+                    "name": "authority"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 8,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "1a2ac9e0793cbcdc",
+              "encoding": "base16"
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "value",
+            "type": {
+              "kind": "numberTypeNode",
+              "format": "u32",
+              "endian": "le"
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "updateNonInstructionComposite",
+        "optionalAccountStrategy": "programId",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "authority",
+            "isWritable": false,
+            "isSigner": true,
+            "isOptional": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "myAccount",
+            "isWritable": true,
+            "isSigner": false,
+            "isOptional": false,
+            "defaultValue": {
+              "kind": "pdaValueNode",
+              "pda": {
+                "kind": "pdaNode",
+                "name": "myAccount",
+                "seeds": [
+                  {
+                    "kind": "variablePdaSeedNode",
+                    "name": "authority",
+                    "type": {
+                      "kind": "publicKeyTypeNode"
+                    }
+                  }
+                ]
+              },
+              "seeds": [
+                {
+                  "kind": "pdaSeedValueNode",
+                  "name": "authority",
+                  "value": {
+                    "kind": "accountValueNode",
+                    "name": "authority"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "program",
+            "isWritable": false,
+            "isSigner": false,
+            "isOptional": false,
+            "defaultValue": {
+              "kind": "publicKeyValueNode",
+              "publicKey": "Externa111111111111111111111111111111111111",
+              "identifier": "program"
+            }
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 8,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "31da45c4cc42241d",
+              "encoding": "base16"
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "value",
+            "type": {
+              "kind": "numberTypeNode",
+              "format": "u32",
+              "endian": "le"
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "updateNonInstructionComposite2",
+        "optionalAccountStrategy": "programId",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "nonInstructionUpdateProgram",
+            "isWritable": false,
+            "isSigner": false,
+            "isOptional": false,
+            "defaultValue": {
+              "kind": "publicKeyValueNode",
+              "publicKey": "Externa111111111111111111111111111111111111",
+              "identifier": "nonInstructionUpdateProgram"
+            }
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "nonInstructionUpdateWithDifferentIdentAuthority",
+            "isWritable": false,
+            "isSigner": true,
+            "isOptional": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "nonInstructionUpdateWithDifferentIdentMyAccount",
+            "isWritable": true,
+            "isSigner": false,
+            "isOptional": false,
+            "defaultValue": {
+              "kind": "pdaValueNode",
+              "pda": {
+                "kind": "pdaNode",
+                "name": "nonInstructionUpdateWithDifferentIdentMyAccount",
+                "seeds": [
+                  {
+                    "kind": "variablePdaSeedNode",
+                    "name": "nonInstructionUpdateWithDifferentIdentAuthority",
+                    "type": {
+                      "kind": "publicKeyTypeNode"
+                    }
+                  }
+                ]
+              },
+              "seeds": [
+                {
+                  "kind": "pdaSeedValueNode",
+                  "name": "nonInstructionUpdateWithDifferentIdentAuthority",
+                  "value": {
+                    "kind": "accountValueNode",
+                    "name": "nonInstructionUpdateWithDifferentIdentAuthority"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "nonInstructionUpdateWithDifferentIdentProgram",
+            "isWritable": false,
+            "isSigner": false,
+            "isOptional": false,
+            "defaultValue": {
+              "kind": "publicKeyValueNode",
+              "publicKey": "Externa111111111111111111111111111111111111",
+              "identifier": "nonInstructionUpdateWithDifferentIdentProgram"
+            }
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 8,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "da6acba770b19116",
+              "encoding": "base16"
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "value",
+            "type": {
+              "kind": "numberTypeNode",
+              "format": "u32",
+              "endian": "le"
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "updateWithOptional",
+        "optionalAccountStrategy": "programId",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "authority",
+            "isWritable": false,
+            "isSigner": true,
+            "isOptional": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "myAccount",
+            "isWritable": true,
+            "isSigner": false,
+            "isOptional": false,
+            "defaultValue": {
+              "kind": "pdaValueNode",
+              "pda": {
+                "kind": "pdaNode",
+                "name": "myAccount",
+                "seeds": [
+                  {
+                    "kind": "variablePdaSeedNode",
+                    "name": "authority",
+                    "type": {
+                      "kind": "publicKeyTypeNode"
+                    }
+                  }
+                ]
+              },
+              "seeds": [
+                {
+                  "kind": "pdaSeedValueNode",
+                  "name": "authority",
+                  "value": {
+                    "kind": "accountValueNode",
+                    "name": "authority"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "optionalAccount",
+            "isWritable": true,
+            "isSigner": false,
+            "isOptional": true
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 8,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "77ccba2f9779dd7e",
+              "encoding": "base16"
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "value",
+            "type": {
+              "kind": "numberTypeNode",
+              "format": "u32",
+              "endian": "le"
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      }
+    ],
+    "events": [
+      {
+        "kind": "eventNode",
+        "name": "myEvent",
+        "data": {
+          "kind": "hiddenPrefixTypeNode",
+          "type": {
+            "kind": "structTypeNode",
+            "fields": [
+              {
+                "kind": "structFieldTypeNode",
+                "name": "value",
+                "type": {
+                  "kind": "numberTypeNode",
+                  "format": "u32",
+                  "endian": "le"
+                }
+              }
+            ]
+          },
+          "prefix": [
+            {
+              "kind": "constantValueNode",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 8,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              },
+              "value": {
+                "kind": "bytesValueNode",
+                "data": "60b8c5f38b025a94",
+                "encoding": "base16"
+              }
+            }
+          ]
+        },
+        "discriminators": [
+          {
+            "kind": "constantDiscriminatorNode",
+            "offset": 0,
+            "constant": {
+              "kind": "constantValueNode",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 8,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              },
+              "value": {
+                "kind": "bytesValueNode",
+                "data": "60b8c5f38b025a94",
+                "encoding": "base16"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "errors": [
+      {
+        "kind": "errorNode",
+        "name": "default",
+        "code": 6000,
+        "message": "",
+        "docs": [
+          "Default: "
+        ]
+      },
+      {
+        "kind": "errorNode",
+        "name": "withOffset",
+        "code": 6500,
+        "message": "",
+        "docs": [
+          "WithOffset: "
+        ]
+      },
+      {
+        "kind": "errorNode",
+        "name": "withMsg",
+        "code": 6501,
+        "message": "Custom msg",
+        "docs": [
+          "WithMsg: Custom msg"
+        ]
+      }
+    ],
+    "constants": [
+      {
+        "kind": "constantNode",
+        "name": "aRRAY",
+        "type": {
+          "kind": "fixedSizeTypeNode",
+          "size": 4,
+          "type": {
+            "kind": "bytesTypeNode"
+          }
+        },
+        "value": {
+          "kind": "stringValueNode",
+          "string": "[1, 2, 3, 4]"
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "bOOL",
+        "type": {
+          "kind": "booleanTypeNode",
+          "size": {
+            "kind": "numberTypeNode",
+            "format": "u8",
+            "endian": "le"
+          }
+        },
+        "value": {
+          "kind": "booleanValueNode",
+          "boolean": false
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "bYTES",
+        "type": {
+          "kind": "bytesTypeNode"
+        },
+        "value": {
+          "kind": "bytesValueNode",
+          "data": "616263",
+          "encoding": "base16"
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "i128",
+        "type": {
+          "kind": "numberTypeNode",
+          "format": "i128",
+          "endian": "le"
+        },
+        "value": {
+          "kind": "numberValueNode",
+          "number": 16
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "i16",
+        "type": {
+          "kind": "numberTypeNode",
+          "format": "i16",
+          "endian": "le"
+        },
+        "value": {
+          "kind": "numberValueNode",
+          "number": 2
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "i32",
+        "type": {
+          "kind": "numberTypeNode",
+          "format": "i32",
+          "endian": "le"
+        },
+        "value": {
+          "kind": "numberValueNode",
+          "number": 4
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "i64",
+        "type": {
+          "kind": "numberTypeNode",
+          "format": "i64",
+          "endian": "le"
+        },
+        "value": {
+          "kind": "numberValueNode",
+          "number": 8
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "i8",
+        "type": {
+          "kind": "numberTypeNode",
+          "format": "i8",
+          "endian": "le"
+        },
+        "value": {
+          "kind": "numberValueNode",
+          "number": 1
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "nestedOptionArray",
+        "type": {
+          "kind": "optionTypeNode",
+          "fixed": false,
+          "item": {
+            "kind": "optionTypeNode",
+            "fixed": false,
+            "item": {
+              "kind": "fixedSizeTypeNode",
+              "size": 4,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "prefix": {
+              "kind": "numberTypeNode",
+              "format": "u8",
+              "endian": "le"
+            }
+          },
+          "prefix": {
+            "kind": "numberTypeNode",
+            "format": "u8",
+            "endian": "le"
+          }
+        },
+        "value": {
+          "kind": "stringValueNode",
+          "string": "Some(Some([1, 2, 3, 4]))"
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "nestedOptionBool",
+        "type": {
+          "kind": "optionTypeNode",
+          "fixed": false,
+          "item": {
+            "kind": "optionTypeNode",
+            "fixed": false,
+            "item": {
+              "kind": "booleanTypeNode",
+              "size": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            },
+            "prefix": {
+              "kind": "numberTypeNode",
+              "format": "u8",
+              "endian": "le"
+            }
+          },
+          "prefix": {
+            "kind": "numberTypeNode",
+            "format": "u8",
+            "endian": "le"
+          }
+        },
+        "value": {
+          "kind": "stringValueNode",
+          "string": "Some(Some(false))"
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "nestedOptionString",
+        "type": {
+          "kind": "optionTypeNode",
+          "fixed": false,
+          "item": {
+            "kind": "optionTypeNode",
+            "fixed": false,
+            "item": {
+              "kind": "sizePrefixTypeNode",
+              "type": {
+                "kind": "stringTypeNode",
+                "encoding": "utf8"
+              },
+              "prefix": {
+                "kind": "numberTypeNode",
+                "format": "u32",
+                "endian": "le"
+              }
+            },
+            "prefix": {
+              "kind": "numberTypeNode",
+              "format": "u8",
+              "endian": "le"
+            }
+          },
+          "prefix": {
+            "kind": "numberTypeNode",
+            "format": "u8",
+            "endian": "le"
+          }
+        },
+        "value": {
+          "kind": "stringValueNode",
+          "string": "Some(Some(\"abc\"))"
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "optionArray",
+        "type": {
+          "kind": "optionTypeNode",
+          "fixed": false,
+          "item": {
+            "kind": "fixedSizeTypeNode",
+            "size": 4,
+            "type": {
+              "kind": "bytesTypeNode"
+            }
+          },
+          "prefix": {
+            "kind": "numberTypeNode",
+            "format": "u8",
+            "endian": "le"
+          }
+        },
+        "value": {
+          "kind": "stringValueNode",
+          "string": "Some([1, 2, 3, 4])"
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "optionBool",
+        "type": {
+          "kind": "optionTypeNode",
+          "fixed": false,
+          "item": {
+            "kind": "booleanTypeNode",
+            "size": {
+              "kind": "numberTypeNode",
+              "format": "u8",
+              "endian": "le"
+            }
+          },
+          "prefix": {
+            "kind": "numberTypeNode",
+            "format": "u8",
+            "endian": "le"
+          }
+        },
+        "value": {
+          "kind": "stringValueNode",
+          "string": "Some(false)"
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "optionString",
+        "type": {
+          "kind": "optionTypeNode",
+          "fixed": false,
+          "item": {
+            "kind": "sizePrefixTypeNode",
+            "type": {
+              "kind": "stringTypeNode",
+              "encoding": "utf8"
+            },
+            "prefix": {
+              "kind": "numberTypeNode",
+              "format": "u32",
+              "endian": "le"
+            }
+          },
+          "prefix": {
+            "kind": "numberTypeNode",
+            "format": "u8",
+            "endian": "le"
+          }
+        },
+        "value": {
+          "kind": "stringValueNode",
+          "string": "Some(\"abc\")"
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "pUBKEY",
+        "type": {
+          "kind": "publicKeyTypeNode"
+        },
+        "value": {
+          "kind": "publicKeyValueNode",
+          "publicKey": "SomeAdress111111111111111111111111111111111"
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "sTRING",
+        "type": {
+          "kind": "sizePrefixTypeNode",
+          "type": {
+            "kind": "stringTypeNode",
+            "encoding": "utf8"
+          },
+          "prefix": {
+            "kind": "numberTypeNode",
+            "format": "u32",
+            "endian": "le"
+          }
+        },
+        "value": {
+          "kind": "stringValueNode",
+          "string": "\"abc\""
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "u128",
+        "type": {
+          "kind": "numberTypeNode",
+          "format": "u128",
+          "endian": "le"
+        },
+        "value": {
+          "kind": "numberValueNode",
+          "number": 16
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "u16",
+        "type": {
+          "kind": "numberTypeNode",
+          "format": "u16",
+          "endian": "le"
+        },
+        "value": {
+          "kind": "numberValueNode",
+          "number": 2
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "u32",
+        "type": {
+          "kind": "numberTypeNode",
+          "format": "u32",
+          "endian": "le"
+        },
+        "value": {
+          "kind": "numberValueNode",
+          "number": 4
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "u64",
+        "type": {
+          "kind": "numberTypeNode",
+          "format": "u64",
+          "endian": "le"
+        },
+        "value": {
+          "kind": "numberValueNode",
+          "number": 8
+        }
+      },
+      {
+        "kind": "constantNode",
+        "name": "u8",
+        "type": {
+          "kind": "numberTypeNode",
+          "format": "u8",
+          "endian": "le"
+        },
+        "value": {
+          "kind": "numberValueNode",
+          "number": 1
+        }
+      }
+    ]
+  }
+}

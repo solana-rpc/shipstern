@@ -1691,6 +1691,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codama-nodes-from-anchor"
+version = "0.11.0"
+dependencies = [
+ "bs58",
+ "codama-nodes",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "codama-syn-helpers"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7073,6 +7084,7 @@ dependencies = [
  "base64 0.22.1",
  "bs58",
  "codama-nodes",
+ "codama-nodes-from-anchor",
  "hex",
  "prettyplease",
  "proc-macro2",

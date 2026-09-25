@@ -1,0 +1,98 @@
+{
+  "kind": "rootNode",
+  "standard": "codama",
+  "version": "1.9.2",
+  "program": {
+    "kind": "programNode",
+    "name": "helloAnchor",
+    "publicKey": "BZLiJ62bzRryYp9mRobz47uA66WDgtfTXhhgM25tJyx5",
+    "version": "0.1.0",
+    "origin": "anchor",
+    "instructions": [
+      {
+        "kind": "instructionNode",
+        "name": "testInstruction",
+        "optionalAccountStrategy": "programId",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "signer",
+            "isWritable": false,
+            "isSigner": true,
+            "isOptional": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "pdaAccount",
+            "isWritable": false,
+            "isSigner": false,
+            "isOptional": false,
+            "defaultValue": {
+              "kind": "pdaValueNode",
+              "pda": {
+                "kind": "pdaNode",
+                "name": "pdaAccount",
+                "seeds": [
+                  {
+                    "kind": "constantPdaSeedNode",
+                    "type": {
+                      "kind": "bytesTypeNode"
+                    },
+                    "value": {
+                      "kind": "bytesValueNode",
+                      "data": "StV1DL6kK3orKEb",
+                      "encoding": "base58"
+                    }
+                  },
+                  {
+                    "kind": "variablePdaSeedNode",
+                    "name": "signer",
+                    "type": {
+                      "kind": "publicKeyTypeNode"
+                    }
+                  }
+                ]
+              },
+              "seeds": [
+                {
+                  "kind": "pdaSeedValueNode",
+                  "name": "signer",
+                  "value": {
+                    "kind": "accountValueNode",
+                    "name": "signer"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 8,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "21df3dd020c1c94f",
+              "encoding": "base16"
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      }
+    ]
+  }
+}

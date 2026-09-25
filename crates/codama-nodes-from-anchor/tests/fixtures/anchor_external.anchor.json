@@ -1,0 +1,763 @@
+{
+  "address": "Externa111111111111111111111111111111111111",
+  "metadata": {
+    "name": "external",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Created with Anchor"
+  },
+  "instructions": [
+    {
+      "name": "init",
+      "discriminator": [
+        220,
+        59,
+        207,
+        236,
+        108,
+        250,
+        47,
+        100
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "my_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "test_compilation_data_as_parameter_name",
+      "discriminator": [
+        225,
+        145,
+        68,
+        92,
+        146,
+        206,
+        248,
+        206
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "data",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
+      "name": "test_compilation_defined_type_param",
+      "discriminator": [
+        61,
+        118,
+        87,
+        242,
+        137,
+        97,
+        90,
+        223
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "_my_account",
+          "type": {
+            "defined": {
+              "name": "MyAccount"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "test_compilation_generic_types",
+      "discriminator": [
+        2,
+        200,
+        154,
+        199,
+        119,
+        208,
+        171,
+        225
+      ],
+      "accounts": [
+        {
+          "name": "account_with_generic_field"
+        }
+      ],
+      "args": [
+        {
+          "name": "generic_struct",
+          "type": {
+            "defined": {
+              "name": "GenericStruct",
+              "generics": [
+                {
+                  "kind": "type",
+                  "type": "u32"
+                },
+                {
+                  "kind": "const",
+                  "value": "8"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "test_compilation_initialize_with_token_2022",
+      "discriminator": [
+        230,
+        250,
+        159,
+        229,
+        79,
+        47,
+        74,
+        64
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "test_compilation_no_accounts",
+      "discriminator": [
+        194,
+        91,
+        205,
+        217,
+        51,
+        10,
+        247,
+        201
+      ],
+      "accounts": [],
+      "args": []
+    },
+    {
+      "name": "test_compilation_packed_account",
+      "discriminator": [
+        56,
+        168,
+        153,
+        46,
+        46,
+        240,
+        131,
+        158
+      ],
+      "accounts": [
+        {
+          "name": "packed_account"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "test_compilation_return_type",
+      "discriminator": [
+        174,
+        51,
+        51,
+        121,
+        52,
+        61,
+        38,
+        28
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        }
+      ],
+      "args": [],
+      "returns": "bool"
+    },
+    {
+      "name": "update",
+      "discriminator": [
+        219,
+        200,
+        88,
+        176,
+        158,
+        63,
+        253,
+        127
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "my_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "value",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "update_composite",
+      "discriminator": [
+        26,
+        42,
+        201,
+        224,
+        121,
+        60,
+        188,
+        220
+      ],
+      "accounts": [
+        {
+          "name": "update",
+          "accounts": [
+            {
+              "name": "authority",
+              "signer": true
+            },
+            {
+              "name": "my_account",
+              "writable": true,
+              "pda": {
+                "seeds": [
+                  {
+                    "kind": "account",
+                    "path": "authority"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "value",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "update_non_instruction_composite",
+      "discriminator": [
+        49,
+        218,
+        69,
+        196,
+        204,
+        66,
+        36,
+        29
+      ],
+      "accounts": [
+        {
+          "name": "non_instruction_update",
+          "accounts": [
+            {
+              "name": "authority",
+              "signer": true
+            },
+            {
+              "name": "my_account",
+              "writable": true,
+              "pda": {
+                "seeds": [
+                  {
+                    "kind": "account",
+                    "path": "authority"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "program",
+              "address": "Externa111111111111111111111111111111111111"
+            }
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "value",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "update_non_instruction_composite2",
+      "discriminator": [
+        218,
+        106,
+        203,
+        167,
+        112,
+        177,
+        145,
+        22
+      ],
+      "accounts": [
+        {
+          "name": "non_instruction_update",
+          "accounts": [
+            {
+              "name": "program",
+              "address": "Externa111111111111111111111111111111111111"
+            }
+          ]
+        },
+        {
+          "name": "non_instruction_update_with_different_ident",
+          "accounts": [
+            {
+              "name": "authority",
+              "signer": true
+            },
+            {
+              "name": "my_account",
+              "writable": true,
+              "pda": {
+                "seeds": [
+                  {
+                    "kind": "account",
+                    "path": "authority"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "program",
+              "address": "Externa111111111111111111111111111111111111"
+            }
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "value",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "update_with_optional",
+      "discriminator": [
+        119,
+        204,
+        186,
+        47,
+        151,
+        121,
+        221,
+        126
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "my_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "optional_account",
+          "writable": true,
+          "optional": true
+        }
+      ],
+      "args": [
+        {
+          "name": "value",
+          "type": "u32"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "AccountWithGenericField",
+      "discriminator": [
+        3,
+        245,
+        8,
+        220,
+        119,
+        168,
+        105,
+        172
+      ]
+    },
+    {
+      "name": "MyAccount",
+      "discriminator": [
+        246,
+        28,
+        6,
+        87,
+        251,
+        45,
+        50,
+        42
+      ]
+    },
+    {
+      "name": "PackedAccount",
+      "discriminator": [
+        87,
+        129,
+        238,
+        130,
+        11,
+        67,
+        95,
+        44
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "MyEvent",
+      "discriminator": [
+        96,
+        184,
+        197,
+        243,
+        139,
+        2,
+        90,
+        148
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Default"
+    },
+    {
+      "code": 6500,
+      "name": "WithOffset"
+    },
+    {
+      "code": 6501,
+      "name": "WithMsg",
+      "msg": "Custom msg"
+    }
+  ],
+  "types": [
+    {
+      "name": "AccountWithGenericField",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "field",
+            "type": {
+              "defined": {
+                "name": "GenericStruct",
+                "generics": [
+                  {
+                    "kind": "type",
+                    "type": "u32"
+                  },
+                  {
+                    "kind": "const",
+                    "value": "8"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "GenericStruct",
+      "generics": [
+        {
+          "kind": "type",
+          "name": "T"
+        },
+        {
+          "kind": "const",
+          "name": "N",
+          "type": "usize"
+        }
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "field",
+            "type": {
+              "array": [
+                {
+                  "generic": "T"
+                },
+                {
+                  "generic": "N"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "MyAccount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "field",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MyEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "value",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PackedAccount",
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "rust",
+        "packed": true
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "a",
+            "type": {
+              "array": [
+                "u8",
+                8
+              ]
+            }
+          },
+          {
+            "name": "b",
+            "type": {
+              "array": [
+                "u16",
+                8
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "constants": [
+    {
+      "name": "ARRAY",
+      "type": {
+        "array": [
+          "u8",
+          4
+        ]
+      },
+      "value": "[1, 2, 3, 4]"
+    },
+    {
+      "name": "BOOL",
+      "type": "bool",
+      "value": "false"
+    },
+    {
+      "name": "BYTES",
+      "type": "bytes",
+      "value": "[97, 98, 99]"
+    },
+    {
+      "name": "I128",
+      "type": "i128",
+      "value": "16"
+    },
+    {
+      "name": "I16",
+      "type": "i16",
+      "value": "2"
+    },
+    {
+      "name": "I32",
+      "type": "i32",
+      "value": "4"
+    },
+    {
+      "name": "I64",
+      "type": "i64",
+      "value": "8"
+    },
+    {
+      "name": "I8",
+      "type": "i8",
+      "value": "1"
+    },
+    {
+      "name": "NESTED_OPTION_ARRAY",
+      "type": {
+        "option": {
+          "option": {
+            "array": [
+              "u8",
+              4
+            ]
+          }
+        }
+      },
+      "value": "Some(Some([1, 2, 3, 4]))"
+    },
+    {
+      "name": "NESTED_OPTION_BOOL",
+      "type": {
+        "option": {
+          "option": "bool"
+        }
+      },
+      "value": "Some(Some(false))"
+    },
+    {
+      "name": "NESTED_OPTION_STRING",
+      "type": {
+        "option": {
+          "option": "string"
+        }
+      },
+      "value": "Some(Some(\"abc\"))"
+    },
+    {
+      "name": "OPTION_ARRAY",
+      "type": {
+        "option": {
+          "array": [
+            "u8",
+            4
+          ]
+        }
+      },
+      "value": "Some([1, 2, 3, 4])"
+    },
+    {
+      "name": "OPTION_BOOL",
+      "type": {
+        "option": "bool"
+      },
+      "value": "Some(false)"
+    },
+    {
+      "name": "OPTION_STRING",
+      "type": {
+        "option": "string"
+      },
+      "value": "Some(\"abc\")"
+    },
+    {
+      "name": "PUBKEY",
+      "type": "pubkey",
+      "value": "SomeAdress111111111111111111111111111111111"
+    },
+    {
+      "name": "STRING",
+      "type": "string",
+      "value": "\"abc\""
+    },
+    {
+      "name": "U128",
+      "type": "u128",
+      "value": "16"
+    },
+    {
+      "name": "U16",
+      "type": "u16",
+      "value": "2"
+    },
+    {
+      "name": "U32",
+      "type": "u32",
+      "value": "4"
+    },
+    {
+      "name": "U64",
+      "type": "u64",
+      "value": "8"
+    },
+    {
+      "name": "U8",
+      "type": "u8",
+      "value": "1"
+    }
+  ]
+}
