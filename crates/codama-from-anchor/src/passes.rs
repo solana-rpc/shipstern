@@ -157,10 +157,10 @@ fn instruction_types_mut(ix: &mut codama_nodes::InstructionNode, f: &mut dyn FnM
 
 /// Port of `setFixedAccountSizesVisitor`.
 fn set_fixed_account_sizes(program: &mut ProgramNode) {
-    let defined: HashMap<String, TypeNode> = program
+    let defined: HashMap<&str, &TypeNode> = program
         .defined_types
         .iter()
-        .map(|t| (t.name.to_string(), (*t.r#type).clone()))
+        .map(|t| (t.name.as_str(), t.r#type.as_ref()))
         .collect();
 
     for account in &mut program.accounts {
@@ -185,7 +185,7 @@ fn set_fixed_account_sizes(program: &mut ProgramNode) {
 
 /// Port of `getByteSizeVisitor`: `None` means variable size.
 struct ByteSize<'a> {
-    defined: &'a HashMap<String, TypeNode>,
+    defined: &'a HashMap<&'a str, &'a TypeNode>,
     stack: Vec<String>,
     memo: HashMap<String, Option<usize>>,
 }
@@ -303,7 +303,7 @@ impl ByteSize<'_> {
                     return *size;
                 }
 
-                let target = self.defined.get(&name)?;
+                let target = *self.defined.get(name.as_str())?;
 
                 self.stack.push(name.clone());
                 let size = self.of(target);
@@ -390,24 +390,24 @@ fn unwrap_instruction_args_defined_types(program: &mut ProgramNode) {
         }
     }
 
-    let inline: HashMap<String, TypeNode> = program
-        .defined_types
-        .iter()
-        .filter(|t| {
+    let (inlined, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut program.defined_types)
+        .into_iter()
+        .partition(|t| {
             uses.get(t.name.as_str())
                 .is_some_and(|u| u.total == 1 && u.direct_arg == 1)
-        })
-        .filter(|t| !matches!(t.r#type.as_ref(), TypeNode::Enum(_)))
-        .map(|t| (t.name.to_string(), (*t.r#type).clone()))
-        .collect();
+                && !matches!(t.r#type.as_ref(), TypeNode::Enum(_))
+        });
 
-    if inline.is_empty() {
+    program.defined_types = kept;
+
+    if inlined.is_empty() {
         return;
     }
 
-    program
-        .defined_types
-        .retain(|t| !inline.contains_key(t.name.as_str()));
+    let inline: HashMap<String, TypeNode> = inlined
+        .into_iter()
+        .map(|t| (t.name.to_string(), *t.r#type))
+        .collect();
 
     let mut replace = |ty: &mut TypeNode| inline_links(ty, &inline);
 

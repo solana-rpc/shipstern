@@ -9,7 +9,7 @@
 use codama_nodes::RootNode;
 
 mod case;
-pub mod idl;
+mod idl;
 mod passes;
 mod types;
 mod v01;
@@ -83,18 +83,9 @@ pub fn root_node_from_anchor(idl: &[u8]) -> Result<RootNode, Error> {
 
     check_spec(&value)?;
 
-    root_node_from_anchor_idl(&serde_json::from_value(value)?)
-}
+    let idl: idl::Idl = serde_json::from_value(value)?;
 
-/// Convert an already deserialized IDL.
-pub fn root_node_from_anchor_idl(idl: &idl::Idl) -> Result<RootNode, Error> {
-    if idl.metadata.spec != SUPPORTED_SPEC {
-        return Err(Error::UnsupportedSpec {
-            found: Some(idl.metadata.spec.clone()),
-        });
-    }
-
-    let mut root = v01::root_node(idl)?;
+    let mut root = v01::root_node(&idl)?;
 
     passes::run(&mut root.program)?;
 

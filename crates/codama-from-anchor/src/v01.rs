@@ -396,11 +396,7 @@ fn instruction_accounts(
             },
 
             InstructionAccountItem::Single(account) => {
-                out.push(instruction_account_node(
-                    account,
-                    arguments,
-                    prefix.filter(|_| should_prefix),
-                )?);
+                out.push(instruction_account_node(account, arguments, prefix)?);
             },
         }
     }

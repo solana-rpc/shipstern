@@ -7,8 +7,6 @@ let idl = std::fs::read("idls/my_program.json")?;
 let root = shipstern_codama_from_anchor::root_node_from_anchor(&idl)?;
 ```
 
-`root_node_from_anchor_idl` takes an already deserialized `idl::Idl` instead.
-
 ## Scope
 
 Only Anchor IDL spec `0.1.0` is supported, which is what Anchor 0.30 and later emit. Anything else, including a legacy IDL with no `metadata.spec`, fails with `Error::UnsupportedSpec`. The JS converter falls back to its legacy path for any spec it does not recognize; this crate refuses instead of guessing.

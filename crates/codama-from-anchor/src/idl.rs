@@ -51,7 +51,6 @@ pub struct Idl {
 pub struct Metadata {
     pub name: String,
     pub version: String,
-    pub spec: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
