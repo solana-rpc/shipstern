@@ -53,7 +53,7 @@ These inputs fail in both converters. The JS crashes on them; this crate returns
 
 Read by neither converter: instruction `returns`, account `relations`, a seed's `account` hint, type `repr` and `serialization`, and metadata beyond name, version and spec. Because `serialization` is ignored, a `bytemuck` (zero-copy) account is described as if it were Borsh-encoded, in both converters.
 
-Some differences from Anchor's own decoder come from shipstern, not from either converter, so they happen with `codama convert` output too. A generated parser takes instruction accounts by position and fails with `Account does not exist at index N` when a transaction passes fewer accounts than the IDL declares. Anchor's decoder never reads the accounts. On mainnet this happens with Orca Whirlpool `swap` and `swap_v2`, which pass one account fewer than the published IDL, and with `jupZ4m2G…` `swap_in`.
+Some differences from Anchor's own decoder come from shipstern, not from either converter, so they happen with `codama convert` output too. A generated parser takes instruction accounts by position and fails with `Account does not exist at index N` when a transaction passes fewer accounts than the IDL declares. Anchor's decoder never reads the accounts. On mainnet this happens with Orca Whirlpool `swap` and `swap_v2`, which pass one account fewer than the published IDL, with `jupZ4m2G…` `swap_in`, and with `1ottnn…`.
 
 ## Fixtures
 

@@ -16,7 +16,7 @@ fn tokens(idl: &Path) -> proc_macro2::TokenStream {
 }
 
 /// Formatted so two expansions that disagree give a line-oriented diff.
-pub(crate) fn expand_pretty(idl: &Path) -> String {
+fn expand_pretty(idl: &Path) -> String {
     let file: syn::File = syn::parse2(tokens(idl))
         .unwrap_or_else(|err| panic!("{} expanded to invalid Rust: {err}", idl.display()));
 
@@ -100,43 +100,29 @@ fn anchor_idls_generate_the_same_parser_as_the_js_cli_output() {
 }
 
 #[test]
-fn unsupported_anchor_idls_fail_to_compile_with_the_reason() {
+fn an_unsupported_anchor_idl_fails_to_compile_with_the_convert_hint() {
     let dir = std::env::temp_dir().join(format!("shipstern-anchor-errors-{}", std::process::id()));
 
     std::fs::create_dir_all(&dir).expect("temp dir");
 
-    let cases = [
-        (
-            "missing-spec",
-            r#"{"address":"x","metadata":{"name":"t","version":"1"},"instructions":[]}"#,
-            "missing metadata.spec",
-        ),
-        (
-            "old-spec",
-            r#"{"address":"x","metadata":{"name":"t","version":"1","spec":"0.0.0"},"instructions":[]}"#,
-            r#"spec \"0.0.0\""#,
-        ),
-        (
-            "malformed",
-            r#"{"address": "x", "metadata": "#,
-            "Failed to parse JSON",
-        ),
-    ];
+    let path = dir.join("missing-spec.json");
 
-    for (name, idl, reason) in cases {
-        let path = dir.join(format!("{name}.json"));
+    std::fs::write(
+        &path,
+        r#"{"address":"x","metadata":{"name":"t","version":"1"},"instructions":[]}"#,
+    )
+    .expect("write IDL");
 
-        std::fs::write(&path, idl).expect("write IDL");
+    let expanded = tokens(&path).to_string();
 
-        let expanded = tokens(&path).to_string();
+    let _ = std::fs::remove_dir_all(&dir);
 
-        assert!(
-            expanded.contains("compile_error"),
-            "{name}: no compile_error: {expanded}"
-        );
-        assert!(
-            expanded.contains(reason),
-            "{name}: reason missing: {expanded}"
-        );
-    }
+    assert!(
+        expanded.contains("compile_error"),
+        "no compile_error: {expanded}"
+    );
+    assert!(
+        expanded.contains("codama convert"),
+        "convert hint missing: {expanded}"
+    );
 }

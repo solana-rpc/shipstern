@@ -21,6 +21,7 @@ pub const SUPPORTED_SPEC: &str = "0.1.0";
 /// serde_json's parser limit; real IDLs stay under 20.
 pub const NESTING_LIMIT: usize = 128;
 
+/// Why an Anchor IDL could not be converted.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
