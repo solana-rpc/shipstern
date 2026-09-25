@@ -1,0 +1,287 @@
+{
+  "address": "ShapesProgram111111111111111111111111111111",
+  "metadata": {
+    "name": "shapes_program",
+    "version": "0.3.1",
+    "spec": "0.1.0",
+    "description": "Synthetic IDL covering every construct the v01 converter maps"
+  },
+  "instructions": [
+    {
+      "name": "every_scalar",
+      "docs": ["Scalars, strings and bytes."],
+      "discriminator": [1, 2, 3, 4, 5, 6, 7, 8],
+      "accounts": [
+        { "name": "payer", "writable": true, "signer": true },
+        { "name": "system_program", "address": "11111111111111111111111111111111" }
+      ],
+      "args": [
+        { "name": "a_u8", "type": "u8" },
+        { "name": "a_u16", "type": "u16" },
+        { "name": "a_u32", "type": "u32" },
+        { "name": "a_u64", "type": "u64" },
+        { "name": "a_u128", "type": "u128" },
+        { "name": "a_i8", "type": "i8" },
+        { "name": "a_i16", "type": "i16" },
+        { "name": "a_i32", "type": "i32" },
+        { "name": "a_i64", "type": "i64" },
+        { "name": "a_i128", "type": "i128" },
+        { "name": "a_f32", "type": "f32" },
+        { "name": "a_f64", "type": "f64" },
+        { "name": "a_bool", "type": "bool" },
+        { "name": "a_pubkey", "type": "pubkey" },
+        { "name": "a_string", "type": "string" },
+        { "name": "a_bytes", "type": "bytes" },
+        { "name": "USDC_amount", "docs": ["Acronym-cased name."], "type": "u64" }
+      ]
+    },
+    {
+      "name": "wrappers",
+      "docs": "Docs given as a bare string.",
+      "discriminator": [9],
+      "accounts": [],
+      "args": [
+        { "name": "maybe_amount", "type": { "option": "u64" } },
+        { "name": "maybe_authority", "type": { "coption": "pubkey" } },
+        { "name": "items", "type": { "vec": "u32" } },
+        { "name": "raw", "type": { "vec": "u8" } },
+        { "name": "hash", "type": { "array": ["u8", 32] } },
+        { "name": "quad", "type": { "array": ["u16", 4] } },
+        { "name": "nested", "type": { "option": { "vec": { "array": ["u8", 4] } } } },
+        { "name": "side", "type": { "defined": { "name": "Side" } } },
+        { "name": "orders", "type": { "vec": { "defined": { "name": "Order" } } } }
+      ]
+    },
+    {
+      "name": "inline_params",
+      "discriminator": [10, 11],
+      "accounts": [],
+      "args": [
+        { "name": "params", "type": { "defined": { "name": "InlineParams" } } }
+      ]
+    },
+    {
+      "name": "generic_args",
+      "discriminator": [12, 13, 14, 15, 16, 17, 18, 19],
+      "accounts": [],
+      "args": [
+        {
+          "name": "pair",
+          "type": {
+            "defined": {
+              "name": "Pair",
+              "generics": [
+                { "kind": "type", "type": "u64" },
+                { "kind": "const", "value": "3" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "wrapped",
+          "type": {
+            "defined": {
+              "name": "Wrapper",
+              "generics": [{ "kind": "type", "type": { "defined": { "name": "Order" } } }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "pdas",
+      "discriminator": [20, 21, 22, 23, 24, 25, 26, 27],
+      "accounts": [
+        { "name": "authority", "signer": true },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [118, 97, 117, 108, 116] },
+              { "kind": "account", "path": "authority" },
+              { "kind": "arg", "path": "label" },
+              { "kind": "arg", "path": "salt" },
+              { "kind": "arg", "path": "index" }
+            ]
+          }
+        },
+        {
+          "name": "foreign",
+          "pda": {
+            "seeds": [{ "kind": "account", "path": "authority" }],
+            "program": { "kind": "const", "value": [6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28, 180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169] }
+          }
+        },
+        {
+          "name": "nested_path",
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [1] },
+              { "kind": "account", "path": "vault.owner" }
+            ]
+          }
+        },
+        { "name": "maybe_extra", "optional": true }
+      ],
+      "args": [
+        { "name": "label", "type": "string" },
+        { "name": "salt", "type": "bytes" },
+        { "name": "index", "type": "u16" }
+      ]
+    },
+    {
+      "name": "grouped",
+      "discriminator": [28, 29, 30, 31, 32, 33, 34, 35],
+      "accounts": [
+        { "name": "owner", "signer": true },
+        {
+          "name": "source",
+          "accounts": [
+            { "name": "owner" },
+            { "name": "token", "writable": true }
+          ]
+        },
+        {
+          "name": "destination",
+          "accounts": [
+            { "name": "owner" },
+            {
+              "name": "inner",
+              "accounts": [{ "name": "token", "writable": true }]
+            }
+          ]
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    { "name": "Market", "discriminator": [219, 190, 213, 55, 0, 227, 198, 154] },
+    { "name": "Tiny", "discriminator": [7] },
+    { "name": "Book", "discriminator": [1, 1, 2, 3, 5, 8, 13, 21] }
+  ],
+  "events": [
+    { "name": "OrderPlaced", "discriminator": [96, 12, 5, 77, 3, 144, 200, 8] }
+  ],
+  "errors": [
+    { "code": 6000, "name": "SlippageExceeded", "msg": "Slippage tolerance exceeded" },
+    { "code": 6001, "name": "NoMessage" }
+  ],
+  "types": [
+    {
+      "name": "Market",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "authority", "type": "pubkey" },
+          { "name": "fee_bps", "docs": "Also a bare string.", "type": "u16" },
+          { "name": "side", "type": { "defined": { "name": "Side" } } },
+          { "name": "mint_hash", "type": { "array": ["u8", 32] } },
+          { "name": "delegate", "type": { "coption": "pubkey" } },
+          { "name": "point", "type": { "defined": { "name": "Point" } } }
+        ]
+      }
+    },
+    {
+      "name": "Tiny",
+      "type": { "kind": "struct", "fields": [{ "name": "flag", "type": "bool" }] }
+    },
+    {
+      "name": "Book",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "orders", "type": { "vec": { "defined": { "name": "Order" } } } },
+          { "name": "name", "type": "string" }
+        ]
+      }
+    },
+    {
+      "name": "OrderPlaced",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "order", "type": { "defined": { "name": "Order" } } },
+          { "name": "slot", "type": "u64" }
+        ]
+      }
+    },
+    {
+      "name": "Side",
+      "type": { "kind": "enum", "variants": [{ "name": "Bid" }, { "name": "Ask" }] }
+    },
+    {
+      "name": "Order",
+      "docs": ["A resting order."],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "price", "type": "u64" },
+          { "name": "kind", "type": { "defined": { "name": "OrderKind" } } }
+        ]
+      }
+    },
+    {
+      "name": "OrderKind",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "Market" },
+          { "name": "Limit", "fields": [{ "name": "price", "type": "u64" }, { "name": "post_only", "type": "bool" }] },
+          { "name": "Stop", "fields": ["u64", { "option": "u64" }] }
+        ]
+      }
+    },
+    {
+      "name": "Point",
+      "type": { "kind": "struct", "fields": ["i32", "i32"] }
+    },
+    {
+      "name": "Price",
+      "type": { "kind": "alias", "value": "u64" }
+    },
+    {
+      "name": "InlineParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "amount", "type": "u64" },
+          { "name": "limit", "type": { "defined": { "name": "Price" } } }
+        ]
+      }
+    },
+    {
+      "name": "Pair",
+      "generics": [
+        { "kind": "type", "name": "T" },
+        { "kind": "const", "name": "N", "type": "usize" }
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "left", "type": { "generic": "T" } },
+          { "name": "rights", "type": { "array": [{ "generic": "T" }, { "generic": "N" }] } }
+        ]
+      }
+    },
+    {
+      "name": "Wrapper",
+      "generics": [{ "kind": "type", "name": "U" }],
+      "type": {
+        "kind": "struct",
+        "fields": [{ "name": "inner", "type": { "option": { "generic": "U" } } }]
+      }
+    }
+  ],
+  "constants": [
+    { "name": "MAX_ORDERS", "type": "u64", "value": "128" },
+    { "name": "NEG", "type": "i32", "value": "-7" },
+    { "name": "RATIO", "type": "f64", "value": "1.5" },
+    { "name": "SEED", "type": "bytes", "value": "[115, 101, 101, 100]" },
+    { "name": "ADMIN", "type": "pubkey", "value": "11111111111111111111111111111111" },
+    { "name": "ENABLED", "type": "bool", "value": "true" },
+    { "name": "LABEL", "type": "string", "value": "\"shapes\"" },
+    { "name": "NOT_A_NUMBER", "type": "u8", "value": "0x10" }
+  ]
+}

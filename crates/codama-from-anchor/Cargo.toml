@@ -1,0 +1,18 @@
+[package]
+name = "shipstern-codama-from-anchor"
+description = "Convert an Anchor IDL (spec 0.1.0) into codama-nodes, matching @codama/nodes-from-anchor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "./README.md"
+# The test fixtures are about 1.2 MB of JSON; they stay in the repository.
+include = ["src/**/*.rs", "README.md"]
+
+[dependencies]
+bs58 = { workspace = true }
+codama-nodes = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

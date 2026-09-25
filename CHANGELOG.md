@@ -7,6 +7,10 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `shipstern-proc-macro`: `include_shipstern_parser!` accepts an Anchor IDL (spec 0.1.0) directly, converted in-process by the new `shipstern-codama-from-anchor` crate ([#337](https://github.com/solana-rpc/shipstern/pull/337) closing [#329](https://github.com/solana-rpc/shipstern/issues/329) by @senzenn).
+
 ### Changed
 
 - `shipstern-core`: merging two prefilters that name the same comparison, one of them written with a repeat, now keeps the comparison instead of dropping it and widening ([#333](https://github.com/solana-rpc/shipstern/pull/333) by @senzenn).

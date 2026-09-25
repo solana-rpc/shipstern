@@ -12,6 +12,9 @@ mod render;
 mod shipstern;
 mod utils;
 
+#[cfg(test)]
+mod anchor_parity_tests;
+
 /// Attribute macro that auto-infers prost annotations from Rust types.
 ///
 /// # Modes
@@ -30,7 +33,7 @@ pub fn shipstern(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 ///
-/// Generate a Shipstern parser from a Codama JSON IDL at compile time.
+/// Generate a Shipstern parser from an IDL at compile time.
 ///
 /// The path is resolved relative to the invoking crate's root
 /// (`CARGO_MANIFEST_DIR`). Nothing is written to disk. The generated module is
@@ -41,7 +44,9 @@ pub fn shipstern(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// include_shipstern_parser!("idls/my_program.json");
 /// ```
 ///
-/// The input must be Codama JSON, not a raw Anchor IDL. Event and self-CPI
+/// The input is Codama JSON or an Anchor IDL in spec `0.1.0` (Anchor 0.30 and
+/// later), which is converted in-process. An older Anchor IDL fails to compile;
+/// convert it with `codama convert` and pass the Codama JSON. Event and self-CPI
 /// parsing additionally requires the `program-events` feature, which changes
 /// `InstructionParser::Output` from `Instructions` to `ProgramEventOutput`.
 ///
@@ -245,7 +250,7 @@ fn expand_parser_tokens(
     mut config: crate::render::shipstern_parser::ParserConfig,
     has_cpi_event_args: bool,
 ) -> proc_macro2::TokenStream {
-    let (idl, events) = match parse::load_codama_idl(full_path) {
+    let (idl, events) = match parse::load_idl(full_path) {
         Ok(loaded) => loaded,
         Err(e) => {
             let error_msg = format!("Failed to load/parse IDL from {:?}: {}", full_path, e);
@@ -953,7 +958,7 @@ mod discriminator_injectivity_tests {
                 continue;
             }
 
-            let (root, _) = match crate::parse::load_codama_idl(&path) {
+            let (root, _) = match crate::parse::load_idl(&path) {
                 Ok(loaded) => loaded,
                 Err(err) => {
                     unreadable.push(format!("{}: {err}", path.display()));
