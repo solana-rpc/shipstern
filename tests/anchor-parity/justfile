@@ -1,0 +1,39 @@
+# Real-world parity for shipstern-codama-from-anchor against @codama/nodes-from-anchor.
+# Needs node >= 22 and PARITY_RPC_URL pointing at a mainnet RPC.
+
+cache := ".cache"
+
+# Every layer, from a fresh IDL fetch to the report.
+parity: install fetch nodes decode layer3 report
+
+install:
+    cd js && npm ci --silent
+
+# On-chain IDLs for programs.txt; IDLs change, so each run records their hashes.
+fetch:
+    node js/fetch-idls.mjs programs.txt {{cache}}
+
+# Layer 1: IDL -> nodes with both converters, then compare.
+nodes:
+    node js/gen-parsers.mjs {{cache}} --stub
+    cargo run --release -q --bin convert -- {{cache}}/idls {{cache}}/rust
+    node js/layer1.mjs {{cache}}
+
+# Layer 2: sample live data, decode it three ways, compare.
+decode:
+    node js/sample.mjs {{cache}} 20 20
+    node js/build-decoder.mjs {{cache}}
+    node js/reference.mjs {{cache}}
+    node js/layer2.mjs {{cache}}
+
+# Layer 3: accept/reject agreement on malformed and edge-case IDLs.
+layer3:
+    node js/layer3.mjs {{cache}}
+
+report:
+    node js/report.mjs {{cache}} > {{cache}}/report.md
+    @echo "report: {{cache}}/report.md"
+
+# Rebuild the candidate list from recent blocks (not part of `parity`).
+discover blocks="60":
+    node js/discover-programs.mjs {{blocks}} 1500 {{cache}}/discovered.txt

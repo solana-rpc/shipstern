@@ -1,0 +1,17 @@
+{
+  "name": "anchor-parity",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@codama/nodes": "1.11.0",
+    "@codama/nodes-from-anchor": "1.5.6",
+    "@codama/visitors": "1.11.0",
+    "@coral-xyz/anchor": "0.31.1",
+    "@solana-program/program-metadata": "0.10.0",
+    "@solana/kit": "8.3.0",
+    "codama": "1.11.0"
+  }
+}

@@ -1,0 +1,27 @@
+[package]
+name = "anchor-parity"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Excluded from the main workspace: it generates one parser per mainnet
+# program at build time and needs network data, so it runs on demand only.
+[workspace]
+
+[dependencies]
+codama-nodes = "=0.13.2"
+shipstern-codama-from-anchor = { path = "../../crates/codama-from-anchor" }
+serde = { version = "^1.0.198", features = ["derive"] }
+# u128 values above u64::MAX need arbitrary precision to reach JSON intact.
+serde_json = { version = "^1.0.0", features = ["arbitrary_precision"] }
+base64 = "^0.22.1"
+
+# Required by the parsers include_shipstern_parser! expands into.
+borsh = { version = "1.5.7", features = ["derive"] }
+shipstern-core = { path = "../../crates/core" }
+shipstern-parser = { path = "../../crates/parser" }
+shipstern-proc-macro = { path = "../../crates/proc-macro" }
+
+[features]
+default = ["serde"]
+serde = []
