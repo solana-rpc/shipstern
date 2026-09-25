@@ -343,7 +343,9 @@ fn struct_type(
     let mut out = Vec::with_capacity(fields.len());
 
     for field in fields {
-        let (Some(name), Some(ty)) = (field.get("name"), field.get("type")) else {
+        // JS rejects a non-string name; an empty one would pass through here.
+        let (Some(name), Some(ty)) = (field.get("name").and_then(Value::as_str), field.get("type"))
+        else {
             return Err(unrecognized(field));
         };
 
@@ -353,7 +355,7 @@ fn struct_type(
         };
 
         out.push(StructFieldTypeNode {
-            name: camel(name.as_str().unwrap_or_default())?,
+            name: camel(name)?,
             default_value_strategy: None,
             docs: Docs::from(docs),
             r#type: Box::new(type_node_at(ty, generics, depth)?),

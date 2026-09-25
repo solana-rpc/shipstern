@@ -142,3 +142,11 @@ fn an_enum_variant_with_non_array_fields_is_rejected() {
     ));
     assert!(convert(types(json!(null))).is_ok());
 }
+
+/// JS rejects this too; reading it as an empty name would generate a nameless field.
+#[test]
+fn a_non_string_field_name_is_rejected() {
+    let types = json!({ "types": [{ "name": "S", "type": { "kind": "struct", "fields": [{ "name": 5, "type": "u8" }] } }] });
+
+    assert!(matches!(convert(types), Err(Error::UnrecognizedType(_))));
+}
