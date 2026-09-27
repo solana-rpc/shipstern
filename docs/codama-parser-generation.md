@@ -1,17 +1,24 @@
-# Generate a Shipstern Parser from a Codama IDL
+# Generate a Shipstern Parser from an Anchor or Codama IDL
 
-Shipstern generates a parser from a [Codama](https://github.com/codama-idl/codama) IDL at
-compile time, through the `include_shipstern_parser!` proc macro. Nothing is written to
-disk and no build script is involved.
+Shipstern generates a parser from an Anchor IDL or a [Codama](https://github.com/codama-idl/codama)
+IDL at compile time, through the `include_shipstern_parser!` proc macro. Nothing is written
+to disk and no build script is involved.
 
 ```
-Codama JSON ──> include_shipstern_parser! ──> generated parser
-                    (compile time)       (accounts, instructions, events)
+Anchor IDL (spec 0.1.0) ─┐
+                         ├──> include_shipstern_parser! ──> generated parser
+Codama JSON ─────────────┘       (compile time)        (accounts, instructions, events)
 ```
 
 ## Quick start
 
-**1. Convert your IDL to Codama JSON.** The macro reads Codama nodes, not a raw Anchor IDL.
+**1. Point the macro at your IDL.** An Anchor IDL from Anchor 0.30 or later, where
+`metadata.spec` is `"0.1.0"`, works as it is: the macro converts it in-process with
+`shipstern-codama-from-anchor`, which produces the same parser as
+`@codama/nodes-from-anchor@1.5.6`. No Node and no intermediate file.
+
+An older Anchor IDL has no `metadata.spec` and fails to compile with a message saying so.
+Convert it to Codama JSON first and pass that instead:
 
 ```bash
 npx -p codama -p @codama/nodes-from-anchor codama convert idl.json codama.json
@@ -33,7 +40,7 @@ One constraint to know about: if `programNode.origin` is present it has to be
 `"anchor"` or `"shank"`, which is the closed set Codama models. Any other value is
 rejected when the IDL loads. Leaving the field out is fine.
 
-If your IDL is already in complete Codama form, skip this step. `tests/idls/*.json`
+If your IDL is already in complete Codama form, pass it directly. `tests/idls/*.json`
 in this repository are all in that shape and make a useful reference.
 
 **2. Add the dependencies.**

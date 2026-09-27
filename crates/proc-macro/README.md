@@ -25,7 +25,7 @@ use shipstern_proc_macro::include_shipstern_parser;
 include_shipstern_parser!("path/to/idl.json");
 ```
 
-This macro will generate Rust modules containing type-safe account and instruction parsers for the specified Solana program. The input is a **Codama** JSON IDL, not a raw Anchor IDL. Output from Codama's own converter loads as it is, since `codama-nodes` defaults the collections its serializer omits. See [the Codama parser guide](../../docs/codama-parser-generation.md).
+This macro will generate Rust modules containing type-safe account and instruction parsers for the specified Solana program. The input is an Anchor IDL in spec `0.1.0` (Anchor 0.30 and later), converted in-process, or a Codama JSON IDL. Output from Codama's own converter loads as it is, since `codama-nodes` defaults the collections its serializer omits. See [the Codama parser guide](../../docs/codama-parser-generation.md).
 
 ## Events and self-CPI events
 

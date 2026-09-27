@@ -6853,6 +6853,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "shipstern-codama-from-anchor"
+version = "0.11.0"
+dependencies = [
+ "bs58",
+ "codama-nodes",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "shipstern-core"
 version = "0.11.0"
 dependencies = [
@@ -7079,6 +7090,7 @@ dependencies = [
  "quote",
  "serde",
  "serde_json",
+ "shipstern-codama-from-anchor",
  "shipstern-core",
  "syn 2.0.119",
 ]
