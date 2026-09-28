@@ -1,5 +1,6 @@
 //! A parser generated from an Anchor IDL, through the macro's own loader, must be
-//! byte-identical to one generated from the pinned JS CLI's output for that IDL.
+//! byte-identical to one generated from the pinned JS `rootNodeFromAnchor`
+//! output for that IDL.
 
 use std::path::{Path, PathBuf};
 
@@ -23,7 +24,6 @@ fn expand_pretty(idl: &Path) -> String {
     prettyplease::unparse(&file)
 }
 
-/// First line where two expansions part ways, with a little context.
 fn first_divergence(expected: &str, actual: &str) -> String {
     let expected: Vec<&str> = expected.lines().collect();
     let actual: Vec<&str> = actual.lines().collect();
@@ -60,7 +60,7 @@ fn fixture_names() -> Vec<String> {
 }
 
 #[test]
-fn anchor_idls_generate_the_same_parser_as_the_js_cli_output() {
+fn anchor_idls_generate_the_same_parser_as_the_js_output() {
     let names = fixture_names();
 
     assert!(

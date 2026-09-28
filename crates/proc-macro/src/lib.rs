@@ -46,9 +46,9 @@ pub fn shipstern(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// The input is Codama JSON or an Anchor IDL in spec `0.1.0` (Anchor 0.30 and
 /// later), which is converted in-process. An older Anchor IDL fails to compile;
-/// convert it with `codama convert` and pass the Codama JSON. Event and self-CPI
-/// parsing additionally requires the `program-events` feature, which changes
-/// `InstructionParser::Output` from `Instructions` to `ProgramEventOutput`.
+/// upgrade it with `anchor idl convert`, or pass `codama convert` output. Event
+/// and self-CPI parsing additionally requires the `program-events` feature, which
+/// changes `InstructionParser::Output` from `Instructions` to `ProgramEventOutput`.
 ///
 /// A self-CPI event envelope declared in the IDL always wins. The optional
 /// `cpi_event_discriminator` and `cpi_event_payload_offset` arguments are a

@@ -7,7 +7,7 @@ use codama_nodes::CamelCaseString;
 use crate::Error;
 
 ///
-/// JS `camelCase`, wrapped verbatim.
+/// JS `camelCase`, wrapped verbatim. Use [`ident`] for names the parser renders.
 ///
 /// Example output:
 ///
@@ -21,6 +21,18 @@ pub(crate) fn camel(input: &str) -> Result<CamelCaseString, Error> {
 
     // Deserialization is the one constructor that keeps the string verbatim.
     Ok(serde_json::from_value(serde_json::Value::String(cased))?)
+}
+
+/// [`camel`] for a name that becomes a Rust identifier, which the renderer
+/// panics on when it is empty or starts with a digit.
+pub(crate) fn ident(input: &str) -> Result<CamelCaseString, Error> {
+    let name = camel(input)?;
+
+    if !name.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        return Err(Error::InvalidName(input.to_owned()));
+    }
+
+    Ok(name)
 }
 
 pub(crate) fn camel_case(input: &str) -> String {

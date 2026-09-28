@@ -1,6 +1,10 @@
 //! Port of `v01/typeNodes/*` and `v01/unwrapGenerics.ts`.
 
-use std::collections::HashMap;
+use std::{
+    cell::Cell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use codama_nodes::{
     ArrayTypeNode, BooleanTypeNode, BytesEncoding, BytesTypeNode, CountNode, DefinedTypeLinkNode,
@@ -11,13 +15,20 @@ use codama_nodes::{
 };
 use serde_json::{Map, Value};
 
-use crate::{case::camel, idl::TypeDef, Error};
+use crate::{case::ident, idl::TypeDef, Error};
 
-/// Arguments resolve in the scope of the type being expanded, not the one that
-/// wrote them, as in JS.
-#[derive(Clone, Default)]
+/// The IDL's type names, shared by every generic scope.
+struct Defs<'a> {
+    generic: HashMap<&'a str, &'a TypeDef>,
+    plain: HashSet<&'a str>,
+    budget: Cell<usize>,
+}
+
+/// Arguments bound to the parameters of the type being expanded, resolved in the
+/// caller's scope so a parameter name the callee reuses cannot capture them.
+#[derive(Clone)]
 pub(crate) struct Generics<'a> {
-    pub types: HashMap<&'a str, &'a TypeDef>,
+    defs: Rc<Defs<'a>>,
     const_args: HashMap<String, Value>,
     type_args: HashMap<String, Value>,
 }
@@ -28,12 +39,77 @@ impl<'a> Generics<'a> {
         let (generic, plain): (Vec<&TypeDef>, Vec<&TypeDef>) =
             types.iter().partition(|t| t.generics.is_some());
 
-        let generics = Self {
-            types: generic.into_iter().map(|t| (t.name.as_str(), t)).collect(),
-            ..Self::default()
+        let defs = Defs {
+            generic: generic.into_iter().map(|t| (t.name.as_str(), t)).collect(),
+            plain: plain.iter().map(|t| t.name.as_str()).collect(),
+            budget: Cell::new(crate::TYPE_NODE_LIMIT),
         };
 
-        (plain, generics)
+        (plain, Self::scope(Rc::new(defs)))
+    }
+
+    fn scope(defs: Rc<Defs<'a>>) -> Self {
+        Self {
+            defs,
+            const_args: HashMap::new(),
+            type_args: HashMap::new(),
+        }
+    }
+
+    /// Generic arguments are expanded at every use, so nested generics can
+    /// grow exponentially within the nesting limit.
+    fn spend(&self) -> Result<(), Error> {
+        let left = self
+            .defs
+            .budget
+            .get()
+            .checked_sub(1)
+            .ok_or(Error::TooLarge)?;
+
+        self.defs.budget.set(left);
+
+        Ok(())
+    }
+
+    /// `arg` with this scope's generic references replaced by what they are
+    /// bound to.
+    fn resolve(&self, arg: &Value) -> Result<Value, Error> {
+        self.spend()?;
+
+        match arg {
+            Value::Object(obj) => {
+                if let Some(Value::String(name)) = obj.get("generic") {
+                    if let Some(ty) = self.type_args.get(name).and_then(|a| a.get("type")) {
+                        return Ok(ty.clone());
+                    }
+
+                    if let Some(len) = self.const_args.get(name) {
+                        return Ok(Value::from(const_value(len)?));
+                    }
+                }
+
+                // A const argument names an outer const parameter by value.
+                if obj.get("kind").and_then(Value::as_str) == Some("const")
+                    && let Some(Value::String(name)) = obj.get("value")
+                    && let Some(bound) = self.const_args.get(name)
+                {
+                    return Ok(bound.clone());
+                }
+
+                obj.iter()
+                    .map(|(key, value)| Ok((key.clone(), self.resolve(value)?)))
+                    .collect::<Result<Map<_, _>, _>>()
+                    .map(Value::Object)
+            },
+
+            Value::Array(items) => items
+                .iter()
+                .map(|item| self.resolve(item))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Value::Array),
+
+            other => Ok(other.clone()),
+        }
     }
 }
 
@@ -42,9 +118,11 @@ pub(crate) fn type_node(ty: &Value, generics: &Generics<'_>) -> Result<TypeNode,
 }
 
 fn type_node_at(ty: &Value, generics: &Generics<'_>, depth: usize) -> Result<TypeNode, Error> {
-    if depth > crate::NESTING_LIMIT {
+    if depth >= crate::NESTING_LIMIT {
         return Err(Error::RecursionLimit);
     }
+
+    generics.spend()?;
 
     let depth = depth + 1;
 
@@ -184,29 +262,44 @@ fn array(item: TypeNode, count: CountNode) -> TypeNode {
     })
 }
 
-/// A const-generic length goes through JS `parseInt`, which reads a leading run
-/// of digits and ignores the rest.
 fn array_len(len: &Value, generics: &Generics<'_>) -> Result<u64, Error> {
     if let Some(n) = len.as_u64() {
         return Ok(n);
     }
 
-    let raw = len
+    let arg = len
         .get("generic")
         .and_then(Value::as_str)
         .and_then(|name| generics.const_args.get(name))
-        .and_then(|arg| arg.get("value"))
-        .and_then(Value::as_str)
         .ok_or_else(|| Error::InvalidArrayLength(len.to_string()))?;
 
-    let digits: String = raw
-        .trim_start()
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect();
+    const_value(arg)
+}
 
-    digits
-        .parse()
+/// A const argument's value goes through JS `parseInt`, which reads a leading
+/// run of digits, in hex after a `0x` prefix, and ignores the rest.
+fn const_value(arg: &Value) -> Result<u64, Error> {
+    let raw = arg
+        .get("value")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::InvalidArrayLength(arg.to_string()))?;
+
+    let unsigned = raw.trim_start();
+    let unsigned = unsigned.strip_prefix('+').unwrap_or(unsigned);
+
+    let (digits, radix) = match unsigned
+        .strip_prefix("0x")
+        .or_else(|| unsigned.strip_prefix("0X"))
+    {
+        Some(hex) => (hex, 16),
+        None => (unsigned, 10),
+    };
+
+    let end = digits
+        .find(|c: char| !c.is_digit(radix))
+        .unwrap_or(digits.len());
+
+    u64::from_str_radix(&digits[..end], radix)
         .map_err(|_| Error::InvalidArrayLength(raw.to_string()))
 }
 
@@ -240,17 +333,32 @@ fn defined_type(
         .and_then(Value::as_str)
         .ok_or_else(|| unrecognized(&Value::Object(defined.clone())))?;
 
+    // A dangling link would only fail later, as a missing type in rustc.
     if !defined.contains_key("generics") {
+        if generics.defs.generic.contains_key(name) {
+            return Err(Error::GenericArgsMissing(name.to_owned()));
+        }
+
+        if !generics.defs.plain.contains(name) {
+            return Err(Error::UndefinedType(name.to_owned()));
+        }
+
         return Ok(TypeNode::Link(DefinedTypeLinkNode {
-            name: camel(name)?,
+            name: ident(name)?,
             program: None,
         }));
     }
 
     let generic_type = generics
-        .types
+        .defs
+        .generic
         .get(name)
         .ok_or_else(|| Error::GenericTypeMissing(name.to_owned()))?;
+
+    // Generics expand inline, and the renderer panics on an inline enum.
+    if generic_type.ty.as_ref().and_then(|ty| ty.get("kind")) == Some(&Value::from("enum")) {
+        return Err(Error::GenericEnum(name.to_owned()));
+    }
 
     let args = defined
         .get("generics")
@@ -258,10 +366,13 @@ fn defined_type(
         .map(Vec::as_slice)
         .unwrap_or_default();
 
-    let mut scope = generics.clone();
+    let mut scope = Generics::scope(Rc::clone(&generics.defs));
 
     for (i, param) in generic_type.generics.iter().flatten().enumerate() {
-        let arg = args.get(i).cloned().unwrap_or(Value::Null);
+        let arg = match args.get(i) {
+            Some(arg) => generics.resolve(arg)?,
+            None => Value::Null,
+        };
 
         if param.kind == "const" {
             scope.const_args.insert(param.name.clone(), arg);
@@ -270,9 +381,10 @@ fn defined_type(
         }
     }
 
-    let body = generic_type.ty.clone().unwrap_or_else(empty_struct);
-
-    type_node_at(&body, &scope, depth)
+    match &generic_type.ty {
+        Some(body) => type_node_at(body, &scope, depth),
+        None => type_node_at(&empty_struct(), &scope, depth),
+    }
 }
 
 pub(crate) fn empty_struct() -> Value { serde_json::json!({ "kind": "struct", "fields": [] }) }
@@ -288,7 +400,7 @@ fn enum_type(variants: &Value, generics: &Generics<'_>, depth: usize) -> Result<
             return Err(unrecognized(variant));
         };
 
-        let name = camel(name)?;
+        let name = ident(name)?;
 
         let fields = match variant.get("fields") {
             Some(Value::Array(fields)) => fields.as_slice(),
@@ -343,7 +455,7 @@ fn struct_type(
     let mut out = Vec::with_capacity(fields.len());
 
     for field in fields {
-        // JS rejects a non-string name; an empty one would pass through here.
+        // JS rejects a non-string name; an empty one fails later in `ident`.
         let (Some(name), Some(ty)) = (field.get("name").and_then(Value::as_str), field.get("type"))
         else {
             return Err(unrecognized(field));
@@ -355,7 +467,7 @@ fn struct_type(
         };
 
         out.push(StructFieldTypeNode {
-            name: camel(name)?,
+            name: ident(name)?,
             default_value_strategy: None,
             docs: Docs::from(docs),
             r#type: Box::new(type_node_at(ty, generics, depth)?),

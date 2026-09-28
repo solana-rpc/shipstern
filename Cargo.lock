@@ -6858,6 +6858,7 @@ version = "0.11.0"
 dependencies = [
  "bs58",
  "codama-nodes",
+ "hex",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

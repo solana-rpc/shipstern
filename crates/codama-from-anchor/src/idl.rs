@@ -5,6 +5,8 @@
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
+use crate::{Error, ItemKind};
+
 /// JS `parseDocs`: a lone string is one line, and null means none.
 pub(crate) fn docs<'de, D: Deserializer<'de>>(de: D) -> Result<Vec<String>, D::Error> {
     #[derive(Deserialize)]
@@ -134,8 +136,7 @@ pub enum Seed {
         path: String,
     },
 
-    /// Rejected at conversion rather than parse time: a PDA whose seeds use
-    /// nested paths is skipped before its seed kinds are looked at.
+    /// A kind this crate does not model. Its PDA is dropped, not rejected.
     #[serde(other)]
     Unsupported,
 }
@@ -163,9 +164,33 @@ pub struct Event {
 
 #[derive(Debug, Deserialize)]
 pub struct ErrorCode {
+    #[serde(deserialize_with = "error_code")]
     pub code: u32,
     pub name: String,
     pub msg: Option<String>,
+}
+
+/// Some generators write `"6000"`, which the Codama JSON loader coerces too.
+fn error_code<'de, D: Deserializer<'de>>(de: D) -> Result<u32, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Code {
+        Number(u32),
+        Text(String),
+    }
+
+    match Code::deserialize(de)? {
+        Code::Number(code) => Ok(code),
+        Code::Text(text) => text.parse().map_err(serde::de::Error::custom),
+    }
+}
+
+/// JS reads a constant's value as text, so a bare number is taken as written.
+fn text<'de, D: Deserializer<'de>>(de: D) -> Result<String, D::Error> {
+    Ok(match Value::deserialize(de)? {
+        Value::String(text) => text,
+        other => other.to_string(),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -206,6 +231,32 @@ pub struct Const {
     #[serde(rename = "type")]
     pub ty: Option<Value>,
 
-    #[serde(default)]
+    #[serde(default, deserialize_with = "text")]
     pub value: String,
+}
+
+/// The item that broke deserialization, so the error can name it. Only called
+/// after the whole IDL failed.
+pub(crate) fn locate(idl: &Value) -> Option<Error> {
+    fn first<'a, T: Deserialize<'a>>(idl: &'a Value, key: &str, kind: ItemKind) -> Option<Error> {
+        let items = idl.get(key)?.as_array()?;
+
+        items.iter().enumerate().find_map(|(i, item)| {
+            let err = T::deserialize(item).err()?;
+
+            let name = item
+                .get("name")
+                .and_then(Value::as_str)
+                .map_or_else(|| format!("#{i}"), str::to_owned);
+
+            Some(Error::Json(err).at(kind, &name))
+        })
+    }
+
+    first::<Instruction>(idl, "instructions", ItemKind::Instruction)
+        .or_else(|| first::<Account>(idl, "accounts", ItemKind::Account))
+        .or_else(|| first::<Event>(idl, "events", ItemKind::Event))
+        .or_else(|| first::<TypeDef>(idl, "types", ItemKind::Type))
+        .or_else(|| first::<ErrorCode>(idl, "errors", ItemKind::Error))
+        .or_else(|| first::<Const>(idl, "constants", ItemKind::Constant))
 }

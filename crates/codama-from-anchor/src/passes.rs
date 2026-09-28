@@ -10,7 +10,7 @@ use codama_nodes::{
     PdaValuePda, ProgramNode, StructTypeNode, TypeNode,
 };
 
-use crate::{case::camel, Error};
+use crate::{case::ident, Error, ItemKind};
 
 pub(crate) fn run(program: &mut ProgramNode) -> Result<(), Error> {
     unwrap_instruction_args_defined_types(program);
@@ -20,112 +20,66 @@ pub(crate) fn run(program: &mut ProgramNode) -> Result<(), Error> {
     Ok(())
 }
 
-// --- traversal --------------------------------------------------------------
+/// One walker, expanded as a read and a write version, so the passes that count
+/// links and the ones that rewrite types visit the same node kinds.
+macro_rules! walker {
+    ($children:ident, $fields:ident $(, $mut:tt)?) => {
+        fn $children(ty: &$($mut)? TypeNode, f: &mut dyn FnMut(&$($mut)? TypeNode)) {
+            match ty {
+                TypeNode::Array(n) => f(&$($mut)? n.item),
+                TypeNode::FixedSize(n) => f(&$($mut)? n.r#type),
+                TypeNode::SizePrefix(n) => f(&$($mut)? n.r#type),
+                TypeNode::Option(n) => f(&$($mut)? n.item),
 
-fn struct_of(nested: &NestedTypeNode<StructTypeNode>) -> Option<&StructTypeNode> {
-    match nested {
-        NestedTypeNode::Value(s) => Some(s),
-        _ => None,
-    }
+                TypeNode::HiddenPrefix(n) => {
+                    f(&$($mut)? n.r#type);
+
+                    for constant in &$($mut)? n.prefix {
+                        f(&$($mut)? constant.r#type);
+                    }
+                },
+
+                TypeNode::Struct(s) => $fields(s, f),
+                TypeNode::Tuple(t) => {
+                    for item in &$($mut)? t.items {
+                        f(item);
+                    }
+                },
+
+                TypeNode::Enum(e) => {
+                    for variant in &$($mut)? e.variants {
+                        match variant {
+                            EnumVariantTypeNode::Struct(v) => {
+                                if let NestedTypeNode::Value(s) = &$($mut)? v.r#struct {
+                                    $fields(s, f);
+                                }
+                            },
+                            EnumVariantTypeNode::Tuple(v) => {
+                                if let NestedTypeNode::Value(t) = &$($mut)? v.tuple {
+                                    for item in &$($mut)? t.items {
+                                        f(item);
+                                    }
+                                }
+                            },
+                            EnumVariantTypeNode::Empty(_) => {},
+                        }
+                    }
+                },
+
+                _ => {},
+            }
+        }
+
+        fn $fields(s: &$($mut)? StructTypeNode, f: &mut dyn FnMut(&$($mut)? TypeNode)) {
+            for field in &$($mut)? s.fields {
+                f(&$($mut)? field.r#type);
+            }
+        }
+    };
 }
 
-fn for_each_child_mut(ty: &mut TypeNode, f: &mut dyn FnMut(&mut TypeNode)) {
-    match ty {
-        TypeNode::Array(n) => f(&mut n.item),
-        TypeNode::FixedSize(n) => f(&mut n.r#type),
-        TypeNode::SizePrefix(n) => f(&mut n.r#type),
-        TypeNode::Option(n) => f(&mut n.item),
-
-        TypeNode::HiddenPrefix(n) => {
-            f(&mut n.r#type);
-
-            for constant in &mut n.prefix {
-                f(&mut constant.r#type);
-            }
-        },
-
-        TypeNode::Struct(s) => struct_children_mut(s, f),
-        TypeNode::Tuple(t) => {
-            for item in &mut t.items {
-                f(item);
-            }
-        },
-
-        TypeNode::Enum(e) => {
-            for variant in &mut e.variants {
-                match variant {
-                    EnumVariantTypeNode::Struct(v) => {
-                        if let NestedTypeNode::Value(s) = &mut v.r#struct {
-                            struct_children_mut(s, f);
-                        }
-                    },
-                    EnumVariantTypeNode::Tuple(v) => {
-                        if let NestedTypeNode::Value(t) = &mut v.tuple {
-                            for item in &mut t.items {
-                                f(item);
-                            }
-                        }
-                    },
-                    EnumVariantTypeNode::Empty(_) => {},
-                }
-            }
-        },
-
-        _ => {},
-    }
-}
-
-fn struct_children_mut(s: &mut StructTypeNode, f: &mut dyn FnMut(&mut TypeNode)) {
-    for field in &mut s.fields {
-        f(&mut field.r#type);
-    }
-}
-
-fn for_each_child(ty: &TypeNode, f: &mut dyn FnMut(&TypeNode)) {
-    match ty {
-        TypeNode::Array(n) => f(&n.item),
-        TypeNode::FixedSize(n) => f(&n.r#type),
-        TypeNode::SizePrefix(n) => f(&n.r#type),
-        TypeNode::Option(n) => f(&n.item),
-
-        TypeNode::HiddenPrefix(n) => {
-            f(&n.r#type);
-
-            for constant in &n.prefix {
-                f(&constant.r#type);
-            }
-        },
-
-        TypeNode::Struct(s) => s.fields.iter().for_each(|field| f(&field.r#type)),
-        TypeNode::Tuple(t) => {
-            for item in &t.items {
-                f(item);
-            }
-        },
-
-        TypeNode::Enum(e) => {
-            for variant in &e.variants {
-                match variant {
-                    EnumVariantTypeNode::Struct(v) => {
-                        if let NestedTypeNode::Value(s) = &v.r#struct {
-                            s.fields.iter().for_each(|field| f(&field.r#type));
-                        }
-                    },
-                    EnumVariantTypeNode::Tuple(v) => {
-                        if let NestedTypeNode::Value(t) = &v.tuple {
-                            for item in &t.items {
-                                f(item);
-                            }
-                        }
-                    },
-                    EnumVariantTypeNode::Empty(_) => {},
-                }
-            }
-        },
-
-        _ => {},
-    }
-}
+walker!(for_each_child, struct_children);
+walker!(for_each_child_mut, struct_children_mut, mut);
 
 /// Every root type inside an instruction, including PDA seed types held in
 /// account default values.
@@ -152,17 +106,13 @@ fn instruction_types_mut(ix: &mut InstructionNode, f: &mut dyn FnMut(&mut TypeNo
     }
 }
 
-// --- unwrapInstructionArgsDefinedTypes --------------------------------------
-
 #[derive(Default)]
 struct Uses {
     total: usize,
     direct_arg: usize,
 }
 
-/// Port of `unwrapInstructionArgsDefinedTypesVisitor`. Unlike JS, PDA seeds are
-/// not counted as uses because extractPdas never hoists them; a whole-struct
-/// seed would be needed to tell the difference.
+/// Port of `unwrapInstructionArgsDefinedTypesVisitor`.
 fn unwrap_instruction_args_defined_types(program: &mut ProgramNode) {
     let mut uses: HashMap<String, Uses> = HashMap::new();
 
@@ -184,6 +134,34 @@ fn unwrap_instruction_args_defined_types(program: &mut ProgramNode) {
 
     for constant in &program.constants {
         count(&constant.r#type);
+    }
+
+    // JS also counts seed types in `program.pdas`, where extractPdas hoists the
+    // inline PDAs owned by this program. PDAs stay inline here.
+    for account in program.instructions.iter().flat_map(|ix| &ix.accounts) {
+        let Some(InstructionInputValueNode::PdaValue(value)) = &*account.default_value else {
+            continue;
+        };
+
+        let PdaValuePda::Pda(pda) = value.pda.as_ref() else {
+            continue;
+        };
+
+        // An empty id is falsy in JS, so it counts as this program.
+        let owned = pda
+            .program_id
+            .as_ref()
+            .is_none_or(|id| id.is_empty() || *id == program.public_key);
+
+        if !owned {
+            continue;
+        }
+
+        for seed in &pda.seeds {
+            if let PdaSeedNode::Variable(seed) = seed {
+                count(&seed.r#type);
+            }
+        }
     }
 
     for ix in &program.instructions {
@@ -255,8 +233,6 @@ fn inline_links(ty: &mut TypeNode, inline: &HashMap<String, TypeNode>) {
     for_each_child_mut(ty, &mut |child| inline_links(child, inline));
 }
 
-// --- flattenInstructionDataArguments ----------------------------------------
-
 /// Port of `flattenInstructionDataArgumentsVisitor`.
 fn flatten_instruction_data_arguments(program: &mut ProgramNode) -> Result<(), Error> {
     for ix in &mut program.instructions {
@@ -270,7 +246,7 @@ fn flatten_instruction_data_arguments(program: &mut ProgramNode) -> Result<(), E
 
             for field in s.fields {
                 flattened.push(InstructionArgumentNode {
-                    name: camel(&field.name)?,
+                    name: ident(&field.name)?,
                     default_value_strategy: field.default_value_strategy,
                     docs: field.docs,
                     r#type: field.r#type,
@@ -294,10 +270,9 @@ fn flatten_instruction_data_arguments(program: &mut ProgramNode) -> Result<(), E
             duplicates.sort();
             duplicates.dedup();
 
-            return Err(Error::ConflictingFlattenedArguments {
-                instruction: ix.name.to_string(),
-                names: duplicates,
-            });
+            // Raised after conversion, so `name` is the camel-cased one.
+            return Err(Error::ConflictingFlattenedArguments(duplicates)
+                .at(ItemKind::Instruction, ix.name.as_str()));
         }
 
         ix.arguments = flattened;
@@ -305,8 +280,6 @@ fn flatten_instruction_data_arguments(program: &mut ProgramNode) -> Result<(), E
 
     Ok(())
 }
-
-// --- transformU8ArraysToBytes -----------------------------------------------
 
 /// Port of `transformU8ArraysToBytesVisitor`.
 fn transform_u8_arrays_to_bytes(program: &mut ProgramNode) {

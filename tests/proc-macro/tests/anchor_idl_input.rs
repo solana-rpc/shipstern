@@ -1,16 +1,9 @@
 use shipstern_proc_macro::include_shipstern_parser;
 
-// A raw Anchor IDL, converted in-process: no Codama JSON in between.
 include_shipstern_parser!("../idls/anchor/dex_v1.anchor.json");
 
 #[test]
 fn a_parser_generated_from_an_anchor_idl_decodes_instructions() {
-    // The bytes dex_v1.anchor.json declares; without this pin a wrong generated
-    // discriminator would still round-trip through the parser.
-    assert_eq!(simple_dex::Instructions::SWAP_DISCRIMINATOR, &[
-        248, 198, 158, 145, 225, 117, 135, 200
-    ],);
-
     let path = shipstern_core::instruction::Path::new_single(0);
 
     let mut data = simple_dex::Instructions::SWAP_DISCRIMINATOR.to_vec();

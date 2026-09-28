@@ -1,6 +1,6 @@
 //! Port of `nodes-from-anchor/src/v01/*` (the mapping, before any pass runs).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use codama_nodes::{
     AccountNode, AccountValueNode, ArgumentValueNode, BooleanValueNode, BytesEncoding,
@@ -17,10 +17,10 @@ use codama_nodes::{
 use serde_json::Value;
 
 use crate::{
-    case::{camel, camel_case},
+    case::{camel, camel_case, ident},
     idl::{self, Idl, InstructionAccountItem, Seed},
     types::{empty_struct, type_node, Generics},
-    Error,
+    Error, ItemKind,
 };
 
 /// `CODAMA_VERSION` from `@codama/nodes@1.11.0`, stamped on every root node.
@@ -47,44 +47,59 @@ fn program_node(idl: &Idl) -> Result<ProgramNode, Error> {
         .chain(idl.events.iter().map(|e| e.name.as_str()))
         .collect();
 
-    let defined_types = types
+    let unclaimed: Vec<&idl::TypeDef> = types
         .iter()
+        .copied()
         .filter(|t| !claimed.contains(t.name.as_str()))
-        .map(|t| defined_type_node(t, &generics))
+        .collect();
+
+    let defined_types: Vec<DefinedTypeNode> = unclaimed
+        .iter()
+        .map(|t| defined_type_node(t, &generics).map_err(|e| e.at(ItemKind::Type, &t.name)))
         .collect::<Result<_, _>>()?;
+
+    // Names that camel-case alike would generate the same Rust type twice.
+    let mut seen = HashMap::new();
+    for (node, ty) in defined_types.iter().zip(&unclaimed) {
+        if let Some(first) = seen.insert(&node.name, ty.name.as_str()) {
+            return Err(Error::NameCollision(first.to_owned()).at(ItemKind::Type, &ty.name));
+        }
+    }
 
     let accounts = idl
         .accounts
         .iter()
-        .map(|a| account_node(a, &types, &generics))
+        .map(|a| account_node(a, &types, &generics).map_err(|e| e.at(ItemKind::Account, &a.name)))
         .collect::<Result<_, _>>()?;
 
     let constants = idl
         .constants
         .iter()
-        .map(|c| constant_node(c, &generics))
+        .map(|c| constant_node(c, &generics).map_err(|e| e.at(ItemKind::Constant, &c.name)))
         .collect::<Result<_, _>>()?;
 
     let errors = idl
         .errors
         .iter()
-        .map(error_node)
+        .map(|e| error_node(e).map_err(|err| err.at(ItemKind::Error, &e.name)))
         .collect::<Result<_, _>>()?;
 
     let events = idl
         .events
         .iter()
-        .map(|e| event_node(e, &types, &generics))
+        .map(|e| event_node(e, &types, &generics).map_err(|err| err.at(ItemKind::Event, &e.name)))
         .collect::<Result<_, _>>()?;
 
     let instructions = idl
         .instructions
         .iter()
-        .map(|ix| instruction_node(ix, &generics))
+        .map(|ix| {
+            instruction_node(ix, &generics).map_err(|e| e.at(ItemKind::Instruction, &ix.name))
+        })
         .collect::<Result<_, _>>()?;
 
     Ok(ProgramNode {
-        name: camel(&idl.metadata.name)?,
+        name: ident(&idl.metadata.name).map_err(|e| e.at(ItemKind::Program, &idl.metadata.name))?,
         public_key: idl.address.clone(),
         version: idl.metadata.version.clone(),
         origin: Some(ProgramOrigin::Anchor),
@@ -103,13 +118,11 @@ fn defined_type_node(ty: &idl::TypeDef, generics: &Generics<'_>) -> Result<Defin
     let body = ty.ty.clone().unwrap_or_else(empty_struct);
 
     Ok(DefinedTypeNode {
-        name: camel(&ty.name)?,
+        name: ident(&ty.name)?,
         docs: Docs::from(ty.docs.clone()),
         r#type: Box::new(type_node(&body, generics)?),
     })
 }
-
-fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
 
 fn fixed_bytes(len: usize) -> TypeNode {
     TypeNode::FixedSize(FixedSizeTypeNode {
@@ -120,7 +133,7 @@ fn fixed_bytes(len: usize) -> TypeNode {
 
 fn base16_bytes(bytes: &[u8]) -> BytesValueNode {
     BytesValueNode {
-        data: hex(bytes),
+        data: hex::encode(bytes),
         encoding: BytesEncoding::Base16,
     }
 }
@@ -134,13 +147,17 @@ fn account_node(
     types: &[&idl::TypeDef],
     generics: &Generics<'_>,
 ) -> Result<AccountNode, Error> {
-    let ty = find_type(types, &account.name)
-        .ok_or_else(|| Error::AccountTypeMissing(account.name.clone()))?;
+    let ty = find_type(types, &account.name).ok_or(Error::TypeMissing)?;
+
+    // After the type lookup, so an IDL wrong in both ways reports what JS does.
+    if account.discriminator.is_empty() {
+        return Err(Error::EmptyDiscriminator);
+    }
 
     let body = ty.ty.clone().unwrap_or(Value::Null);
 
     let TypeNode::Struct(data) = type_node(&body, generics)? else {
-        return Err(Error::AccountTypeNotStruct(account.name.clone()));
+        return Err(Error::AccountTypeNotStruct);
     };
 
     let discriminator = StructFieldTypeNode {
@@ -155,7 +172,7 @@ fn account_node(
     let fields = std::iter::once(discriminator).chain(data.fields).collect();
 
     Ok(AccountNode {
-        name: camel(&account.name)?,
+        name: ident(&account.name)?,
         size: None,
         docs: Docs::default(),
         data: NestedTypeNode::Value(StructTypeNode { fields }),
@@ -176,8 +193,11 @@ fn event_node(
     types: &[&idl::TypeDef],
     generics: &Generics<'_>,
 ) -> Result<EventNode, Error> {
-    let ty =
-        find_type(types, &event.name).ok_or_else(|| Error::EventTypeMissing(event.name.clone()))?;
+    let ty = find_type(types, &event.name).ok_or(Error::TypeMissing)?;
+
+    if event.discriminator.is_empty() {
+        return Err(Error::EmptyDiscriminator);
+    }
 
     let body = ty.ty.clone().unwrap_or(Value::Null);
 
@@ -187,7 +207,7 @@ fn event_node(
     };
 
     Ok(EventNode {
-        name: camel(&event.name)?,
+        name: ident(&event.name)?,
         docs: Docs::default(),
         data: Box::new(TypeNode::HiddenPrefix(HiddenPrefixTypeNode {
             r#type: Box::new(type_node(&body, generics)?),
@@ -334,6 +354,10 @@ fn instruction_node(
     ix: &idl::Instruction,
     generics: &Generics<'_>,
 ) -> Result<InstructionNode, Error> {
+    if ix.discriminator.is_empty() {
+        return Err(Error::EmptyDiscriminator);
+    }
+
     let discriminator = InstructionArgumentNode {
         name: camel("discriminator")?,
         default_value_strategy: Some(DefaultValueStrategy::Omitted),
@@ -348,8 +372,14 @@ fn instruction_node(
     let mut arguments = vec![discriminator];
 
     for arg in &ix.args {
+        let name = ident(&arg.name)?;
+
+        if name.as_str() == "discriminator" {
+            return Err(Error::DiscriminatorArgument);
+        }
+
         arguments.push(InstructionArgumentNode {
-            name: camel(&arg.name)?,
+            name,
             default_value_strategy: None,
             docs: Docs::from(arg.docs.clone()),
             r#type: Box::new(type_node(&arg.ty, generics)?),
@@ -359,7 +389,7 @@ fn instruction_node(
     }
 
     Ok(InstructionNode {
-        name: camel(&ix.name)?,
+        name: ident(&ix.name)?,
         docs: Docs::from(ix.docs.clone()),
         optional_account_strategy: Some(OptionalAccountStrategy::ProgramId),
         accounts: instruction_accounts(&ix.accounts, &arguments, None)?,
@@ -434,13 +464,14 @@ fn instruction_account_node(
             },
         )),
 
-        (None, Some(pda)) => pda_default(pda, &name, arguments, prefix)?,
+        (None, Some(pda)) => pda_default(pda, &name, arguments, prefix)
+            .map_err(|e| e.at(ItemKind::Account, &name))?,
 
         (None, None) => None,
     };
 
     Ok(InstructionAccountNode {
-        name: camel(&name)?,
+        name: ident(&name)?,
         is_writable: account.writable,
         is_signer: IsSigner::from(account.signer),
         is_optional: Some(account.optional),
@@ -451,8 +482,8 @@ fn instruction_account_node(
     })
 }
 
-/// `None` when any seed uses a nested path such as `config.authority`: the JS
-/// converter skips the whole default then.
+/// `None` when a seed has a nested path like `config.authority` (as in JS) or does
+/// not resolve (where JS fails the IDL). The parser never reads PDAs.
 fn pda_default(
     pda: &idl::Pda,
     name: &str,
@@ -471,7 +502,9 @@ fn pda_default(
     let mut values = Vec::new();
 
     for seed in &pda.seeds {
-        let (definition, value) = pda_seed(seed, arguments, prefix)?;
+        let Some((definition, value)) = pda_seed(seed, arguments, prefix)? else {
+            return Ok(None);
+        };
 
         definitions.push(definition);
         values.extend(value);
@@ -481,7 +514,9 @@ fn pda_default(
     let mut program_id_value = None;
 
     if let Some(program) = &pda.program {
-        let (definition, value) = pda_seed(program, arguments, prefix)?;
+        let Some((definition, value)) = pda_seed(program, arguments, prefix)? else {
+            return Ok(None);
+        };
 
         if let PdaSeedNode::Constant(constant) = &definition
             && let ConstantPdaSeedValue::Bytes(bytes) = constant.value.as_ref()
@@ -511,13 +546,14 @@ fn pda_default(
     })))
 }
 
+/// `None` for a seed that does not resolve.
 fn pda_seed(
     seed: &Seed,
     arguments: &[InstructionArgumentNode],
     prefix: Option<&str>,
-) -> Result<(PdaSeedNode, Option<PdaSeedValueNode>), Error> {
+) -> Result<Option<(PdaSeedNode, Option<PdaSeedValueNode>)>, Error> {
     match seed {
-        Seed::Const { value } => Ok((
+        Seed::Const { value } => Ok(Some((
             PdaSeedNode::Constant(ConstantPdaSeedNode {
                 r#type: Box::new(TypeNode::Bytes(BytesTypeNode {})),
                 value: Box::new(ConstantPdaSeedValue::Bytes(BytesValueNode {
@@ -526,13 +562,13 @@ fn pda_seed(
                 })),
             }),
             None,
-        )),
+        ))),
 
         Seed::Account { path } => {
             let account = path.split('.').next().unwrap_or_default();
             let name = camel(&prefixed(prefix, account))?;
 
-            Ok((
+            Ok(Some((
                 PdaSeedNode::Variable(VariablePdaSeedNode {
                     name: name.clone(),
                     docs: Docs::default(),
@@ -542,19 +578,17 @@ fn pda_seed(
                     name: name.clone(),
                     value: Box::new(PdaSeedValueValue::Account(AccountValueNode { name })),
                 }),
-            ))
+            )))
         },
 
         Seed::Arg { path } => {
-            let original = path.split('.').next().unwrap_or_default();
-            let wanted = camel_case(original);
+            let wanted = camel_case(path.split('.').next().unwrap_or_default());
 
-            let argument = arguments
-                .iter()
-                .find(|a| a.name.as_str() == wanted)
-                .ok_or_else(|| Error::ArgumentTypeMissing(original.to_owned()))?;
+            let Some(argument) = arguments.iter().find(|a| a.name.as_str() == wanted) else {
+                return Ok(None);
+            };
 
-            Ok((
+            Ok(Some((
                 PdaSeedNode::Variable(VariablePdaSeedNode {
                     name: argument.name.clone(),
                     docs: Docs::default(),
@@ -566,10 +600,10 @@ fn pda_seed(
                         name: argument.name.clone(),
                     })),
                 }),
-            ))
+            )))
         },
 
-        Seed::Unsupported => Err(Error::SeedKindUnimplemented),
+        Seed::Unsupported => Ok(None),
     }
 }
 

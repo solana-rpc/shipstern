@@ -154,6 +154,42 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "hex_generic",
+      "docs": ["JS parseInt reads this const generic as 32."],
+      "discriminator": [40, 41, 42, 43, 44, 45, 46, 47],
+      "accounts": [],
+      "args": [
+        {
+          "name": "buf",
+          "type": {
+            "defined": {
+              "name": "Pair",
+              "generics": [{ "kind": "type", "type": "u8" }, { "kind": "const", "value": " +0X20zz" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "struct_seeds",
+      "docs": ["A seed on an own-program PDA counts as a use of its type; a foreign one does not."],
+      "discriminator": [48, 49, 50, 51, 52, 53, 54, 55],
+      "accounts": [
+        { "name": "owned", "pda": { "seeds": [{ "kind": "arg", "path": "owned_key" }] } },
+        {
+          "name": "foreign_seeded",
+          "pda": {
+            "seeds": [{ "kind": "arg", "path": "foreign_key" }],
+            "program": { "kind": "const", "value": [6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28, 180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169] }
+          }
+        }
+      ],
+      "args": [
+        { "name": "owned_key", "type": { "defined": { "name": "OwnedKey" } } },
+        { "name": "foreign_key", "type": { "defined": { "name": "ForeignKey" } } }
+      ]
     }
   ],
   "accounts": [
@@ -272,6 +308,14 @@
         "kind": "struct",
         "fields": [{ "name": "inner", "type": { "option": { "generic": "U" } } }]
       }
+    },
+    {
+      "name": "OwnedKey",
+      "type": { "kind": "struct", "fields": [{ "name": "a", "type": "u8" }, { "name": "b", "type": "u8" }] }
+    },
+    {
+      "name": "ForeignKey",
+      "type": { "kind": "struct", "fields": [{ "name": "c", "type": "u8" }, { "name": "d", "type": "u8" }] }
     }
   ],
   "constants": [

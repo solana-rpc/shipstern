@@ -8,6 +8,7 @@
 //! ```
 
 use codama_nodes::RootNode;
+use serde::Deserialize;
 
 mod case;
 mod idl;
@@ -20,14 +21,45 @@ pub const SUPPORTED_SPEC: &str = "0.1.0";
 
 /// Deepest type nesting accepted. It equals serde_json's parser limit; real
 /// IDLs stay under 20.
-pub const NESTING_LIMIT: usize = 128;
+pub(crate) const NESTING_LIMIT: usize = 128;
+
+/// Type nodes one IDL may expand to, generic expansion included.
+pub(crate) const TYPE_NODE_LIMIT: usize = 100_000;
+
+/// The kind of IDL item an [`Error::At`] names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ItemKind {
+    Program,
+    Type,
+    Account,
+    Constant,
+    Error,
+    Event,
+    Instruction,
+}
+
+impl std::fmt::Display for ItemKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Program => "program",
+            Self::Type => "type",
+            Self::Account => "account",
+            Self::Constant => "constant",
+            Self::Error => "error",
+            Self::Event => "event",
+            Self::Instruction => "instruction",
+        })
+    }
+}
 
 /// Why an Anchor IDL could not be converted.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    // Not a `source` here or in `At`, so a report that walks causes prints it once.
     #[error("invalid Anchor IDL JSON: {0}")]
-    Json(#[from] serde_json::Error),
+    Json(serde_json::Error),
 
     #[error(
         "unsupported Anchor IDL spec {}: only \"{SUPPORTED_SPEC}\" (Anchor 0.30+) is supported",
@@ -35,11 +67,36 @@ pub enum Error {
     )]
     UnsupportedSpec { found: Option<String> },
 
+    #[error("{kind} `{name}`: {error}")]
+    At {
+        kind: ItemKind,
+        name: String,
+        error: Box<Error>,
+    },
+
+    #[error("discriminator is empty")]
+    EmptyDiscriminator,
+
+    #[error("name {0:?} does not convert to a Rust identifier")]
+    InvalidName(String),
+
+    #[error("same Rust name as `{0}`")]
+    NameCollision(String),
+
     #[error("unrecognized Anchor IDL type {0}")]
     UnrecognizedType(String),
 
     #[error("generic type `{0}` is not defined")]
     GenericTypeMissing(String),
+
+    #[error("generic type `{0}` is used without arguments")]
+    GenericArgsMissing(String),
+
+    #[error("generic enum `{0}` would expand inline, which the generated parser cannot render")]
+    GenericEnum(String),
+
+    #[error("type `{0}` is not defined")]
+    UndefinedType(String),
 
     #[error("generic argument {0} is not bound")]
     GenericArgMissing(String),
@@ -47,29 +104,38 @@ pub enum Error {
     #[error("invalid array length {0}")]
     InvalidArrayLength(String),
 
-    #[error("IDL nesting exceeds the intentional limit of {NESTING_LIMIT} levels")]
+    #[error("type nesting exceeds {NESTING_LIMIT} levels")]
     RecursionLimit,
 
-    #[error("account `{0}` has no type definition")]
-    AccountTypeMissing(String),
+    #[error("type expansion exceeds {TYPE_NODE_LIMIT} type nodes (nested generics?)")]
+    TooLarge,
 
-    #[error("account `{0}` is not a struct")]
-    AccountTypeNotStruct(String),
+    #[error("no type definition")]
+    TypeMissing,
 
-    #[error("event `{0}` has no type definition")]
-    EventTypeMissing(String),
+    #[error("type is not a struct")]
+    AccountTypeNotStruct,
 
-    #[error("PDA seed argument `{0}` is not an argument of the instruction")]
-    ArgumentTypeMissing(String),
+    #[error("flattening produces duplicate arguments {0:?}")]
+    ConflictingFlattenedArguments(Vec<String>),
 
-    #[error("unsupported PDA seed kind")]
-    SeedKindUnimplemented,
+    #[error("an argument named `discriminator` clashes with the instruction discriminator")]
+    DiscriminatorArgument,
+}
 
-    #[error("flattening instruction `{instruction}` produces duplicate arguments {names:?}")]
-    ConflictingFlattenedArguments {
-        instruction: String,
-        names: Vec<String>,
-    },
+impl From<serde_json::Error> for Error {
+    fn from(err: serde_json::Error) -> Self { Self::Json(err) }
+}
+
+impl Error {
+    /// Name the IDL item the error came from.
+    pub(crate) fn at(self, kind: ItemKind, name: &str) -> Self {
+        Self::At {
+            kind,
+            name: name.to_owned(),
+            error: Box::new(self),
+        }
+    }
 }
 
 /// Convert a parsed Anchor IDL, like JS `rootNodeFromAnchor`. Fails on any spec
@@ -77,7 +143,8 @@ pub enum Error {
 pub fn root_node_from_anchor(idl: serde_json::Value) -> Result<RootNode, Error> {
     check_spec(&idl)?;
 
-    let idl: idl::Idl = serde_json::from_value(idl)?;
+    let idl =
+        idl::Idl::deserialize(&idl).map_err(|err| idl::locate(&idl).unwrap_or(Error::Json(err)))?;
 
     let mut root = v01::root_node(&idl)?;
 
@@ -86,8 +153,7 @@ pub fn root_node_from_anchor(idl: serde_json::Value) -> Result<RootNode, Error> 
     Ok(root)
 }
 
-/// Checked before deserializing so a legacy IDL reports its spec, not a missing
-/// field. JS converts it as legacy instead; that path is out of scope here.
+/// Checked before deserializing so a legacy IDL reports its spec, not a missing field.
 fn check_spec(value: &serde_json::Value) -> Result<(), Error> {
     let spec = value
         .pointer("/metadata/spec")
