@@ -1,6 +1,6 @@
 # shipstern-proc-macro
 
-This crate provides a procedural macro for generating Shipstern parser modules from [Codama JSON IDL](https://github.com/codama-idl/codama).
+This crate provides a procedural macro for generating Shipstern parser modules from an Anchor IDL (Anchor 0.30+) or a [Codama JSON IDL](https://github.com/codama-idl/codama).
 
 ## Usage
 
@@ -21,7 +21,7 @@ Then, in your code:
 ```rust
 use shipstern_proc_macro::include_shipstern_parser;
 
-// Provide the path (relative to your crate root) to your Codama JSON IDL file.
+// Provide the path (relative to your crate root) to your Anchor or Codama JSON IDL file.
 include_shipstern_parser!("path/to/idl.json");
 ```
 

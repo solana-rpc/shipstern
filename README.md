@@ -119,7 +119,7 @@ rather than a program's accounts and instructions:
 
 ### Codegen Macro
 
-The `shipstern-proc-macro` crate provides the `include_shipstern_parser!` procedural macro, which generates a Shipstern parser from a Codama JSON IDL file.
+The `shipstern-proc-macro` crate provides the `include_shipstern_parser!` procedural macro, which generates a Shipstern parser from an Anchor IDL (Anchor 0.30+) or a Codama JSON IDL.
 
 To use it, add the following dependencies to your `Cargo.toml`:
 
@@ -139,9 +139,9 @@ To parse events, including self-CPI events, enable the `program-events` feature.
 shipstern-proc-macro = { version = "0.11.0", features = ["program-events"] }
 ```
 
-The macro reads a **Codama** JSON IDL, not a raw Anchor IDL. Output from Codama's own converter loads as it is, since `codama-nodes` defaults the collections its serializer omits. See [Generate a Shipstern Parser from a Codama IDL](./docs/codama-parser-generation.md).
+The macro reads an Anchor IDL from Anchor 0.30 or later directly and converts it at compile time, so no Codama step is needed. Codama JSON still works: output from Codama's own converter loads as it is, since `codama-nodes` defaults the collections its serializer omits. See [Parse an Anchor Program Without the Codama CLI](./docs/anchor-idl-parser.md) and [Generate a Shipstern Parser from an Anchor or Codama IDL](./docs/codama-parser-generation.md).
 
-Then, import and invoke the macro in your code. Specify the path to your Codama JSON IDL file relative to your crate root:
+Then, import and invoke the macro in your code. Specify the path to your IDL file relative to your crate root:
 
 ```rust
 use shipstern_proc_macro::include_shipstern_parser;
@@ -229,7 +229,8 @@ A bare `cargo test` does not cover everything CI runs. See [Running Tests](./CON
 - [**Mock Testing for Parsers**](./crates/mock/README.md): Load and replay devnet accounts or transactions offline.
 - [**Usage Examples**](./examples/): A variety of example projects that demonstrate how to use the features.
 - [**Example Shipstern Configuration**](./Shipstern.example.toml): Starter TOML file for pipeline configuration.
-- [**Generate Parsers from IDL**](./docs/codama-parser-generation.md): Generate a Shipstern parser from a Codama IDL with the `include_shipstern_parser!` macro, including how to declare self-CPI event envelopes in Codama.
+- [**Generate Parsers from IDL**](./docs/codama-parser-generation.md): Generate a Shipstern parser from an Anchor or Codama IDL with the `include_shipstern_parser!` macro, including how to declare self-CPI event envelopes in Codama.
+- [**Parse an Anchor Program**](./docs/anchor-idl-parser.md): Point the macro at an Anchor IDL, and fix the compile errors a bad one produces.
 
 ## Maintainers
 
