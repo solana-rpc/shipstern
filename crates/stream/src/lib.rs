@@ -67,14 +67,9 @@ impl<S: SourceTrait> Server<'_, S> {
 }
 
 impl<S: SourceTrait> Server<'_, S> {
-    /// Create a new Tokio runtime and run the Shipstern stream server within it,
-    /// terminating the current process if the runtime or gRPC server crash.
-    ///
-    /// For error handling, use the recoverable variant [`Self::try_run`].
-    ///
-    /// If you want to provide your own tokio Runtime because you need to run
-    /// async code outside of the Shipstern stream server, use the [`Self::run_async`]
-    /// method.
+    /// Create a Tokio runtime and run the Shipstern stream server in it, exiting the
+    /// process on error. See [`Self::try_run`] to handle errors and
+    /// [`Self::run_async`] to bring your own Tokio runtime.
     ///
     /// # Example
     ///
@@ -118,14 +113,9 @@ impl<S: SourceTrait> Server<'_, S> {
             .block_on(self.try_run_async())
     }
 
-    /// Run the Shipstern stream server asynchronously, terminating the current process
-    /// if the runtime or gRPC server crash.
-    ///
-    /// For error handling, use the recoverable variant [`Self::try_run_async`].
-    ///
-    /// If you don't need to run any async code outside the Shipstern stream server, you
-    /// can use the [`Self::run`] method instead, which takes care of creating
-    /// a tokio Runtime for you.
+    /// Run the Shipstern stream server on the current Tokio runtime, exiting the
+    /// process on error. See [`Self::try_run_async`] to handle errors and
+    /// [`Self::run`] to have a Tokio runtime created for you.
     ///
     /// # Example
     ///
@@ -142,7 +132,6 @@ impl<S: SourceTrait> Server<'_, S> {
     ///     instructions_parser::InstructionParser as PumpfunIxParser,
     ///     proto_def::DESCRIPTOR_SET as PUMP_DESCRIPTOR_SET,
     /// };
-    ///
     ///
     /// #[tokio::main]
     /// async fn main() {

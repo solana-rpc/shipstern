@@ -5,20 +5,14 @@ use shipstern_proto::prost::{Message, Name};
 
 use super::{Parser, ProgramParser};
 
-/// Defines a crate-local helper extension trait for implementing conversions
-/// from foreign types into foreign Protobuf message types
-///
-/// Invoking this macro defines a single helper trait:
+/// Defines a `pub(crate)` `IntoProto` trait for converting types from other
+/// crates into Protobuf messages:
 /// ```
 /// # use shipstern_core::shipstern_proto::prost::Message;
 /// pub(crate) trait IntoProto<T: Message + Send + Sync> {
 ///     fn into_proto(self) -> T;
 /// }
 /// ```
-/// This trait can be used to implement `.into_proto()` on types imported from
-/// another crate that are output by a crate-local parser.  The visibility is
-/// fixed at `pub(crate)` as this trait is not intended to be used as part of
-/// any public API.
 #[macro_export]
 macro_rules! proto_helper_traits {
     () => {

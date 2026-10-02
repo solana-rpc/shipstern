@@ -9,31 +9,12 @@ use crate::handler::{BoxPipeline, DynPipeline, PipelineErrors};
 #[cfg(feature = "prometheus")]
 use crate::metrics;
 
-/// Builds the instruction tree for a transaction **once** and dispatches every
+/// Builds the instruction tree for a transaction once and dispatches every
 /// instruction to every bundled sub-pipeline.
 ///
-/// The runtime bundles all registered instruction parsers behind a single
-/// `InstructionPipeline` so [`InstructionUpdate::build_from_txn`] -- which
-/// clones the transaction and rebuilds the CPI tree -- runs one time per
-/// transaction instead of once per parser.
-///
-/// # Dispatch semantics
-///
-/// Each instruction is handed to *every* sub-pipeline. Parsers self-filter by
-/// program id and return `ParseError::Filtered` for instructions they do not
-/// own (e.g. `ix.program.equals_ref(PROGRAM::ID)`), so a parser routinely sees
-/// instructions from unrelated programs and ignores them. This was already the
-/// case within a single matched transaction; bundling only widens the set of
-/// transactions reaching each parser to the union of their prefilters.
-///
-/// # Cost
-///
-/// Dispatch is `O(instructions x parsers)`: every parser's `parse` runs on every
-/// node of the tree, cheaply rejecting foreign programs. For large parser sets
-/// the next lever is indexing parsers by program id via the existing
-/// [`ProgramParser::program_id`](shipstern_core::ProgramParser::program_id), so each
-/// instruction only reaches the parser that owns its program; deferred to a
-/// follow-up.
+/// Parsers self-filter by program id and return `ParseError::Filtered` for
+/// foreign instructions, so dispatch is `O(instructions x parsers)`. Indexing by
+/// [`ProgramParser::program_id`](shipstern_core::ProgramParser::program_id) would cut that.
 ///
 pub struct InstructionPipeline(Box<[BoxPipeline<'static, InstructionUpdate>]>);
 
@@ -136,13 +117,9 @@ impl DynPipeline<TransactionUpdate> for InstructionPipeline {
     }
 }
 
-/// Dispatches instruction updates from a transaction to a **single** parser,
-/// rebuilding the instruction tree on each call.
-///
-/// The runtime bundles parsers behind [`InstructionPipeline`] instead, so this
-/// type is no longer on the hot path. It is retained as the public single-parser
-/// entrypoint and as regression coverage for the parse-error drop fixed in #260
-/// (see `single_instruction_pipeline_keeps_iterating_after_parse_error`).
+/// Dispatches instruction updates to a single parser, rebuilding the tree on
+/// each call. The runtime uses [`InstructionPipeline`]; this stays as the public
+/// single-parser entry point.
 ///
 pub struct SingleInstructionPipeline(BoxPipeline<'static, InstructionUpdate>);
 
@@ -383,10 +360,8 @@ mod tests {
 
     #[tokio::test]
     async fn instruction_pipeline_fans_out_to_all_bundled_parsers() {
-        // The builder bundles every instruction parser into one InstructionPipeline
-        // that builds the CPI tree once per transaction and fans each instruction
-        // out to all parsers. Two parsers over a two-instruction transaction should
-        // each handle both instructions from a single dispatch.
+        // Two parsers over a two-instruction transaction each handle both
+        // instructions from one dispatch.
         A_COUNT.store(0, Ordering::Relaxed);
         B_COUNT.store(0, Ordering::Relaxed);
 
@@ -452,12 +427,8 @@ mod tests {
 
     #[test]
     fn instruction_pipeline_merges_sub_parser_prefilters() {
-        // Bundling collapses N instruction parsers behind one gRPC subscription,
-        // so the bundle must advertise the *union* of every sub-parser's
-        // prefilter, not just the first one's. Guards against
-        // `TransactionPrefilter::merge` silently dropping a filter (see the
-        // prior merge-drop regression) which would make one parser's program go
-        // unsubscribed and its instructions never arrive.
+        // The bundle must advertise the union of every parser's prefilter, or one
+        // parser's program goes unsubscribed.
         let a: BoxPipeline<'static, InstructionUpdate> = Box::new(Pipeline::new(
             ProgramParser {
                 program: PROGRAM_A,

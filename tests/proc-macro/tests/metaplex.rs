@@ -1,10 +1,5 @@
-// Regression test for proc_macro_panic: metaplex token_metadata IDL contains
-// fields with MapTypeNode (e.g. a string→PayloadType map in rule sets). Without
-// the `T::Map(_) => Bytes` arm in `map_type()`, the proc-macro panicked with
-// "map_type not implemented for Map(...)".
-//
-// This IDL has no instructions — only accounts — so only AccountParser is
-// exercised here.
+// Regression: metaplex token_metadata has MapTypeNode fields, which used to panic
+// `map_type()`. Accounts only, no instructions.
 
 use shipstern_proc_macro::include_shipstern_parser;
 use shipstern_test_utils::check_protobuf_format;

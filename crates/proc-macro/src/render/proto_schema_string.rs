@@ -54,13 +54,8 @@ pub fn proto_schema_string(
         message_count += 1;
     }
 
-    // Build rename map for event types whose names collide with non-event types.
-    //
-    // Instruction and event types live in separate Rust modules (`instruction::`
-    // and `event::`), so there's no collision in Rust. But proto has a flat
-    // namespace — without renaming, the second definition gets silently dropped,
-    // causing the consumer to decode event payloads using the instruction schema
-    // (wrong field structure → "unexpected EOF").
+    // Proto has one flat namespace, so an event type named like an instruction
+    // type would be silently dropped. Rename the event side.
     let proto_rename = build_event_rename_map(schema);
 
     // Oneof parents are rendered separately below — skip them here to avoid duplicates.
@@ -175,12 +170,8 @@ pub fn proto_schema_string(
 
 /// Build a rename map for event types that collide with non-event types.
 ///
-/// When an IDL has both an instruction and an event with the same name
-/// (e.g. `withdraw`), the generated IR produces two sets of proto messages
-/// (`WithdrawAccounts`, `WithdrawArgs`, `Withdraw`) — one for instructions
-/// and one for events — with different field structures. In the flat proto
-/// namespace, these would collide. We prefix the event versions with `Evt`
-/// (e.g. `EvtWithdraw`, `EvtWithdrawAccounts`, `EvtWithdrawArgs`).
+/// An instruction and an event named alike (e.g. `withdraw`) emit messages that
+/// collide in the flat proto namespace, so the event ones get an `Evt` prefix.
 fn build_event_rename_map(schema: &SchemaIr) -> HashMap<&str, String> {
     let non_event_names: HashSet<&str> = schema
         .types

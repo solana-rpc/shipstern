@@ -295,12 +295,8 @@ impl<R> CoordinatorState<R> {
             self.buffer.remove(&slot);
         }
         self.prune_discarded_slots();
-        // Prune stale pending account counts behind the account flush frontier.
-        //
-        // IMPORTANT: do not use the instruction frontier here. In finalized
-        // account mode, instruction slots can flush much earlier than account
-        // gate freeze; pruning by instruction frontier can drop valid pending
-        // account-event counts and later freeze slots with expected_account_count=0.
+        // Prune by the account frontier, not the instruction one: in finalized mode
+        // instruction slots flush far earlier, and pruning by them drops valid counts.
         if let Some(last) = self.last_account_flushed_slot {
             self.account_event_counts.retain(|&s, _| s > last);
         }
@@ -433,19 +429,10 @@ impl<R> CoordinatorState<R> {
         );
     }
 
-    /// Remove discarded-slot entries far behind `last_flushed_slot`.
-    ///
-    /// Once a slot is flushed past a discarded slot, parent gap resolution no
-    /// longer needs that discarded marker. We still retain a short trailing
-    /// window because processed streams can deliver late transaction parse
-    /// results for non-canonical slots after the canonical frontier advanced.
-    /// Those tombstones let us drop stale fork/dead/untracked messages instead
-    /// of misclassifying them as two-gate violations.
-    ///
-    /// A hard cap remains as a safety net: if the set grows beyond
-    /// `MAX_DISCARDED_SLOTS` even after pruning (i.e. many discards ahead of
-    /// `last_flushed_slot`), we log a warning but do NOT evict — evicting could
-    /// permanently stall the pipeline.
+    /// Remove discarded-slot markers far behind `last_flushed_slot`, keeping a short
+    /// window so late parse results for non-canonical slots are still recognized.
+    /// Past `MAX_DISCARDED_SLOTS` it only warns, since evicting could stall the
+    /// pipeline.
     fn prune_discarded_slots(&mut self) {
         if let Some(last) = self.last_flushed_slot() {
             let min_retained = last.saturating_sub(Self::DISCARDED_SLOT_RETENTION_BEHIND_FLUSH);

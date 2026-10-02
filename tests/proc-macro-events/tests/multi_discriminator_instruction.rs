@@ -1,12 +1,7 @@
 //!
-//! Instructions must keep keying on their *first* discriminator only.
-//!
-//! The event-side chain logic added for CPI envelopes lives entirely in
-//! `extract_event_discriminator_{key,info}`; the shared privates that
-//! instructions go through still read `discriminators.first()`. This IDL puts
-//! both in one program: `doubleTagged` declares two constant discriminators and
-//! the events declare a `0xfe` envelope, so a chain leaking into the instruction
-//! path would change the result here.
+//! Instructions keep keying on their first discriminator only, even with a
+//! `0xfe` event envelope in the same program, so the event-side chain logic
+//! can't leak into the instruction path.
 //!
 
 use std::sync::Arc;

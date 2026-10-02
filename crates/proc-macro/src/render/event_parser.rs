@@ -75,16 +75,9 @@ pub fn event_parser(
 
     let resolve_events_from_logs = quote! {
         ///
-        /// Resolve events from `"Program data: "` transaction log lines
-        /// emitted while this program is actively executing.
-        ///
-        /// For each matching line, base64-decodes the payload and runs it
-        /// through the event discriminator matching.
-        ///
-        /// Returns successfully parsed events; lines that don't match any
-        /// discriminator are silently skipped. Nested CPI log lines from
-        /// other programs are ignored even if their event discriminators
-        /// collide with this program's events.
+        /// Resolve events from this program's own `Program data:` log lines. Lines
+        /// matching no discriminator are skipped, and nested CPI lines from other
+        /// programs are ignored even when their discriminators collide.
         ///
         pub fn resolve_events_from_logs(
             logs: &[String],

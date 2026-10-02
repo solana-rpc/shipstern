@@ -62,14 +62,9 @@ pub struct YellowstoneGrpcConfig {
     #[arg(long, env)]
     pub from_slot: Option<u64>,
 
-    /// Receive only a window of each account's data instead of all of it.
-    ///
-    /// Applies to the whole subscription rather than to one parser, which is
-    /// why it lives here and not on a `Prefilter`. Each entry is an
-    /// `{ offset, length }` pair; the server returns those bytes for every
-    /// account update on this connection. The windows must be given in
-    /// ascending order of offset and must not overlap, which is checked on
-    /// connect.
+    /// Receive only these `{ offset, length }` windows of each account's data. It
+    /// applies to the whole subscription, so it lives here and not on a `Prefilter`.
+    /// Windows must be ascending and non-overlapping, checked on connect.
     ///
     #[arg(skip)]
     #[serde(default)]
@@ -83,13 +78,9 @@ pub struct YellowstoneGrpcConfig {
 
     /// Enable the client's built-in auto-reconnect on the gRPC stream.
     ///
-    /// When enabled, the stream reconnects with exponential backoff after a
-    /// transient failure, resumes from the last seen slot, and deduplicates
-    /// replayed events. The server must have `replay_stored_slots` configured
-    /// for gap-free recovery.
-    ///
-    /// Defaults to `true`: a config file omitting this key (including ones that
-    /// predate the field) gets auto-reconnect. Set to `false` to opt out.
+    /// The stream reconnects with backoff, resumes from the last seen slot, and
+    /// dedups replayed events; gap-free recovery needs `replay_stored_slots` on the
+    /// server. Defaults to `true`, including for configs that omit the key.
     #[arg(long, env, default_value_t = true)]
     #[serde(default = "default_auto_reconnect")]
     pub auto_reconnect: bool,
@@ -110,12 +101,8 @@ pub struct YellowstoneGrpcConfig {
 }
 
 impl YellowstoneGrpcConfig {
-    /// Check the settings the server would refuse the whole subscription over.
-    ///
-    /// Called before dialing so a bad data-slice window surfaces as a startup
-    /// error naming the offending window, rather than as a stream that dies on
-    /// subscribe. An embedder can call it earlier, as soon as the config is
-    /// loaded.
+    /// Check the settings the server would refuse the whole subscription over, so a
+    /// bad data-slice window fails at startup instead of on subscribe.
     ///
     /// # Errors
     ///
@@ -126,11 +113,8 @@ impl YellowstoneGrpcConfig {
         AccountsDataSlice::validate_all(&self.accounts_data_slice)
     }
 
-    /// Build the auto-reconnect config from the user-facing flags.
-    ///
-    /// Uses sturdier backoff defaults than the client library (see
-    /// [`DEFAULT_RECONNECT_MAX_RETRIES`] and friends); `reconnect_max_retries`
-    /// and `reconnect_slot_retention` override the retry count and dedup window.
+    /// Build the auto-reconnect config from the user-facing flags, with sturdier
+    /// backoff defaults than the client library.
     ///
     /// Example output:
     /// ```rust, ignore
@@ -143,12 +127,9 @@ impl YellowstoneGrpcConfig {
     /// assert_eq!(rc.backoff.multiplier, 2.0);
     /// ```
     ///
-    /// Returns `None` when auto-reconnect is disabled, and when it is on with
-    /// a retry budget of zero, which the client library treats the same way:
-    /// it stops on the first stream error instead of reconnecting. Callers
-    /// decide whether a rejected request can be recovered from this returning
-    /// `Some`, so the two have to agree or a set is held for a recovery that
-    /// cannot arrive.
+    /// Returns `None` when auto-reconnect is off or the retry budget is zero, which
+    /// the client treats the same way. Callers use this to decide whether a
+    /// rejected request can be held for recovery.
     pub fn reconnect_config(&self) -> Option<ReconnectConfig> {
         if !self.auto_reconnect {
             return None;
@@ -255,22 +236,12 @@ enum SendAttempt {
 /// How often a filter set held after a sink rejection is retried.
 const RETRY_HELD_FILTERS_EVERY: Duration = Duration::from_secs(5);
 
-/// Send `filters` to the server, handing it back unsent when the sink rejects
-/// it and a later retry can still land. A `Some` return is a set still owed to
-/// the server, not a failure.
+/// Send `filters` to the server, handing it back unsent when the sink rejects it
+/// and a retry can still land. `Some` means a set still owed, not a failure.
 ///
-/// A rejection means the request channel is disconnected. With auto-reconnect
-/// enabled, which is the default, that is a transient reconnect window rather
-/// than a fatal error: the stream yields nothing during it and the client
-/// library swaps a fresh sender into this sink once it recovers. Dropping the
-/// set here would lose it silently, because the sink only records a request
-/// into its reconnect state after a successful send, so the reconnect would
-/// resubscribe with the previous filters.
-///
-/// That swap is the only thing that revives a rejected sink, and it belongs to
-/// the reconnect connector. Without one the sink stays disconnected for the
-/// rest of the run, so the set is dropped rather than held for a recovery that
-/// cannot arrive.
+/// A rejection means the channel is disconnected. With auto-reconnect the client
+/// later swaps in a fresh sender, so the set is held; without it nothing can
+/// recover, so the set is dropped.
 ///
 async fn send_or_hold<S>(
     sink: &mut S,
@@ -486,10 +457,8 @@ impl YellowstoneGrpcSource {
 
                 update = next_filter_update(&mut filter_updates_rx) => {
                     let Some(filters) = update else {
-                        // Every handle is gone, so retire the branch for the
-                        // rest of the connection. `Runtime::handle` borrows the
-                        // runtime and every `run` consumes it, so no further
-                        // handle can be taken: this is permanent for the run.
+                        // Every handle is gone and no new one can be taken, so retire this
+                        // branch for the rest of the run.
                         tracing::debug!(
                             "Last runtime handle dropped, filter updates are off for this run"
                         );

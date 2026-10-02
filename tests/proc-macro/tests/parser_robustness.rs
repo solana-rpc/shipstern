@@ -1,18 +1,8 @@
 //!
-//! Robustness of the generated parsers against untrusted input.
-//!
-//! A parser built by `include_shipstern_parser!` runs on bytes taken straight off
-//! the wire, so every length guard it emits has to hold for buffers the IDL never
-//! described: short ones, long ones, and ones that are simply wrong. The contract
-//! exercised here is narrow and total — return `Ok` or `Err`, never panic — which
-//! in Rust also rules out an over-read, since a slice past the end aborts.
-//!
-//! Two IDLs are driven, because one is not enough to reach what matters.
-//! `discriminator_guards` carries a size-only arm and a zero-width one, and the
-//! zero-width arm matches `data.get(0..0)` for every buffer, so it shadows every
-//! account arm behind it and no real byte window is ever sliced. `truncation_guards`
-//! has no zero-width arm: its windows, 8 bytes at offset 0 and 4 at offset 8, are
-//! what actually exercise truncation on the account side.
+//! Generated parsers run on untrusted bytes, so every length guard must return
+//! `Ok` or `Err` for short, long and wrong buffers, never panic. `truncation_guards`
+//! is driven too because `discriminator_guards` has a zero-width arm that
+//! shadows every real account window.
 //!
 
 use shipstern_proc_macro::include_shipstern_parser;
@@ -182,13 +172,8 @@ fn truncated_buffers_never_panic() {
 }
 
 ///
-/// Account arms with a real byte window, truncated through that window.
-///
-/// This is the case `discriminator_guards` cannot reach. Its zero-width arm matches
-/// `data.get(0..0)` for every buffer and returns before any later arm is tried, so the
-/// one arm behind it that slices a real window is dead code. Both arms here slice a
-/// declared window, so a guard that checks a length and then indexes past it fails on
-/// exactly the prefixes in between.
+/// Account arms with a real byte window, truncated through it: a guard that
+/// checks a length and then indexes past it fails on the prefixes in between.
 ///
 #[test]
 fn account_windows_are_truncated_without_panicking() {
@@ -316,23 +301,9 @@ fn short_account_vectors_never_panic() {
 }
 
 ///
-/// Trailing bytes are **accepted**, not rejected. This pins that, deliberately.
-///
-/// The generated arms decode with `BorshDeserialize::deserialize(&mut &data[..])`,
-/// which reads the prefix it needs and ignores whatever follows; rejecting the
-/// remainder would need `try_from_slice`. So a parse is not proof that the buffer
-/// held exactly one canonically encoded value, and a consumer that needs that
-/// guarantee has to check the length itself.
-///
-/// The account assertion below rides the zero-width arm in this IDL rather than the
-/// borsh prefix rule: the 9-byte buffer matches `sizedOnly` on length, and appending
-/// 8 bytes makes it miss that arm and fall into the zero-width one. The instruction
-/// assertion is the one that pins the prefix behaviour.
-///
-/// This is characterisation, not endorsement: the behaviour predates this test
-/// and is load-bearing for accounts whose declared layout is a prefix of the real
-/// account. Pinning it means a future move to canonical decoding shows up here as
-/// a deliberate change rather than a silent one.
+/// Trailing bytes are accepted, not rejected: arms decode with
+/// `deserialize(&mut &data[..])`, which reads only the prefix it needs. This
+/// pins existing behaviour so a move to canonical decoding is deliberate.
 ///
 #[test]
 fn trailing_bytes_are_accepted_today() {

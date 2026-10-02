@@ -283,13 +283,9 @@ fn check_json_serialization() {
 }
 
 ///
-/// Numeric constant discriminators, the one branch where the discriminator byte
-/// is *not* stripped: the parser deserializes from `data[..]`, so byte 0 is
-/// re-read as the `account_type` borsh enum tag (16 = RealmV2, 14 = ProposalV2).
-///
-/// `DISCRIMINATOR` is therefore a memcmp predicate only. Slicing past
-/// `DISCRIMINATOR_OFFSET + DISCRIMINATOR.len()` and deserializing would drop the
-/// first field. Decode with `try_unpack`, as `parse_proposal_v2_account` does.
+/// Numeric discriminators are not stripped: byte 0 is re-read as the
+/// `account_type` enum tag, so `DISCRIMINATOR` is only a memcmp predicate.
+/// Decode with `try_unpack`.
 ///
 #[test]
 fn exposes_numeric_account_discriminators() {

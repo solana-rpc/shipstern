@@ -517,13 +517,9 @@ async fn fetch_fixture<P: ProgramParser>(
     }
 }
 
-/// Params for the `getTransaction` call that backs a signature fixture.
-///
-/// `maxSupportedTransactionVersion` is the JSON-RPC version ceiling: the node
-/// refuses to return any transaction newer than it. It sat at `0` from before
-/// V1 existed, which would make a V1 fixture unfetchable. It is not a
-/// deliberate V0-only constraint, so it tracks the newest version shipstern
-/// can parse.
+/// Params for the `getTransaction` call behind a signature fixture. The version
+/// ceiling tracks the newest version shipstern parses, since the node refuses
+/// any transaction newer than the ceiling.
 fn get_transaction_params(signature: &str) -> serde_json::Value {
     json!([signature, {
         "encoding": "json",

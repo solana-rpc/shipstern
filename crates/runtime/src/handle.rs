@@ -12,14 +12,9 @@ pub enum FilterUpdateError {
     /// is left to apply the set.
     #[error("the runtime is no longer running")]
     Closed,
-    /// The set names a parser no pipeline on this runtime is registered for.
-    /// The server would stream that data and the runtime would discard all of
-    /// it, so the update is refused before anything is sent.
-    ///
-    /// Only the name is checked, not the kind of prefilter carried under it.
-    /// A prefilter whose kind does not match the pipeline registered for that
-    /// name still reaches the wire, and the runtime discards those updates the
-    /// same way, silently.
+    /// The set names a parser no pipeline is registered for, so nothing is sent.
+    /// Only the name is checked: a prefilter of the wrong kind still reaches the
+    /// wire, and the runtime drops its updates.
     #[error("no pipeline registered for parser `{0}`")]
     UnknownParser(String),
 }
@@ -71,12 +66,10 @@ impl FilterState {
 /// A handle onto a [`Runtime`](crate::Runtime) for changing its subscription
 /// while it runs.
 ///
-/// [`Runtime::run`](crate::Runtime::run) and its variants take the runtime by
-/// value, so take the handle with [`Runtime::handle`](crate::Runtime::handle)
-/// first. It exists only for sources implementing
-/// [`FilterUpdateSource`](crate::sources::FilterUpdateSource). Handles are
-/// cheap to clone, share one view of the filters, and work from async and
-/// plain threads alike since nothing here awaits.
+/// Take it with [`Runtime::handle`](crate::Runtime::handle) before running, since
+/// the run methods consume the runtime. Only sources implementing
+/// [`FilterUpdateSource`](crate::sources::FilterUpdateSource) have one. Handles are
+/// cheap to clone, share one view of the filters, and never await.
 ///
 /// ```rust, ignore
 /// let runtime = Runtime::<YellowstoneGrpcSource>::builder()
@@ -96,37 +89,17 @@ impl FilterState {
 ///
 /// # Semantics
 ///
-/// - Every update sends the complete set and replaces the live subscription,
-///   which is what gRPC servers do with a mid-stream request.
-/// - Keys are parser IDs, and only IDs with a registered pipeline are
-///   accepted. Take them from [`Parser::id`](shipstern_core::Parser::id),
-///   except for instruction parsers: the runtime bundles them all behind one
-///   [`InstructionPipeline`](crate::instruction::InstructionPipeline), so the
-///   set holds a single entry under
-///   [`InstructionPipeline::ID`](crate::instruction::InstructionPipeline::ID)
-///   whose prefilter is the union of theirs. Naming an individual instruction
-///   parser is refused as unknown. Acceptance is judged against the registered
-///   set, not the current one, so a key dropped by [`Filters::remove`] stays
-///   acceptable and can be merged back even though
-///   [`filters`](Self::filters) no longer lists it;
-///   [`reset_filters`](Self::reset_filters) restores the full registered set.
-/// - `Ok(())` means the set was handed to the source, not that the server
-///   applied it. Handlers keep seeing updates matching the old set until the
-///   already-queued backlog drains, roughly however far behind the pipeline
-///   was at the time. The source awaits that same buffer inside the loop that
-///   watches for updates, so while it is full the request has not reached the
-///   server either.
-/// - Only the newest set matters. Two updates in quick succession may reach
-///   the source as the second alone, and a set rejected while the source is
-///   between connections is retried once the stream recovers. With
-///   auto-reconnect off there is nothing to recover into, so such a set is
-///   dropped with a warning while [`filters`](Self::filters) still reports it.
-/// - A set the server refuses comes back on the stream, not on the sink. A
-///   terminal status code ends the run, and under `run` and `run_async` that
-///   exits the process. A recoverable one, `ResourceExhausted` among them,
-///   does not: the client resubscribes with the same refused set and repeats,
-///   so an unacceptable set can leave the runtime reconnecting rather than
-///   stopping.
+/// - Every update sends the complete set and replaces the live subscription.
+/// - Keys are parser IDs with a registered pipeline. Instruction parsers share one
+///   entry under [`InstructionPipeline::ID`](crate::instruction::InstructionPipeline::ID).
+///   A key dropped by [`Filters::remove`] can be merged back.
+/// - `Ok(())` means the source has the set, not that the server applied it.
+///   Handlers see the old set until the queued backlog drains.
+/// - Only the newest set is sent. A set rejected between connections is retried
+///   once the stream recovers, or dropped with a warning if auto-reconnect is off.
+/// - A refusal arrives on the stream. A terminal code ends the run; a
+///   recoverable one, like `ResourceExhausted`, resubscribes with the same set
+///   and can keep looping.
 #[derive(Debug, Clone)]
 pub struct RuntimeHandle {
     state: Arc<FilterState>,
@@ -136,13 +109,8 @@ impl RuntimeHandle {
     pub(crate) fn new(state: Arc<FilterState>) -> Self { Self { state } }
 
     /// The last filter set published for the source, seeded from the registered
-    /// pipelines.
-    ///
-    /// This leads what the server is serving, and by an unbounded amount when
-    /// the sink is between connections: the source may not have read the slot
-    /// yet, a rejected set can sit in the retry queue across a reconnect, and
-    /// a set still unsent when the connection ends is logged and lost. Judge a
-    /// live subscription by what the handlers receive, not by this.
+    /// pipelines. It can run ahead of what the server serves, so judge a live
+    /// subscription by what the handlers receive.
     ///
     /// ```rust, ignore
     /// let owners = handle
@@ -157,11 +125,8 @@ impl RuntimeHandle {
 
     /// Edit the live filter set in place and send the result.
     ///
-    /// `edit` sees a copy of the current set, and the result replaces the
-    /// subscription. Concurrent calls from any handle are applied one after
-    /// another, so no edit is lost. `edit` runs while that lock is held, so it
-    /// must not call back into `update_filters` on this handle or any clone of
-    /// it; doing so deadlocks the calling thread.
+    /// Concurrent calls apply one after another, so no edit is lost. `edit` runs
+    /// under that lock, so calling `update_filters` from inside it deadlocks.
     ///
     /// ```rust, ignore
     /// handle.update_filters(|filters| {
@@ -190,12 +155,8 @@ impl RuntimeHandle {
         edit(&mut next);
         self.state.validate(&next)?;
 
-        // A `watch` send publishes whether or not the value changed, and the
-        // source turns anything published into a fresh subscribe request. An
-        // edit that changed nothing would make the server tear down and
-        // re-apply the whole set for no reason, so it is dropped here. Safe to
-        // read before writing because the update lock is held, and the source
-        // only ever reads the slot.
+        // Every `watch` send becomes a fresh subscribe request, so skip an edit that
+        // changed nothing. Reading first is safe because the update lock is held.
         if *self.state.filter_updates_tx.borrow() == next {
             return if self.state.filter_updates_tx.receiver_count() == 0 {
                 Err(FilterUpdateError::Closed)
@@ -212,12 +173,9 @@ impl RuntimeHandle {
             .map_err(|_| FilterUpdateError::Closed)
     }
 
-    /// Replace the whole subscription with `filters`.
-    ///
-    /// For a set built from scratch. Reading [`Self::filters`] and sending the
-    /// result back reads outside the lock, so two callers doing that lose one
-    /// of the two edits; use [`Self::update_filters`] for anything that starts
-    /// from the current set.
+    /// Replace the whole subscription with `filters`. For edits that start from the
+    /// current set use [`Self::update_filters`]: reading [`Self::filters`] and
+    /// sending it back can lose a concurrent edit.
     ///
     /// ```rust, ignore
     /// handle.send_filter_update(Filters::new(rebuilt))?;

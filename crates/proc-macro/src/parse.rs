@@ -126,14 +126,9 @@ fn constant_discriminator_bytes(
 }
 
 ///
-/// Infer the CPI event envelope declared by a single event, if any.
-///
-/// `Ok(None)` means no envelope: a single discriminator, or any non-constant
-/// one in the chain. Those events keep their existing meaning and stay
-/// matchable from `Program data:` log lines, which carry no envelope.
-///
-/// `Err` is reserved for chains that look enveloped but cannot be honored, so
-/// an ambiguous IDL fails the build rather than parsing arbitrarily.
+/// Infer the CPI event envelope declared by a single event, if any. `Ok(None)`
+/// means none, so the event stays matchable from `Program data:` logs; `Err`
+/// is for chains that look enveloped but can't be honored.
 ///
 pub fn envelope_of(event: &codama_nodes::EventNode) -> Result<Option<CpiEventEnvelope>, String> {
     let mut constants = Vec::with_capacity(event.discriminators.len());
@@ -356,15 +351,9 @@ impl ProgramEnvelope {
 }
 
 ///
-/// The instruction an envelope tag would mask, if any.
-///
-/// The parser filters instructions whose data starts with the tag before it
-/// dispatches, so one sharing a prefix with the tag at offset 0 can never be
-/// parsed. Anchor's dispatcher checks the sentinel after every instruction, so
-/// this drops real instructions rather than being a theoretical clash.
-///
-/// A collision is either sequence prefixing the other at offset 0, equality
-/// included. Only offset 0 counts, because that is what `starts_with` compares.
+/// The instruction an envelope tag would mask, if any. The parser drops data
+/// starting with the tag before dispatch, so an instruction sharing that prefix
+/// at offset 0 (either way, equality included) can never be parsed.
 ///
 pub fn envelope_instruction_collision(
     discriminator: &[u8],
@@ -651,14 +640,8 @@ mod tests {
     }
 
     ///
-    /// codama owns the origin invariant from 0.13 on, so the macro does not
-    /// re-check it.
-    ///
-    /// `origin` was a free-form `Option<String>` on codama 0.9, which meant a
-    /// generator-specific value deserialized and was then silently dropped. It is
-    /// a closed enum now, so the same IDL fails to parse and the message names
-    /// both the offending value and the accepted set. A wrapper check here would
-    /// only restate that, worse.
+    /// codama owns the `origin` invariant from 0.13 on: it is a closed enum, so a
+    /// bad value fails to parse with a message naming the accepted set.
     ///
     #[test]
     fn codama_rejects_an_unknown_program_origin() {

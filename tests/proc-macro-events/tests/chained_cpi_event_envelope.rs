@@ -1,14 +1,7 @@
 //!
-//! Coverage for an event whose discriminator chain has more than two links and
-//! a real gap between them.
-//!
-//! The IDL declares envelope `fe`@0, then `a1a2`@4 and `b7`@8, so
-//! `payload_offset` is 4 and the rebased layout is `a1a2`@0, a two-byte gap,
-//! `b7`@4. The payload therefore begins at rebased offset 5, after the last
-//! discriminator, not after the first, which a contiguous layout would put at 2.
-//!
-//! The gap bytes are `cc cc` rather than zeroes so that reading the payload from
-//! any wrong offset decodes to a different `u64` instead of a plausible one.
+//! An event chain with a gap: envelope `fe`@0, then `a1a2`@4 and `b7`@8, so the
+//! payload starts after the last discriminator (rebased offset 5), not the first.
+//! The gap bytes are `cc cc` so reading from a wrong offset decodes a wrong `u64`.
 //!
 
 use std::sync::Arc;

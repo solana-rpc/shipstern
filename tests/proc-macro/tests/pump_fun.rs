@@ -148,14 +148,9 @@ fn exposes_instruction_discriminators() {
 }
 
 ///
-/// Every emitted instruction constant must be recognised by the matcher.
-///
-/// The constant is built by `extract_ix_discriminator_key` + `to_bytes_offset`,
-/// while the parser matches through `extract_discriminator_info`, two separate
-/// decode paths. Driving `resolve_instruction_default` with a buffer built from
-/// each constant proves they agree: a mismatch surfaces as
-/// `DiscriminatorNotFound`. Argument deserialization is expected to fail on
-/// these synthetic buffers; only the discriminator verdict is asserted.
+/// Every emitted instruction constant must be recognised by the matcher, which
+/// decodes discriminators on a separate path. Only the discriminator verdict
+/// is asserted; args fail on these synthetic buffers.
 ///
 #[test]
 fn every_instruction_const_is_recognised_by_the_matcher() {
@@ -385,14 +380,8 @@ async fn instruction_const_matches_real_mainnet_bytes() {
 }
 
 ///
-/// Hostile buffers against a real Anchor IDL.
-///
-/// `parser_robustness.rs` drives synthetic fixtures; this drives the one already
-/// expanded in this binary, so it adds no compile time. pump_fun is the IDL that
-/// closes the two gaps those fixtures leave: all six accounts carry an 8-byte
-/// discriminator at offset 0 with no zero-width or size-only arm, so `try_unpack`
-/// walks a real byte window, and the instructions declare real account lists, so a
-/// short account vector actually reaches a generated accessor.
+/// Hostile buffers against a real Anchor IDL, with real 8-byte account windows
+/// and real account lists that the synthetic fixtures don't have.
 ///
 #[test]
 fn hostile_buffers_never_panic() {

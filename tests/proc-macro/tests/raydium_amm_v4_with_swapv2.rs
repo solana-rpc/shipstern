@@ -15,14 +15,8 @@ fn check_protobuf_schema() {
 }
 
 ///
-/// Demonstrates using CustomInstructionParser with a resolver that handles
-/// the 17-account SwapBaseIn variant (where ammTargetOrdersDeprecated is omitted).
-///
-/// The IDL defines two variants:
-///   - `swapBaseIn` (18 accounts, includes ammTargetOrdersDeprecated)
-///   - `swapBaseInCompact` (17 accounts, without the deprecated account)
-///
-/// Both share the same discriminator (0x09). The resolver disambiguates by account count.
+/// A CustomInstructionParser resolver telling `swapBaseIn` (18 accounts) from
+/// `swapBaseInCompact` (17) by account count; both use discriminator 0x09.
 ///
 #[tokio::test]
 async fn parse_swap_base_in_with_custom_resolver() {

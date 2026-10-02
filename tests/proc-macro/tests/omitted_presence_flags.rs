@@ -1,13 +1,7 @@
 //!
-//! An IDL that omits `fixed` and `isOptional`, the way Codama's JavaScript
-//! serializes them when they hold their default.
-//!
-//! codama 0.9 typed both `bool` with `#[serde(default)]`, so absent meant
-//! `false`. codama 0.13 types them `Option<bool>`, so absent means `None`, and
-//! the macro reads that as `.unwrap_or(false)`. Every other fixture in this
-//! repository states both flags, so without this one the corpus never generates
-//! a parser from the absent form and that equality is only covered by the
-//! synthetic cases in `field_presence_tests`.
+//! An IDL that omits `fixed` and `isOptional`, as Codama's JS does for defaults.
+//! It's the only fixture generating a parser from the absent form, which codama
+//! 0.13 reads as `None` and the macro as `false`.
 //!
 
 use shipstern_proc_macro::include_shipstern_parser;

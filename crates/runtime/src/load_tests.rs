@@ -1,11 +1,7 @@
-//! Synthetic load harness for the runtime buffer: drives the pool in-process
-//! with no I/O, since a live stream mostly measures the upstream, not us.
-//!
-//! No abort case here: the permit is taken before the send, so there's no
-//! backlog for an abort to discard. See
-//! `runtime_tests::edge_abort_discards_queued_and_returns_promptly` instead.
-//!
-//! `#[ignore]`d: slow, and the timing asserts aren't for shared runners.
+//! Synthetic load harness for the runtime buffer, in-process with no I/O.
+//! There is no abort case because the permit is taken before the send; see
+//! `runtime_tests::edge_abort_discards_queued_and_returns_promptly`. Ignored:
+//! slow, with timing asserts that don't suit shared runners.
 //!
 //! ```sh, ignore
 //! cargo test -p shipstern --lib --release load_ -- --ignored --nocapture

@@ -1,11 +1,5 @@
-// Regression test for type_name_conflict: glow.json declares both an account
-// and a defined type named `MarginAccount`. Without the fix in
-// `rust_types_from_ir` (skipping DefinedTypes shadowed by an Account of the
-// same name), this file would fail to compile with E0428 ("MarginAccount is
-// defined multiple times").
-//
-// This IDL has no instructions — only accounts — so only AccountParser is
-// exercised here.
+// Regression: glow.json declares an account and a defined type both named
+// `MarginAccount`, which used to fail with E0428. Accounts only, no instructions.
 
 use shipstern_proc_macro::include_shipstern_parser;
 use shipstern_test_utils::check_protobuf_format;

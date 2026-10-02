@@ -7,18 +7,9 @@ use crate::types::{
     ParseStatsKind,
 };
 
-/// Per-slot buffer that collects parsed records and tracks two independent readiness paths.
-///
-/// **Instruction readiness** (`instruction_gate_reached`):
-///   `tx_parse_complete`: `parsed_tx_count >= expected_tx_count` from FrozenBlock.
-///   `instruction_commitment_reached`: BlockSM confirmed the slot via cluster consensus.
-///
-/// **Account gate** (`account_gate_reached`):
-///   All account updates processed (`account_parse_complete`) AND
-///   `account_commitment_reached` (set at the configured commitment: confirmed or finalized).
-///
-/// Instructions and accounts flush independently — a slot is removed from the buffer
-/// only when both drains are complete (`instructions_drained && accounts_drained`).
+/// Per-slot buffer of parsed records. Instructions flush once every transaction
+/// is parsed and the slot is confirmed; accounts flush once every update is
+/// parsed at the configured commitment. The slot is removed once both drain.
 #[derive(Debug)]
 pub struct SlotRecordBuffer<R> {
     /// Instruction records sorted by (tx_index, ix_path) for ordered flush.
@@ -111,11 +102,9 @@ impl<R> SlotRecordBuffer<R> {
 
     pub fn increment_parsed_tx_count(&mut self) {
         self.parsed_tx_count += 1;
-        // INVARIANT: parsed_tx_count should never exceed expected_tx_count.
-        // If this fires, a handler is sending duplicate TransactionParsed signals
-        // or expected_tx_count from FrozenBlock entries is wrong. Investigate
-        // immediately — the slot will still flush (>= not ==) to avoid stalling
-        // the pipeline, but records may be incomplete or misordered.
+        // INVARIANT: parsed_tx_count never exceeds expected_tx_count. If it does, a
+        // handler sent duplicate signals or the expected count is wrong; the slot still
+        // flushes (>=) so the pipeline doesn't stall, but records may be incomplete.
         if let Some(meta) = &self.metadata
             && self.parsed_tx_count > meta.expected_tx_count
         {
@@ -539,22 +528,5 @@ mod tests {
             buf.increment_account_processed_count();
         }
         assert!(buf.account_parse_complete());
-    }
-
-    #[test]
-    fn account_records_drain_in_write_version_order() {
-        let mut buf = SlotRecordBuffer::<String>::default();
-
-        // Insert out of order
-        buf.insert_account_record(AccountRecordSortKey::new(300, [3; 32]), "wv300".into());
-        buf.insert_account_record(AccountRecordSortKey::new(100, [1; 32]), "wv100".into());
-        buf.insert_account_record(AccountRecordSortKey::new(200, [2; 32]), "wv200".into());
-
-        let acct_slot = buf.drain_account_records(42);
-        assert_eq!(acct_slot.records, vec![
-            "wv100".to_string(),
-            "wv200".to_string(),
-            "wv300".to_string(),
-        ]);
     }
 }

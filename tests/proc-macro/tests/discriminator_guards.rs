@@ -24,16 +24,10 @@ fn well_formed_ix_const_is_matchable() {
 }
 
 ///
-/// `widthMismatchIx` declares `fixedSize: 8` but a 4-byte default, so its match
-/// arm slices `data[0..8]` and compares against 4 bytes, so it can never match.
-/// No constant is emitted for it; referencing
-/// `Instructions::WIDTH_MISMATCH_IX_DISCRIMINATOR` here would fail to compile.
-///
-/// The same holds for the three accounts in this IDL: `sizedOnly`
-/// (size discriminator), `emptyDiscriminator` (zero-length, matches anything),
-/// and `widthMismatch` (8-byte field, 4-byte default). Absence is enforced at
-/// compile time, so this test only pins the behavior that is observable: that
-/// the parser still works for the accounts it can match.
+/// Arms that can never match get no constant: `widthMismatchIx` (8-byte field,
+/// 4-byte default) and the `sizedOnly`, `emptyDiscriminator` and `widthMismatch`
+/// accounts. That is checked at compile time, so this only checks the accounts
+/// that can match still parse.
 ///
 #[test]
 fn guarded_accounts_still_parse() {

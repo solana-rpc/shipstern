@@ -448,18 +448,9 @@ mod expansion_tests {
 #[cfg(test)]
 mod literal_width_tests {
     ///
-    /// Integer suffixes that pin a generated literal to one width.
-    ///
-    /// A suffixed literal only compiles where that exact type is expected, so
-    /// emitting one hard-codes an assumption about how wide codama happens to
-    /// make a count, size or offset field.
-    ///
-    /// Deliberately limited to the widths a codama count, size or offset can
-    /// reach. `u32` is excluded because prost field tags are `u32` by the
-    /// protobuf spec and are numbered from field order, never from a node, so
-    /// under the `proto` feature the generated code carries tens of thousands of
-    /// legitimately suffixed `u32` literals. Including it would make this assert
-    /// on something that is neither wrong nor ours to change.
+    /// Integer suffixes that pin a generated literal to one width. `u32` is left
+    /// out: prost field tags are `u32` by spec, so the `proto` feature emits tens
+    /// of thousands of legitimate `u32` literals.
     ///
     const WIDTH_SUFFIXES: [&str; 4] = ["usize", "isize", "u64", "i64"];
 
@@ -515,17 +506,9 @@ mod literal_width_tests {
     }
 
     ///
-    /// No generated parser may contain a width-pinned integer literal.
-    ///
-    /// Counts, sizes and offsets reach `quote!` as plain integers, and bare
-    /// interpolation renders those *suffixed*: `558usize` today, `558u64` the
-    /// day codama widens the field. The generated code indexes `data` and
-    /// declares `usize` consts, so the suffixed form stops compiling on that
-    /// bump even though the IDL never changed.
-    ///
-    /// Asserting over the whole fixture corpus is what makes this a guard
-    /// rather than a spot check: a new interpolation site added anywhere in the
-    /// renderer fails here the first time a fixture exercises it.
+    /// No generated parser may contain a width-pinned integer literal: `558usize`
+    /// stops compiling the day codama widens the field to `u64`. Checking the whole
+    /// fixture corpus catches a new interpolation site the first time it is used.
     ///
     #[test]
     fn generated_parsers_contain_no_width_pinned_literals() {
@@ -688,10 +671,8 @@ mod field_presence_tests {
     }
 
     fn expand_with(option_flag: &str, account_flag: &str) -> String {
-        // One directory per call. Keying the name on the flag lengths stopped being
-        // injective once a flag reached 31 characters, and libtest runs these cases on
-        // threads of one process, so two colliding cases shared a file and the equality
-        // assertion passed without proving anything.
+        // One directory per call: names keyed on flag lengths collided once a flag
+        // reached 31 characters, and colliding cases passed without proving anything.
         static CASE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
         let dir = std::env::temp_dir().join(format!(
@@ -714,13 +695,9 @@ mod field_presence_tests {
     }
 
     ///
-    /// An absent `fixed` must deserialize the same as an explicit `false`.
-    ///
-    /// codama 0.9 types the field `bool` with `#[serde(default)]`, so absent is
-    /// `false`. codama 0.13 retypes it `Option<bool>`, where absent is `None` and
-    /// the migration shim reads it as `.unwrap_or(false)`. This pins the 0.9 half
-    /// of that equality: if absent ever stopped meaning `false` here, the shim
-    /// would silently change every layout that omits the flag.
+    /// An absent `fixed` must deserialize the same as an explicit `false`, since the
+    /// codama 0.13 shim reads `None` as `false`. Otherwise every layout that omits
+    /// the flag would silently change.
     ///
     #[test]
     fn absent_fixed_deserializes_as_false() {
@@ -802,13 +779,9 @@ mod field_presence_tests {
     }
 
     ///
-    /// The presence distinction has to survive all the way to the emitted parser,
-    /// not just to the node.
-    ///
-    /// Deserializing absent as `false` is only meaningful if the renderer then
-    /// lays the bytes out identically. Comparing whole token streams covers the
-    /// layout decisions that read these flags — the fixed-option padding branch
-    /// and the optional-account branch — without asserting on their internals.
+    /// The presence distinction must survive into the emitted parser. Comparing
+    /// whole token streams covers the fixed-option padding and optional-account
+    /// branches without asserting on their internals.
     ///
     #[test]
     fn absent_flags_generate_the_same_parser_as_explicit_false() {
@@ -844,18 +817,9 @@ mod discriminator_injectivity_tests {
     use crate::render::instruction_parser::{extract_ix_discriminator_key, DiscriminatorKey};
 
     ///
-    /// Can a single buffer satisfy both discriminators at once?
-    ///
-    /// Each key is a constraint of the form "these bytes appear at this offset",
-    /// or, for a size discriminator, "the buffer is exactly this long". Two
-    /// constraints are jointly satisfiable unless they disagree somewhere they
-    /// overlap, so the check is a byte-wise comparison over the intersection of
-    /// the two windows.
-    ///
-    /// Non-overlapping windows are jointly satisfiable, which is the interesting
-    /// case: two discriminators at different offsets never contradict each other,
-    /// so one buffer can match both and the emitted arm order silently decides
-    /// which instruction wins.
+    /// Can one buffer satisfy both discriminators? Each is "these bytes at this
+    /// offset" or "exactly this length", so they conflict only where they overlap
+    /// and disagree. Keys that don't overlap both match, leaving arm order to pick.
     ///
     fn jointly_satisfiable(a: &DiscriminatorKey, b: &DiscriminatorKey) -> bool {
         match (a.to_bytes_offset(), b.to_bytes_offset()) {
@@ -917,14 +881,9 @@ mod discriminator_injectivity_tests {
     }
 
     ///
-    /// No two *differently keyed* instructions may both match one buffer.
-    ///
-    /// Equal keys are a separate, handled case: the renderer groups them and
-    /// emits `collision_group_match_arm`, which disambiguates on account count.
-    /// Unequal keys get one arm each, tried in order, so an overlap there is
-    /// decided by emission order rather than by anything the IDL states. That is
-    /// the aliasing worth proving absent, and this proves it exhaustively over
-    /// the corpus rather than up to a bound.
+    /// No two differently keyed instructions may both match one buffer. Equal keys
+    /// are disambiguated by account count; unequal keys are tried in emission order,
+    /// so an overlap there would be decided by order, not by the IDL.
     ///
     /// One fixture from `tests/idls`, with the discriminator key of each instruction.
     struct Fixture {
