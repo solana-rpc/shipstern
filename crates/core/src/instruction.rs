@@ -250,18 +250,9 @@ impl InstructionUpdate {
     #[must_use]
     pub fn log_messages(&self) -> &[String] { &self.shared.log_messages[self.log_range.clone()] }
 
-    /// Returns the log messages emitted *directly* by this instruction's
-    /// program, excluding lines emitted while an inner CPI is on top of the
-    /// invocation stack.
-    ///
-    /// Unlike [`log_messages`](Self::log_messages), which yields every line
-    /// inside this instruction's `invoke`/`success` window (including nested
-    /// CPI logs), this iterator skips any line that occurs while a deeper
-    /// `Program ... invoke [N+1]` is active.
-    ///
-    /// The opening `Program <id> invoke [N]` and closing
-    /// `Program <id> success`/`failed:` lines for this instruction are
-    /// included; the lines between them are filtered to depth-0 only.
+    /// Log lines emitted directly by this instruction's program. Unlike
+    /// [`log_messages`](Self::log_messages), lines from inner CPIs are skipped;
+    /// this instruction's own invoke and close lines are kept.
     ///
     /// Example output for an outer Raydium ix that CPIs to the token program:
     ///
@@ -271,8 +262,6 @@ impl InstructionUpdate {
     /// Program log: ray_log: swap done
     /// Program RAY success
     /// ```
-    ///
-    /// (Token-program lines emitted at depth 2 are skipped.)
     pub fn direct_log_messages(&self) -> impl Iterator<Item = &str> {
         use crate::log_messages::{classify_log_line, LogLineKind};
 
@@ -520,14 +509,9 @@ impl InstructionUpdate {
     #[inline]
     pub fn visit_all(&self) -> VisitAll<'_> { VisitAll::new(self) }
 
-    /// Iterate over this instruction and nested CPI instructions with the
-    /// flat instruction index used by Solana's inner-instruction list.
-    ///
-    /// [`InstructionUpdate::path`] preserves the CPI call tree reconstructed
-    /// from `stack_height`, so a grandchild CPI can have a path such as `3.2.1`.
-    /// The returned index for CPI records instead uses the flat execution order
-    /// under the outer instruction. This is the index shape used by Kafka keys
-    /// and `ix_index` headers.
+    /// Iterate over this instruction and its CPIs with the flat index from
+    /// Solana's inner-instruction list, as Kafka keys and `ix_index` headers use.
+    /// [`InstructionUpdate::path`] keeps the tree path instead (e.g. `3.2.1`).
     pub fn visit_all_with_flat_indices(&self) -> impl Iterator<Item = (&InstructionUpdate, Path)> {
         let outer_index = self.path.as_slice().first().copied();
         let mut next_inner_index = 0;
@@ -591,15 +575,8 @@ impl<'a> Iterator for VisitAll<'a> {
 }
 
 ///
-/// Derive instruction paths from the flat `stack_heights` array returned by the Solana runtime.
-///
-/// Each inner instruction carries Solana's runtime `stack_height`. Top-level
-/// transaction instructions execute at stack height `1`, so inner CPI
-/// instructions start at `2` (`2` = direct CPI from a top-level instruction,
-/// `3` = CPI called by a CPI, etc.). If you think in CPI nesting depth, that is
-/// `stack_height - 1`.
-/// This function reconstructs the full tree path for every instruction
-/// by tracking a virtual stack of child indices.
+/// Derive instruction tree paths from the runtime's flat `stack_heights`.
+/// Top-level instructions run at height 1, so CPIs start at 2.
 ///
 /// ## Example
 ///
@@ -839,19 +816,14 @@ mod tests {
 
     #[test]
     fn build_from_txn_terminates_when_inner_stack_heights_missing() {
-        // Regression test: inner instructions whose `stack_height` is `None`
-        // (older Solana data, or sources that don't populate it) must not send
-        // the CPI-nesting reconstruction into an infinite loop. Before the fix,
-        // a missing stack height on a non-last inner instruction (here: all of
-        // them) spun the `while i > 0` loop forever, pinning a worker at 100% CPU
-        // and eventually stalling the whole pipeline.
+        // Regression: inner instructions with no `stack_height` (older data)
+        // used to spin the nesting loop forever.
         let txn = transaction_with_missing_inner_stack_heights();
 
         let instructions =
             InstructionUpdate::build_from_txn(&txn).expect("transaction should build");
 
-        // One outer instruction, and because no stack heights are available the
-        // three inner instructions can't be re-nested, so they stay flat.
+        // With no heights to nest by, the inner instructions stay flat.
         assert_eq!(instructions.len(), 1);
         assert_eq!(instructions[0].inner.len(), 3);
         assert!(instructions[0].inner.iter().all(|i| i.inner.is_empty()));
@@ -861,12 +833,8 @@ mod tests {
     fn build_from_txn_nests_present_stack_heights_when_one_is_missing() {
         use super::Pubkey;
 
-        // Companion to the all-`None` case above: with a mix of present and
-        // missing `stack_height`s the reconstruction must still terminate, nest
-        // the instructions whose heights are known, and leave the height-less
-        // one flat. Heights here are [Some(2), Some(3), None]: the depth-3
-        // instruction is a child of the depth-2 one, and the instruction with no
-        // height stays a sibling at the top of the inner list.
+        // Heights [Some(2), Some(3), None]: the depth-3 instruction nests under
+        // the depth-2 one, and the height-less one stays a top-level sibling.
         let txn = transaction_with_mixed_inner_stack_heights();
 
         let instructions =

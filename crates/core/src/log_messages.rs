@@ -3,19 +3,8 @@
 
 use super::instruction::InstructionUpdate;
 
-/// Classification of a single Solana transaction log line.
-///
-/// Solana's runtime emits log lines in three structural shapes the
-/// instruction-attribution code cares about:
-///
-/// - `Program <pubkey> invoke [<n>]` — opens a program invocation at depth `n`.
-/// - `Program <pubkey> success` / `Program <pubkey> failed: <reason>` — closes one.
-/// - everything else (`Program log: ...`, `Program data: ...`,
-///   `Program return: ...`, `Program <pubkey> consumed N of M compute units`,
-///   user payloads, etc.) — depth is unchanged.
-///
-/// Classification is structural, not substring-based: a `Program log:` payload
-/// containing the literal text `" invoke [2]"` is `Other`, not `Invoke`.
+/// Structural shape of a Solana log line. Matching is on the line's structure,
+/// not substrings, so a `Program log:` payload containing `invoke [2]` is `Other`.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum LogLineKind {
     /// `Program <pubkey> invoke [<n>]`
@@ -303,15 +292,8 @@ mod tests {
         assert_eq!(outer[1].log_messages()[1], "Program log: second");
     }
 
-    /// Regression for issue #186 / PR #187 follow-up: a handler asking for
-    /// "logs my program emitted" must not see lines from inner CPI invocations.
-    ///
-    /// `log_messages()` returns the full nested range (invoke through success
-    /// inclusive, including inner CPI lines). `direct_log_messages()` returns
-    /// only the lines emitted while *this* program is at the top of the
-    /// invocation stack — the CPI-aware view that DEX handlers (Raydium,
-    /// Boop, Pump) need to scrape `Program log:` trade results without
-    /// pulling in token-program transfer logs.
+    /// Regression for #186: a handler asking for its own program's logs must not
+    /// see lines from inner CPIs.
     #[test]
     fn direct_log_messages_excludes_inner_cpi_lines() {
         let logs: Vec<String> = vec![
@@ -426,8 +408,7 @@ mod tests {
         ]);
     }
 
-    /// Iter 3: when an outer ix has no inner CPIs, `direct_log_messages()`
-    /// must equal `log_messages()` exactly.
+    /// With no inner CPIs, `direct_log_messages()` equals `log_messages()`.
     #[test]
     fn direct_log_messages_flat_ix_equals_log_messages() {
         let logs: Vec<String> = vec![
@@ -462,8 +443,7 @@ mod tests {
         assert_eq!(direct, full, "flat ix: direct must equal full");
     }
 
-    /// Iter 4: A → B → C three-level CPI. Outer A's direct view must skip
-    /// every line emitted while B or C are on the stack.
+    /// A -> B -> C: A's direct view skips every line while B or C is on the stack.
     #[test]
     fn direct_log_messages_filters_three_deep_cpi() {
         let logs: Vec<String> = vec![
@@ -525,9 +505,8 @@ mod tests {
         ]);
     }
 
-    /// Iter 5: an outer ix's own `Program data:` line is preserved; an inner
-    /// CPI's `Program data:` line is dropped. This is the core guarantee for
-    /// Anchor-event handlers that decode payloads from depth-1 lines.
+    /// An outer ix keeps its own `Program data:` and drops an inner CPI's, which
+    /// Anchor-event handlers rely on.
     #[test]
     fn direct_log_messages_keeps_own_program_data_drops_inner() {
         let logs: Vec<String> = vec![
@@ -578,9 +557,7 @@ mod tests {
         );
     }
 
-    /// Iter 6: `Program return: <id> <data>` lines (real txns place these
-    /// just before `success`) are at depth 1 and must be kept. They aren't
-    /// invokes and aren't closes.
+    /// `Program return:` lines sit just before `success` at depth 1 and are kept.
     #[test]
     fn direct_log_messages_keeps_program_return() {
         let logs: Vec<String> = vec![
@@ -617,103 +594,10 @@ mod tests {
         ]);
     }
 
-    /// Iter 7: adversarial input — a `Program log:` payload that contains
-    /// the substring `" invoke ["`. The depth tracker must not be fooled
-    /// by user-supplied log content.
-    #[test]
-    fn direct_log_messages_ignores_invoke_in_program_log_payload() {
-        let logs: Vec<String> = vec![
-            "Program OUTER invoke [1]",
-            "Program log: before",
-            "Program log: this looks like invoke [2] but is not",
-            "Program log: after",
-            "Program OUTER success",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
-
-        let shared = Arc::new(InstructionShared {
-            log_messages: logs.clone(),
-            ..InstructionShared::default()
-        });
-
-        let mut outer = vec![InstructionUpdate {
-            program: KeyBytes::new([1; 32]),
-            accounts: vec![],
-            data: vec![],
-            shared: Arc::clone(&shared),
-            inner: vec![],
-            path: Path::new_single(0),
-            log_range: 0..0,
-        }];
-
-        assign_log_messages(&shared.log_messages, &mut outer);
-
-        let direct: Vec<&str> = outer[0].direct_log_messages().collect();
-        assert_eq!(
-            direct,
-            vec![
-                "Program OUTER invoke [1]",
-                "Program log: before",
-                "Program log: this looks like invoke [2] but is not",
-                "Program log: after",
-                "Program OUTER success",
-            ],
-            "Program log: payload must not be misclassified as an invoke"
-        );
-    }
-
-    /// Iter 9: same class of bug — `Program log:` payload containing
-    /// `" success"` must not be misclassified as a close.
-    #[test]
-    fn direct_log_messages_ignores_success_in_program_log_payload() {
-        let logs: Vec<String> = vec![
-            "Program OUTER invoke [1]",
-            "Program log: oh what a success",
-            "Program log: still going",
-            "Program OUTER success",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
-
-        let shared = Arc::new(InstructionShared {
-            log_messages: logs.clone(),
-            ..InstructionShared::default()
-        });
-
-        let mut outer = vec![InstructionUpdate {
-            program: KeyBytes::new([1; 32]),
-            accounts: vec![],
-            data: vec![],
-            shared: Arc::clone(&shared),
-            inner: vec![],
-            path: Path::new_single(0),
-            log_range: 0..0,
-        }];
-
-        assign_log_messages(&shared.log_messages, &mut outer);
-
-        let direct: Vec<&str> = outer[0].direct_log_messages().collect();
-        assert_eq!(
-            direct,
-            vec![
-                "Program OUTER invoke [1]",
-                "Program log: oh what a success",
-                "Program log: still going",
-                "Program OUTER success",
-            ],
-            "Program log: payload must not be misclassified as a close"
-        );
-    }
-
-    /// Non-regression for tx
+    /// Regression for tx
     /// `bLyrwGENd4hog5k5aVbtxz5jrpDmUEQR62GyWzbJHdjwdgPTz8LhY5WV9dUjX6zsHycUaigFLxaj4LYZ6QBQQz9`:
-    /// an order-book program emits `Program log: Order failed: ...` while at
-    /// depth 1, then closes with `success`. A substring-based parser would
-    /// see `failed:` and pop depth too early, dropping the trailing
-    /// `Program data:` payload from the ix's direct view.
+    /// `Program log: Order failed: ...` must not close the frame and drop the
+    /// trailing `Program data:` payload.
     #[test]
     fn direct_log_messages_ignores_failed_in_program_log_payload() {
         let logs: Vec<String> = vec![
@@ -789,8 +673,8 @@ mod tests {
         ]);
     }
 
-    /// Direct unit coverage of the line classifier. Pins the structural
-    /// rules independent of the higher-level filtering logic.
+    /// Covers payloads that mimic invoke/close lines for every caller of the
+    /// classifier.
     #[test]
     fn classify_log_line_covers_all_shapes() {
         // Real invokes
