@@ -164,10 +164,9 @@ struct ShipsternStreamHandler {
     slot_matches: Vec<String>,
     transaction_matches: Vec<String>,
     wants_entries: bool,
-    // Per-slot buffer of entries arriving via `on_entry`. Drained when the
-    // matching `BlockData::Block` is emitted. Upstream `firehose` emits all
-    // entries for a slot on a single thread before the slot's block message,
-    // so slot is a sufficient key.
+    // Per-slot entries from `on_entry`, drained when the slot's block is emitted.
+    // Upstream sends a slot's entries on one thread before its block, so the
+    // slot alone is a sufficient key.
     entry_buffer: Mutex<HashMap<u64, Vec<EntryData>>>,
 }
 
@@ -234,11 +233,8 @@ impl ShipsternStreamHandler {
                 matches.slot.push(filter_id.clone());
             }
 
-            // 3. Calculate Transaction Matches
-            // Instruction parsers need transactions to extract instructions from,
-            // so any parser with a transaction filter must receive all transactions.
-            // The jetstreamer-firehose API does not support per-account filtering,
-            // so we include all transactions whenever a transaction filter is present.
+            // 3. Transaction matches. The firehose can't filter by account, so any
+            // transaction prefilter receives every transaction.
             if prefilter.transaction.is_some() {
                 matches.transaction.push(filter_id.clone());
             }
@@ -403,10 +399,8 @@ impl ShipsternStreamHandler {
                         self.slot_matches.len()
                     );
 
-                    // Old Faithful archives only carry finalized history, so a
-                    // replayed slot has exactly one status transition to report.
-                    // `SlotPrefilter::filter_by_commitment = false` cannot yield
-                    // the intermediate processed/confirmed/dead transitions here.
+                    // Old Faithful only carries finalized history, so a replayed slot has one
+                    // status transition; intermediate ones can't be produced here.
                     self.send(
                         self.slot_matches.clone(),
                         UpdateOneof::Slot(SubscribeUpdateSlot {
@@ -527,13 +521,9 @@ pub struct JetstreamSourceConfig {
     #[serde(default)]
     pub sequential: bool,
 
-    /// Process epochs from highest to lowest instead of lowest to highest.
-    /// Slots *within* an epoch are still emitted in ascending order, because
-    /// the underlying CAR archive can only be streamed forward.
-    ///
-    /// Upstream treats this as sequential-only and turns `sequential` on
-    /// implicitly (`sequential || reverse`), so enabling `reverse` alone
-    /// also forfeits the multi-threaded work-stealing path.
+    /// Process epochs from highest to lowest. Slots within an epoch stay ascending,
+    /// since a CAR archive only streams forward. Upstream also turns on
+    /// `sequential`, so this forfeits the multi-threaded path.
     #[arg(long, env, default_value = "false")]
     #[serde(default)]
     pub reverse: bool,
@@ -558,14 +548,9 @@ pub struct JetstreamSourceConfig {
     #[arg(skip)]
     pub possible_leader_skipped_tx: Option<mpsc::Sender<PossibleLeaderSkippedEvent>>,
 
-    /// Optional cooperative-shutdown signal forwarded to upstream
-    /// `firehose()`. When the caller broadcasts `()` on the paired
-    /// `broadcast::Sender`, the firehose loop unwinds at the next slot
-    /// boundary instead of running to completion.
-    ///
-    /// We store a `Sender` (not a `Receiver`) so the config remains
-    /// `Clone`; `connect()` calls `.subscribe()` to obtain its own
-    /// receiver when wiring the firehose call.
+    /// Cooperative shutdown for upstream `firehose()`: broadcasting `()` unwinds it
+    /// at the next slot boundary. A `Sender` keeps the config `Clone`; `connect()`
+    /// subscribes its own receiver.
     #[serde(skip)]
     #[arg(skip)]
     pub shutdown_signal_tx: Option<broadcast::Sender<()>>,
@@ -575,13 +560,9 @@ fn default_stats_interval_slots() -> u64 { 10_000 }
 
 /// Ripget window used in sequential mode when the caller sets none.
 ///
-/// Ripget fills the whole window before yielding the first block, and that
-/// fill must finish inside upstream's fixed 180s `read_raw_header` timeout.
-/// Upstream's default is `min(4 GiB, 15% of available RAM)`, which on a
-/// high-RAM host cannot download in time, so the run times out and retries
-/// without ever emitting a slot.
-///
-/// Measured against files.old-faithful.net at ~7 MiB/s, same 5-slot range:
+/// Ripget must fill the whole window before the first block, within upstream's
+/// 180s header timeout. Its RAM-derived default (up to 4 GiB) can't fill in time on a
+/// big host. Measured against files.old-faithful.net at ~7 MiB/s, 5 slots:
 ///
 /// ```text, ignore
 ///    64 MiB ->   9.5s
@@ -591,12 +572,9 @@ fn default_stats_interval_slots() -> u64 { 10_000 }
 /// ```
 pub const DEFAULT_SEQUENTIAL_BUFFER_WINDOW_BYTES: u64 = 256 * 1024 * 1024;
 
-/// Resolve the ripget window handed to `firehose()`.
-///
-/// An explicit `configured` value is returned as-is; the default only applies
-/// in sequential or reverse mode, where upstream would otherwise use its
-/// RAM-derived one. Upstream discards a window below 2 (`filter(|v| *v >= 2)`),
-/// so an explicit value wins only for `>= 2`.
+/// Resolve the ripget window handed to `firehose()`. An explicit value is
+/// returned as-is (upstream ignores one below 2); otherwise the default applies
+/// only in sequential or reverse mode.
 ///
 /// Example output:
 ///
@@ -632,15 +610,9 @@ pub struct SlotRangeConfig {
 }
 
 impl SlotRangeConfig {
-    /// Convert configuration to a half-open slot range.
-    ///
-    /// Returns `(start_slot, end_slot_exclusive)` — the range processed is
-    /// `[start_slot, end_slot_exclusive)`, matching Rust's `start..end`
-    /// semantics used by `firehose()`.
-    ///
-    /// - **Epoch mode**: covers all slots in the epoch.
-    /// - **Explicit mode**: `slot_start` is inclusive, `slot_end` is
-    ///   **exclusive** (the first slot *not* processed).
+    /// Convert configuration to a half-open `[start, end)` slot range, as
+    /// `firehose()` expects. Epoch mode covers the whole epoch; in explicit mode
+    /// `slot_end` is exclusive.
     pub fn to_slot_range(&self) -> Result<(u64, u64), Error> {
         match (self.slot_start, self.slot_end, self.epoch) {
             (Some(start), Some(end), None) => {
@@ -728,15 +700,9 @@ impl SourceTrait for JetstreamSource {
     }
 }
 
-/// Log a structured firehose progress pulse.
-///
-/// Registered as the upstream `StatsTracking` callback so periodic stats come
-/// straight from the engine's own aggregates — blocks, transactions, entries,
-/// and leader-skipped slots — rather than a hand-rolled block counter.
-///
-/// `on_stats` fires once per worker thread when that thread crosses a
-/// `stats_interval_slots` boundary; the counters are global aggregates, so
-/// `thread_id` is logged to identify which worker emitted the pulse.
+/// Log a firehose progress pulse from upstream's `StatsTracking` aggregates. It
+/// fires once per worker crossing a `stats_interval_slots` boundary, so
+/// `thread_id` names the worker.
 ///
 /// Example output:
 ///
@@ -822,17 +788,12 @@ impl JetstreamSource {
             None
         };
 
-        // Subscribe to the caller-provided shutdown channel, if any. Subscribing
-        // here (after the receiver-less period during config construction) means
-        // signals broadcast before this line are lost — callers that need
-        // deterministic shutdown should keep the `Sender` alive and broadcast
-        // only after `connect()` returns.
+        // Signals broadcast before this subscribe are lost, so callers should
+        // broadcast only after `connect()` returns.
         let shutdown_signal = config.shutdown_signal_tx.as_ref().map(|tx| tx.subscribe());
 
-        // Register upstream `StatsTracking` so periodic progress comes from the
-        // firehose's own aggregates. `stats_interval_slots == 0` disables it —
-        // this also avoids upstream's unguarded `slot % interval` (a `0`
-        // interval would divide by zero).
+        // `stats_interval_slots == 0` disables stats, which also avoids upstream's
+        // unguarded `slot % interval`.
         let stats_tracking = (config.stats_interval_slots != 0).then_some(
             jetstreamer_firehose::firehose::StatsTracking {
                 on_stats: log_firehose_stats,
@@ -950,48 +911,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_epoch_to_slot_conversion() {
-        let config = SlotRangeConfig {
-            slot_start: None,
-            slot_end: None,
-            epoch: Some(800),
-        };
-        let (start, end_exclusive) = config.to_slot_range().unwrap();
-        assert_eq!(start, 345_600_000);
-        assert_eq!(end_exclusive, 346_032_000); // end-exclusive: first slot of next epoch
-    }
-
-    #[test]
-    fn test_slot_range_validation() {
-        let config = SlotRangeConfig {
-            slot_start: Some(100),
-            slot_end: Some(50),
-            epoch: None,
-        };
-        assert!(config.to_slot_range().is_err());
-    }
-
-    #[test]
-    fn test_slot_range_empty_range_rejected() {
-        let config = SlotRangeConfig {
-            slot_start: Some(100),
-            slot_end: Some(100),
-            epoch: None,
-        };
-        assert!(
-            config.to_slot_range().is_err(),
-            "start == end is an empty range"
-        );
-    }
-
-    #[test]
-    fn test_invalid_config_both_epoch_and_slots() {
-        let config = SlotRangeConfig {
-            slot_start: Some(100),
-            slot_end: Some(200),
-            epoch: Some(800),
-        };
-        assert!(config.to_slot_range().is_err());
+    fn invalid_slot_ranges_are_rejected() {
+        for (start, end, epoch) in [
+            (Some(100), Some(50), None),       // end before start
+            (Some(100), Some(100), None),      // empty range
+            (Some(100), Some(200), Some(800)), // both slots and epoch
+        ] {
+            let config = SlotRangeConfig {
+                slot_start: start,
+                slot_end: end,
+                epoch,
+            };
+            assert!(
+                config.to_slot_range().is_err(),
+                "{start:?}..{end:?} epoch {epoch:?}"
+            );
+        }
     }
 
     #[test]
@@ -1089,46 +1024,28 @@ slot-end = 2000
         );
     }
 
-    /// Upstream's RAM-derived window can be too large to download inside its
-    /// own 180s header-read timeout, which hangs the run instead of failing it.
-    /// Sequential runs must therefore get a bounded window by default, while an
-    /// explicit choice is always honoured.
+    /// Sequential runs get a bounded default window, since upstream's RAM-derived
+    /// one can't fill inside its 180s timeout; an explicit value always wins.
     #[test]
-    fn sequential_modes_get_a_bounded_default_buffer_window() {
-        assert_eq!(
-            effective_buffer_window_bytes(false, false, None),
-            None,
-            "no window should be injected when upstream would ignore it"
-        );
-
-        for (sequential, reverse) in [(true, false), (false, true), (true, true)] {
-            assert_eq!(
-                effective_buffer_window_bytes(sequential, reverse, None),
-                Some(DEFAULT_SEQUENTIAL_BUFFER_WINDOW_BYTES),
-                "sequential={sequential} reverse={reverse} must fall back to the vixen default"
-            );
-        }
-    }
-
-    #[test]
-    fn explicit_buffer_window_always_wins() {
-        // Including a value far larger than the default — opting back into
-        // upstream's throughput-oriented behaviour must remain possible.
+    fn effective_buffer_window_bytes_table() {
+        let default = Some(DEFAULT_SEQUENTIAL_BUFFER_WINDOW_BYTES);
         let huge = DEFAULT_SEQUENTIAL_BUFFER_WINDOW_BYTES * 16;
 
-        assert_eq!(
-            effective_buffer_window_bytes(true, false, Some(huge)),
-            Some(huge)
-        );
-        assert_eq!(
-            effective_buffer_window_bytes(false, true, Some(4096)),
-            Some(4096)
-        );
-        assert_eq!(
-            effective_buffer_window_bytes(false, false, Some(4096)),
-            Some(4096),
-            "a value set while sequential mode is off is passed through untouched"
-        );
+        for (sequential, reverse, configured, expected) in [
+            (false, false, None, None),
+            (true, false, None, default),
+            (false, true, None, default),
+            (true, true, None, default),
+            (true, false, Some(huge), Some(huge)),
+            (false, true, Some(4096), Some(4096)),
+            (false, false, Some(4096), Some(4096)),
+        ] {
+            assert_eq!(
+                effective_buffer_window_bytes(sequential, reverse, configured),
+                expected,
+                "sequential={sequential} reverse={reverse} configured={configured:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1560,6 +1477,7 @@ slot-end = 2000
         let rent_pk = Pubkey::new_unique();
         let staking_pk = Pubkey::new_unique();
         let voting_pk = Pubkey::new_unique();
+        let odd_pk = Pubkey::new_unique();
 
         // `solana_runtime::reward_info::RewardInfo` sits behind a private module
         // in 4.2, so the fixtures are built as `StakeRewardInfo` and converted
@@ -1606,13 +1524,23 @@ slot-end = 2000
                     }
                     .into(),
                 ),
+                (
+                    odd_pk,
+                    StakeRewardInfo {
+                        reward_type: SdkRewardType::Voting,
+                        lamports: 5,
+                        post_balance: 500,
+                        commission_bps: Some(1234),
+                    }
+                    .into(),
+                ),
             ],
             num_partitions: Some(64),
         };
 
         let out = convert::keyed_rewards(&input);
 
-        assert_eq!(out.rewards.len(), 4);
+        assert_eq!(out.rewards.len(), 5);
 
         // Pubkey strings round-trip via Display
         assert_eq!(out.rewards[0].pubkey, fee_pk.to_string());
@@ -1642,6 +1570,10 @@ slot-end = 2000
         assert_eq!(out.rewards[0].commission, "");
         assert_eq!(out.rewards[2].commission, "7");
         assert_eq!(out.rewards[3].commission, "0");
+
+        // 1234 bps has no exact percent: bps survive untouched, percent stays empty.
+        assert_eq!(out.rewards[4].commission_bps, "1234");
+        assert_eq!(out.rewards[4].commission, "");
 
         // num_partitions wrapped in proto NumPartitions.
         assert_eq!(
@@ -1711,69 +1643,6 @@ slot-end = 2000
         let decoded: TransactionError = wincode::deserialize(&bytes).expect("wincode decode");
 
         assert_eq!(decoded, err);
-    }
-
-    #[test]
-    fn keyed_rewards_empty_input_yields_empty_proto() {
-        use solana_runtime::bank::KeyedRewardsAndNumPartitions;
-
-        let empty = KeyedRewardsAndNumPartitions {
-            keyed_rewards: vec![],
-            num_partitions: None,
-        };
-        let out = convert::keyed_rewards(&empty);
-        assert!(out.rewards.is_empty());
-        assert!(out.num_partitions.is_none());
-    }
-
-    /// A commission that is not a whole number of percent has no exact `u8`
-    /// representation. Basis points must survive untouched, and the percent
-    /// field must go empty rather than report a rate nobody set.
-    #[test]
-    fn keyed_rewards_preserve_exact_basis_points() {
-        use solana_accounts_db::stake_rewards::StakeRewardInfo;
-        use solana_pubkey::Pubkey;
-        use solana_reward_info::RewardType as SdkRewardType;
-        use solana_runtime::bank::KeyedRewardsAndNumPartitions;
-
-        let odd = Pubkey::new_unique();
-        let round = Pubkey::new_unique();
-
-        let input = KeyedRewardsAndNumPartitions {
-            keyed_rewards: vec![
-                (
-                    odd,
-                    StakeRewardInfo {
-                        reward_type: SdkRewardType::Voting,
-                        lamports: 1,
-                        post_balance: 10,
-                        commission_bps: Some(1234),
-                    }
-                    .into(),
-                ),
-                (
-                    round,
-                    StakeRewardInfo {
-                        reward_type: SdkRewardType::Voting,
-                        lamports: 2,
-                        post_balance: 20,
-                        commission_bps: Some(1200),
-                    }
-                    .into(),
-                ),
-            ],
-            num_partitions: None,
-        };
-
-        let out = convert::keyed_rewards(&input);
-
-        // 1234 bps stays 1234 bps, and is never rounded down to 1200.
-        assert_eq!(out.rewards[0].commission_bps, "1234");
-        assert_eq!(out.rewards[0].commission, "");
-
-        // 1200 bps divides evenly, so the percent field is still filled in.
-        assert_eq!(out.rewards[1].commission_bps, "1200");
-        assert_eq!(out.rewards[1].commission, "12");
     }
 
     /// Agave 4.2 added `RewardType::DeactivatedStake`, and the proto gained a
@@ -2047,18 +1916,9 @@ slot-end = 2000
             tx
         }
 
-        /// The decoder boundary Jetstreamer actually crosses.
-        ///
-        /// `Transaction::as_parsed` in jetstreamer-firehose is a single call to
-        /// `wincode::deserialize` into a `VersionedTransaction`, so feeding wire
-        /// bytes through the same call and into [`convert::transaction`] covers
-        /// every step between the archive and the proto except the CAR
-        /// dataframe read, which is version-agnostic byte plumbing.
-        ///
-        /// These bytes are constructed locally rather than captured from a
-        /// cluster, but they are produced by the same `solana-message` 4.4.1
-        /// and `solana-transaction` 4.1.6 wincode schema that decodes real
-        /// traffic, so the encoding itself is the real wire format.
+        /// The decoder boundary Jetstreamer crosses: wire bytes through the same
+        /// `wincode::deserialize` call `Transaction::as_parsed` makes, then into
+        /// [`convert::transaction`]. The bytes are built locally with the real schema.
         #[test]
         fn v1_wire_bytes_survive_the_firehose_decode_path() {
             let original = signed(v1_message(
@@ -2125,15 +1985,8 @@ slot-end = 2000
             assert_eq!(wincode::serialize(&decoded).expect("serialize"), wire);
         }
 
-        /// The join between the two halves of the V1 config story.
-        ///
-        /// Everything else proves one hop: either wire bytes into
-        /// [`convert::transaction`], or a hand-built proto message into
-        /// [`InstructionUpdate::build_from_txn`]. Nothing proved that the proto
-        /// message this crate actually emits is the one core can read, so a
-        /// mismatch between the two would have gone unnoticed.
-        ///
-        /// This runs the real conversion output straight into core.
+        /// Feeds the real conversion output straight into core, proving the proto this
+        /// crate emits is one [`InstructionUpdate::build_from_txn`] can read.
         #[test]
         fn v1_config_survives_from_conversion_into_instruction_shared() {
             use shipstern_core::{instruction::InstructionUpdate, TransactionUpdate};
@@ -2353,19 +2206,9 @@ slot-end = 2000
             }
         }
 
-        /// Real V1 transactions captured from devnet, where `enable_tx_v1` is
-        /// active.
-        ///
-        /// This is the case the synthetic tests cannot cover: bytes produced by
-        /// a validator rather than by this test file. They are decoded with the
-        /// same `wincode::deserialize` call jetstreamer-firehose makes on
-        /// archive bytes, then converted, so everything between the wire and
-        /// the proto is exercised on real traffic. Only the CAR dataframe read
-        /// is skipped, and that is version-agnostic byte plumbing.
-        ///
-        /// The corpus spans the old 1232-byte cap deliberately: 196 bytes up to
-        /// 3276, with two fixtures above the cap that could not have existed
-        /// before V1.
+        /// Real V1 transactions captured from devnet, decoded with the same
+        /// `wincode::deserialize` call jetstreamer-firehose makes, then converted. The
+        /// corpus spans 196 to 3276 bytes, two of them above the old 1232-byte cap.
         #[test]
         fn real_devnet_v1_transactions_convert_losslessly() {
             use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -2564,15 +2407,9 @@ slot-end = 2000
             assert_eq!(bytes.len(), 1296);
         }
 
-        /// Malformed V1 input must fail loudly rather than decode into some
-        /// other shape.
-        ///
-        /// The dangerous outcome for this migration is not a decode error, it
-        /// is a corrupt message that still type-checks: a V1 transaction read
-        /// as V0, or a truncated one read as complete. Each case here is
-        /// asserted against observed upstream behaviour, so a dependency bump
-        /// that loosens any of them fails this test rather than silently
-        /// changing what shipstern emits.
+        /// Malformed V1 input must fail loudly, not decode as V0 or as a complete
+        /// message. Each case pins observed upstream behaviour, so a dependency bump
+        /// that loosens one fails here.
         #[test]
         fn malformed_v1_input_is_rejected_rather_than_misread() {
             let tx = signed(v1_message(
@@ -2636,14 +2473,9 @@ slot-end = 2000
             }
         }
 
-        /// V1 raised the transaction ceiling from 1232 bytes to 4096. Shipstern
-        /// only reads transactions, so it holds no transaction-size constant of
-        /// its own; this pins that it stays that way across and beyond the old
-        /// cap, and that nothing is lost or reordered at any size.
-        ///
-        /// 4097 is included deliberately. `MAX_TRANSACTION_SIZE` is enforced by
-        /// the validator, not by the codec, so an oversized transaction still
-        /// round-trips here. Shipstern must not invent its own rejection.
+        /// V1 raised the size ceiling from 1232 to 4096 bytes. Nothing is lost or
+        /// reordered at any size, and 4097 still round-trips: the validator enforces
+        /// the limit, so shipstern must not add its own.
         #[test]
         fn v1_conversion_is_size_agnostic_across_the_old_1232_cap() {
             for target in [1232usize, 1233, 2048, 3072, 4095, 4096, 4097] {
@@ -2751,19 +2583,11 @@ mod convert {
     }
 
     /// Convert the firehose's `KeyedRewardsAndNumPartitions` into the proto
-    /// `Rewards` shape that `SubscribeUpdateBlock` carries. The proto enum
-    /// uses `Unspecified=0, Fee=1, Rent=2, Staking=3, Voting=4,
-    /// DeactivatedStake=5`; the Solana SDK enum has no `Unspecified`, so the
-    /// mapping is total.
+    /// `Rewards` that `SubscribeUpdateBlock` carries.
     ///
-    /// Agave 4.2 dropped `RewardInfo::commission: Option<u8>` and left only
-    /// `commission_bps: Option<u16>` (SIMD-0291), so basis points are the sole
-    /// source here and are forwarded verbatim. The percent field is still
-    /// filled in for existing consumers, but only when the basis points divide
-    /// evenly: 1234 bps has no exact `u8` percent, and truncating it to 12
-    /// would report a commission the validator never set. The percent is kept
-    /// rather than dropped because `shipstern-block-meta-parser` exposes
-    /// `commission` on its own `Reward` and carries no `commission_bps`.
+    /// Agave 4.2 keeps only `commission_bps` (SIMD-0291), forwarded verbatim. The
+    /// percent `commission` is still filled for `shipstern-block-meta-parser`, but
+    /// only when the bps divide evenly, so it never reports a rounded commission.
     ///
     /// Example output:
     ///
@@ -2812,12 +2636,8 @@ mod convert {
         }
     }
 
-    /// The fields of a message that depend on which version it is.
-    ///
-    /// Legacy, V0 and V1 agree on the header, account keys, lifetime specifier
-    /// and instructions. They disagree on exactly three things, so those are
-    /// named here and every match arm in [`transaction`] has to state all three
-    /// rather than inheriting a default.
+    /// The three message fields that depend on the version. Every match arm in
+    /// [`transaction`] states all three instead of inheriting a default.
     ///
     /// Example output:
     ///
@@ -2871,14 +2691,9 @@ mod convert {
                         .collect(),
                     config: None,
                 },
-                // V1 (SIMD-0385) replaces ComputeBudget instructions with an
-                // inline config and drops address lookup tables entirely.
-                //
-                // `config` is wrapped unconditionally: the proto uses its
-                // presence, not its contents, to mark a message as V1, so a V1
-                // message whose fields are all unset still has to serialize as
-                // `Some(TransactionConfig::default())`. Collapsing that to
-                // `None` would downgrade the message to V0 on the wire.
+                // V1 (SIMD-0385) inlines the compute budget config and drops lookup tables.
+                // `config` is always `Some`: the proto marks V1 by its presence, so `None`
+                // would downgrade the message to V0 on the wire.
                 VersionedMessage::V1(msg) => MessageParts {
                     header: msg.header,
                     account_keys: msg.account_keys,

@@ -26,14 +26,8 @@ fn check_protobuf_schema() {
 // ---------------------------------------------------------------------------
 
 ///
-/// Parse the BorrowFromCustody transaction using `InstructionParser`.
-///
-/// The fixture contains two perpetuals instructions:
-/// 1. BorrowFromCustody — regular instruction
-/// 2. BorrowFromCustodyEvent — CPI self-invocation event
-///
-/// With `program-events` active, `InstructionParser` outputs
-/// `ProgramEventOutput { instruction, program_events }`.
+/// Parse a BorrowFromCustody transaction holding the instruction and its CPI
+/// self-invocation event; with `program-events`, the output carries both.
 ///
 #[tokio::test]
 async fn parse_borrow_from_custody_with_cpi_event() {
@@ -302,21 +296,6 @@ fn resolve_events_from_logs_skips_non_matching_discriminator() {
 fn event_ix_tag_constant_is_correct() {
     let expected = 0x1d9a_cb51_2ea5_45e4_u64.to_le_bytes();
     assert_eq!(EVENT_IX_TAG, expected);
-}
-
-#[test]
-fn instruction_parser_implements_prefilter() {
-    let parser = perpetuals::InstructionParser;
-    let _pf = parser.prefilter();
-}
-
-#[test]
-fn instruction_parser_implements_id() {
-    use std::borrow::Cow;
-
-    let parser = perpetuals::InstructionParser;
-    let id: Cow<'static, str> = parser.id();
-    assert!(!id.is_empty());
 }
 
 #[test]

@@ -102,14 +102,9 @@ impl<S: SourceTrait> Runtime<S> {
 }
 
 impl<S: FilterUpdateSource> Runtime<S> {
-    /// Create a handle for changing this runtime's subscription once it is
-    /// running.
-    ///
-    /// Only available when the source implements [`FilterUpdateSource`], so a
-    /// runtime whose source cannot change its subscription has no handle to
-    /// take. [`Self::run`], [`Self::try_run`], [`Self::run_async`] and
-    /// [`Self::try_run_async`] all consume the runtime, so take the handle
-    /// first. Every handle shares one view of the filters.
+    /// Create a handle for changing this runtime's subscription once it runs.
+    /// Only sources implementing [`FilterUpdateSource`] have one. Take it before
+    /// running, since the run methods consume the runtime.
     ///
     /// ```rust, ignore
     /// let runtime = Runtime::<YellowstoneGrpcSource>::builder()
@@ -127,14 +122,9 @@ impl<S: FilterUpdateSource> Runtime<S> {
 }
 
 impl<S: SourceTrait> Runtime<S> {
-    /// Create a new Tokio runtime and run the Shipstern runtime within it,
-    /// terminating the current process if the runtime crashes.
-    ///
-    /// For error handling, use the recoverable variant [`Self::try_run`].
-    ///
-    /// If you want to provide your own tokio Runtime because you need to run
-    /// async code outside of the Shipstern runtime, use the [`Self::run_async`]
-    /// method.
+    /// Create a Tokio runtime and run the Shipstern runtime in it, exiting the
+    /// process on error. See [`Self::try_run`] to handle errors and
+    /// [`Self::run_async`] to bring your own Tokio runtime.
     ///
     /// # Example
     ///
@@ -166,14 +156,9 @@ impl<S: SourceTrait> Runtime<S> {
             .block_on(self.try_run_async())
     }
 
-    /// Run the Shipstern runtime asynchronously, terminating the current process
-    /// if the runtime crashes.
-    ///
-    /// For error handling, use the recoverable variant [`Self::try_run_async`].
-    ///
-    /// If you don't need to run any async code outside the Shipstern runtime, you
-    /// can use the [`Self::run`] method instead, which takes care of creating
-    /// a tokio Runtime for you.
+    /// Run the Shipstern runtime on the current Tokio runtime, exiting the process
+    /// on error. See [`Self::try_run_async`] to handle errors and [`Self::run`] to
+    /// have a Tokio runtime created for you.
     ///
     /// # Example
     ///
@@ -285,11 +270,8 @@ impl<S: SourceTrait> Runtime<S> {
 
         let mut filter_updates_rx = self.filter_updates_rx;
 
-        // Seed the initial subscribe from the latest set rather than the
-        // registered one, so an update sent between `handle()` and here is part
-        // of the first request instead of a second one that leaves the wider
-        // set live in between. Marking it seen stops the source resending the
-        // set it just subscribed with.
+        // Subscribe with the latest set, so an update sent before running is in the
+        // first request. Marking it seen stops the source resending it.
         let filters = filter_updates_rx.borrow_and_update().clone();
 
         let source = S::new(self.source, filters);

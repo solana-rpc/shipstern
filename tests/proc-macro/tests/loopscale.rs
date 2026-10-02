@@ -1,10 +1,5 @@
-// Regression test for pod_types_missing: loopscale.json defines Pod* types
-// (PodU32, PodU64, PodU32CBPS, etc.) as single-item tupleTypeNodes that are
-// registered as type aliases. Structs earlier in the defined_types list
-// reference these aliases. Without the two-pass fix in `build_defined_types`
-// (registering all aliases before processing structs), those fields would
-// retain unresolved `Message("PodU32CBPS")` references, causing E0412
-// ("cannot find type PodU32CBPS in this scope").
+// Regression: loopscale.json's Pod* aliases are referenced before they're
+// defined, which needs the two-pass `build_defined_types` (else E0412).
 
 use shipstern_proc_macro::include_shipstern_parser;
 use shipstern_test_utils::check_protobuf_format;

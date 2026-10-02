@@ -216,12 +216,8 @@ impl Buffer {
                     let pipelines = Arc::clone(&pipelines);
                     rt.spawn(async move {
                         run_job(&pipelines, job).await;
-                        // Moves the permit into the task. Under edition 2024
-                        // rules this last use is what captures it; drop it and
-                        // the permit dies in the bridge loop, freeing the slot
-                        // before the job runs and killing the bound. Removing
-                        // it fails edge_concurrency_never_exceeds_jobs (peak 196
-                        // vs jobs=4) and five drain tests. Do not remove.
+                        // Moves the permit into the task so the slot is held until the job ends.
+                        // Removing it breaks the bound (edge_concurrency_never_exceeds_jobs fails).
                         drop(permit);
                     });
                 }

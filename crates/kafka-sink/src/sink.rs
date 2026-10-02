@@ -373,18 +373,12 @@ impl KafkaSink {
 
     // --- Instruction parsing ---
 
-    /// Parse an instruction and prepare a Kafka record.
+    /// Parse an instruction with the first matching parser and prepare a Kafka
+    /// record, plus `had_error` for an unexpected failure (not a filter). Parse
+    /// errors may go to the configured fallback.
     ///
-    /// Tries each registered parser in order. If one matches, builds a decoded record.
-    /// If parser-level fallback is configured, parse errors may be routed there.
-    /// Returns the record (if any) and a `had_error` flag indicating whether any
-    /// parser encountered an unexpected failure (vs expected filtering).
-    ///
-    /// `path` is the externally visible flat index used in Kafka keys and
-    /// `ix_index` headers. For CPI instructions this should use the flat
-    /// inner-instruction ordinal returned from
-    /// [`InstructionUpdate::visit_all_with_flat_indices`], not necessarily
-    /// `ix.path`, which preserves the nested CPI call tree for parsers.
+    /// `path` is the flat index used in Kafka keys and `ix_index` headers, from
+    /// [`InstructionUpdate::visit_all_with_flat_indices`], not the nested `ix.path`.
     pub async fn parse_instruction(
         &self,
         slot: u64,

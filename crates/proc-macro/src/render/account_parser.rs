@@ -22,14 +22,10 @@ fn decode_discriminator_bytes(bytes: &codama_nodes::BytesValueNode) -> Vec<u8> {
 }
 
 ///
-/// Build the discriminator constants for a generated account type.
-///
-/// The pair is a memcmp predicate: `DISCRIMINATOR` is exactly what the parser
-/// compares at `DISCRIMINATOR_OFFSET`. It is not a payload boundary. A numeric
-/// discriminator is re-read as the first field of the account body, so callers
-/// must decode through `try_unpack` rather than slicing past it.
-///
-/// Returns `None` for an empty discriminator, which would match every account.
+/// Build the discriminator constants for a generated account type: the memcmp
+/// predicate the parser checks at `DISCRIMINATOR_OFFSET`, not a payload boundary.
+/// A numeric discriminator is re-read as the body's first field, so decode with
+/// `try_unpack`. Returns `None` for an empty discriminator, which matches all.
 ///
 fn discriminator_consts(
     ident: &proc_macro2::Ident,
@@ -58,10 +54,8 @@ fn discriminator_consts(
 ///
 /// Build the *account parser* for a program.
 ///
-/// Generates a wrapper struct with a non-Option oneof field and a manual
-/// `prost::Message` impl when `proto` is enabled. prost derives require
-/// `Option` for oneof fields, so we bypass them by implementing `Message`
-/// manually.
+/// prost derives need `Option` oneof fields, so under `proto` the wrapper gets a
+/// manual `prost::Message` impl.
 ///
 /// Example output:
 ///

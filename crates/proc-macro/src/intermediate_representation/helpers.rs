@@ -108,13 +108,9 @@ pub fn build_fields_ir(
     out
 }
 
-/// Materialize a Codama type whenever its protobuf representation needs a
-/// named message. This is recursive so inline structs continue to work when
-/// they are nested in arrays, tuples, options, or combinations of wrappers.
-///
-/// Direct inline structs and options containing one keep the names emitted by
-/// the original implementation. Additional wrapper messages get suffixes to
-/// avoid reusing a name at a different nesting depth.
+/// Materialize a Codama type whenever its protobuf form needs a named message,
+/// recursing through arrays, tuples and options. Deeper wrappers get suffixes so
+/// a name is never reused at another depth.
 pub fn materialize_type(
     base_name: &str,
     type_node: &codama_nodes::TypeNode,

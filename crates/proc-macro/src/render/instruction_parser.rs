@@ -104,13 +104,9 @@ pub(crate) fn extract_ix_discriminator_key(
 }
 
 ///
-/// Width of the byte window the generated match arm compares, when the
-/// discriminator is a fixed-size field.
-///
-/// The arm slices `offset..offset + size` using the *declared* field width but
-/// compares against the *decoded* default bytes, so a disagreement makes the arm
-/// unmatchable. `None` when no width constraint applies (constant-bytes and
-/// numeric discriminators derive their window from the bytes themselves).
+/// Width of the window the match arm compares for a fixed-size discriminator
+/// field; a mismatch with the decoded bytes makes the arm unmatchable. `None`
+/// for constant-bytes and numeric discriminators, which size it themselves.
 ///
 fn ix_discriminator_slice_width(ix: &codama_nodes::InstructionNode) -> Option<usize> {
     let DiscriminatorNode::Field(node) = ix.discriminators.first()? else {
@@ -126,10 +122,8 @@ fn ix_discriminator_slice_width(ix: &codama_nodes::InstructionNode) -> Option<us
 ///
 /// An event's own discriminators, rebased onto the envelope-stripped layout.
 ///
-/// Both paths hand `resolve_event_default` data with no envelope: the CPI
-/// caller slices it off at `payload_offset`, and log lines never had one. IDL
-/// offsets describe the enveloped layout, so subtracting `payload_offset` puts
-/// both paths on the same layout and one set of offsets serves both.
+/// Both the CPI and log paths pass data without the envelope, so subtracting
+/// `payload_offset` from the IDL offsets serves both.
 ///
 /// Example output:
 ///
@@ -138,8 +132,7 @@ fn ix_discriminator_slice_width(ix: &codama_nodes::InstructionNode) -> Option<us
 /// // rebased:  [const 40c6..@0]
 /// ```
 ///
-/// `None` when this event declares no envelope, as resolved by the caller from
-/// the validated pass; its discriminators already describe the stripped layout.
+/// `None` when the event declares no envelope; its offsets are already stripped.
 ///
 fn rebased_event_discriminators(
     ev: &codama_nodes::EventNode,
@@ -753,13 +746,9 @@ pub fn instruction_parser(
 
     // 1b. Per-instruction discriminator constants, exposed on the wrapper type.
     //
-    // `to_snake_case().to_uppercase()` is not injective over names that differ
-    // only by case outside ASCII: `ä` and `Ä` are distinct instructions with
-    // distinct variants and distinct `parse_*` helpers, yet both fold to `Ä`.
-    // An ambiguous constant is worse than none, so a colliding group is skipped
-    // entirely, the same rule the width and empty-discriminator guards follow.
-    // Skipping keeps this purely additive: such an IDL compiles exactly as it did
-    // before, minus the constants.
+    // `to_snake_case().to_uppercase()` folds `ä` and `Ä` together, so a colliding
+    // group gets no constants at all, like the width and empty guards. Such an IDL
+    // compiles as before, minus the constants.
     let const_name_counts = instructions.iter().fold(
         std::collections::HashMap::<String, usize>::new(),
         |mut counts, ix| {
@@ -1035,12 +1024,8 @@ pub fn instruction_parser(
         ///
         ///  Trait for customizing instruction resolution logic.
         ///
-        /// Implement this trait to handle programs where multiple instruction
-        /// variants share the same discriminator and need runtime disambiguation
-        /// (e.g. by account count or specific account values).
-        ///
-        /// Use with [`CustomInstructionParser`] to plug your resolver into the
-        /// Shipstern parser pipeline.
+        /// For programs where several instructions share a discriminator and need
+        /// runtime disambiguation. Plug it in with [`CustomInstructionParser`].
         ///
         pub trait InstructionResolver: Send + Sync + std::fmt::Debug + Copy + 'static {
             fn resolve(

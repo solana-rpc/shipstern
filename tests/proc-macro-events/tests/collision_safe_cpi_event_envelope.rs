@@ -1,14 +1,7 @@
 //!
-//! The envelope-vs-instruction collision guard must not disturb the
-//! instruction-vs-instruction disambiguation the README documents.
-//!
-//! This IDL has both in play at once: `swapBig` and `swapSmall` deliberately
-//! share discriminator `0x09` and are told apart by account count, while the
-//! events declare a `0xfe` envelope. The guard runs, since an envelope is
-//! present, and must stay silent because `0xfe` and `0x09` share no prefix.
-//!
-//! Building this file at all is half the assertion: a guard that fired on
-//! instruction-vs-instruction sharing would fail compilation here.
+//! The envelope collision guard must stay silent when instructions share a
+//! discriminator (`0x09`, told apart by account count) and the envelope is `0xfe`.
+//! A guard that fired here would fail compilation.
 //!
 
 use std::sync::Arc;

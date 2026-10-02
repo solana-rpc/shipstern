@@ -573,15 +573,8 @@ async fn test_send_filter_update_replaces_the_whole_set() {
     assert_eq!(handle.filters().parser_ids().count(), 0);
 }
 
-/// A `watch` send publishes whether or not the value changed, and the source
-/// turns anything published into a fresh subscribe request, so an edit that
-/// changed nothing would make the server re-apply the whole set for no reason.
-///
-/// Counts how many times marker 7 reached the source: one real update puts it
-/// in the live set, and the two no-ops that follow would each republish that
-/// same set if `watch` were sent unconditionally. Marker 7 is used by no other
-/// test, which matters because the recording statics are shared across the
-/// whole binary.
+/// An edit that changes nothing must not republish the set. Marker 7 is unique
+/// to this test because the recording statics are shared across the binary.
 #[tokio::test]
 async fn test_update_that_changes_nothing_is_not_handed_to_the_source() {
     let runtime = filter_update_runtime();

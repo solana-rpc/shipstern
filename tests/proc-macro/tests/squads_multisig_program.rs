@@ -15,28 +15,9 @@ fn check_protobuf_schema() {
 }
 
 ///
-/// Regression test for the schema/encoder mismatch on `VaultTransactionCreate`.
-///
-/// The IDL defines a top-level type `vaultTransactionCreateArgs` and an
-/// instruction `vaultTransactionCreate` whose `args` field references it.
-/// The instruction-args wrapper struct that shipstern synthesizes
-/// (`instruction::VaultTransactionCreateArgs`) collides with the top-level
-/// type's name. When this collision occurs, shipstern used to emit:
-///
-/// - a *wrapper* Rust struct on the encoder side
-///   (`instruction::VaultTransactionCreateArgs { args: super::VaultTransactionCreateArgs }`),
-/// - but a *flat* declaration in `PROTOBUF_SCHEMA`
-///   (`message VaultTransactionCreateArgs { uint32 vault_index = 1; ... }`).
-///
-/// The runtime then encodes one extra layer of nesting compared to what the
-/// schema declares, and any consumer using the schema (e.g. a Schema
-/// Registry-backed decoder) fails with
-/// `invalid wire type: LengthDelimited (expected Varint)` on tag=1.
-///
-/// This test takes a real on-chain `vault_transaction_create` instruction,
-/// encodes it through the parser-generated `prost::Message` impl exactly as
-/// the kafka sink does, and decodes the result with `prost-reflect` against
-/// `PROTOBUF_SCHEMA`. If schema and encoder agree, the round-trip succeeds.
+/// Regression: a top-level `vaultTransactionCreateArgs` type collided with the
+/// instruction's args wrapper, so the encoder nested one layer deeper than
+/// `PROTOBUF_SCHEMA`. A real instruction round-trips through `prost-reflect`.
 ///
 #[tokio::test]
 async fn schema_matches_encoder_for_vault_transaction_create() {

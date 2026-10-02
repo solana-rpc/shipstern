@@ -1,8 +1,5 @@
-// Regression test for inline Codama structs.
-//
-// Pinocchio-style fixed strings can be represented as an inline struct such
-// as `[u8 length][N-byte UTF-8 buffer]`. The proc macro must materialize these
-// structs as protobuf messages, including when they are wrapped in Option.
+// Regression: inline Codama structs (e.g. Pinocchio fixed strings) must become
+// protobuf messages, including inside an Option.
 
 use shipstern_proc_macro::include_shipstern_parser;
 use shipstern_test_utils::check_protobuf_format;

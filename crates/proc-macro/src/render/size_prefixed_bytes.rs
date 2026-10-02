@@ -1,10 +1,6 @@
-//! Borsh field codecs for byte strings whose Codama length prefix is not native u32 LE.
-//! The public Rust field stays `Vec<u8>`/`String` and the protobuf field stays
-//! `bytes`/`string`; only the wire codec changes.
-//!
-//! Like every other non-native borsh encoding here, an affected field carries only
-//! `#[borsh(deserialize_with = ..., serialize_with = ...)]` pointing at a generic helper
-//! emitted once per program module by [`helpers`].
+//! Borsh field codecs for byte strings whose Codama length prefix is not native
+//! u32 LE. Only the wire codec changes: fields point `deserialize_with` and
+//! `serialize_with` at helpers emitted once per program module by [`helpers`].
 use codama_nodes::{Endianness, NumberFormat};
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
@@ -51,10 +47,8 @@ pub fn attrs(field: &FieldIr, path_prefix: &str) -> TokenStream {
         ),
 
         LabelIr::Optional(encoding) => {
-            // A variable-size payload can never be the item of a fixed Codama option, so there
-            // is no `None` padding to write. `build_option_encoding` already rejects that
-            // pairing; panic rather than debug_assert, because a release-profile proc-macro
-            // would otherwise silently emit a codec that skips the padding.
+            // `build_option_encoding` rejects a variable-size item in a fixed option. Assert
+            // instead of debug_assert so a release-profile build can't skip the padding.
             assert!(
                 encoding.none_padding.is_none(),
                 "size-prefixed field `{}` cannot be the item of a fixed Codama option",

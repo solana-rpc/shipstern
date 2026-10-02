@@ -148,11 +148,8 @@ fn build_instruction_messages(ix: &InstructionNode, ir: &mut SchemaIr) {
         });
     }
 
-    // Use `types.push()` instead of `push_unique_type()` because instruction
-    // wrapper names (after dropping the `Instruction` suffix) can collide with
-    // defined types or accounts that were pushed earlier. We always want the
-    // Instruction-kind entry in the schema; the renderer routes types to the
-    // correct scope based on `kind`, so duplicates with different kinds are fine.
+    // `push`, not `push_unique_type`: a wrapper name can match an earlier defined
+    // type, and the renderer scopes entries by `kind`, so such duplicates are fine.
     ir.types.push(TypeIr {
         name: accounts_name.clone(),
         fields: account_fields,
@@ -161,15 +158,9 @@ fn build_instruction_messages(ix: &InstructionNode, ir: &mut SchemaIr) {
 
     let arg_fields = build_fields_ir(&args_name, &ix.arguments, ir, TypeKindIr::Helper);
 
-    // Skip emitting the instruction-kind args wrapper when its name collides
-    // with a top-level DefinedType. The proto schema renderer drops duplicate
-    // names and keeps the DefinedType's flat shape, so emitting the Rust
-    // wrapper here would encode one extra layer of nesting compared to what
-    // the schema declares (a schema/encoder mismatch the consumer can't
-    // decode). With the wrapper omitted, field resolution in the dispatch
-    // wrapper struct (`instruction::<IxName>`) naturally falls back to
-    // `super::<args_name>`, and the dispatch module emits a `pub use` to
-    // keep `instruction::<args_name>` paths working in parser helper fns.
+    // Skip the args wrapper when it shares a top-level DefinedType's name: the
+    // schema keeps the flat type, so the wrapper would nest one layer too deep.
+    // Fields fall back to `super::`, and a `pub use` keeps old paths working.
     let collides_with_defined_type = ir
         .types
         .iter()

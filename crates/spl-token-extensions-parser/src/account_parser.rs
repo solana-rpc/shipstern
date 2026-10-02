@@ -299,14 +299,8 @@ mod tests {
         assert!(!ext_mint.extensions.is_empty());
     }
 
-    /// `PermissionedBurn` is the extension spl-token-2022 11 adds, and the
-    /// reason the Token-2022 bump is part of this migration.
-    ///
-    /// It is built here rather than fetched: a census of 3851 mainnet
-    /// Token-2022 accounts carrying extensions found zero using it, so there
-    /// is nothing on chain to pull. The mint is assembled with Token-2022's
-    /// own writer, so the bytes are laid out exactly as the program writes
-    /// them.
+    /// `PermissionedBurn` is new in spl-token-2022 11. No mainnet account uses it
+    /// (0 of 3851 with extensions), so the mint is built with Token-2022's writer.
     #[test]
     fn permissioned_burn_mint_parses_into_an_extension_entry() {
         use spl_token_2022::{

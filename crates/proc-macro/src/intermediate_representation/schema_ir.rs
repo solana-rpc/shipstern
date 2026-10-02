@@ -7,13 +7,8 @@ pub struct SchemaIr {
     pub types: Vec<TypeIr>,
     pub oneofs: Vec<OneofIr>,
 
-    /// Defined types that are represented as a field rather than a message
-    /// are inlined as their field label and inner type.
-    ///
-    /// For example, `optionBool` (a tuple with one bool) becomes a direct
-    /// `bool` field instead of a wrapper struct with `item_0`. Keeping the
-    /// label is important for aliases such as `Option<InlineStruct>` and
-    /// `Array<Tuple>`.
+    /// Defined types inlined as a field label and inner type instead of a message,
+    /// e.g. `optionBool` becomes a `bool` field rather than a struct with `item_0`.
     pub type_aliases: HashMap<String, TypeAliasIr>,
 
     /// Raw aliases are registered before they are materialized so an alias may
@@ -379,13 +374,9 @@ impl SchemaIr {
         }
     }
 
-    /// Collect the set of top-level (defined type / helper / account) names
-    /// that collide with instruction or event types.
-    ///
-    /// When an instruction named "swap" generates `SwapArgs` but a defined
-    /// type `swapArgs` also maps to `SwapArgs`, the collision set contains
-    /// `"SwapArgs"`. The renderer uses this to always emit `super::SwapArgs`
-    /// for such names inside submodules.
+    /// Top-level names that collide with instruction or event types (e.g. a defined
+    /// `swapArgs` vs the instruction's `SwapArgs`), which the renderer always
+    /// emits as `super::` inside submodules.
     ///
     pub fn colliding_names(&self) -> std::collections::HashSet<String> {
         use std::collections::HashSet;

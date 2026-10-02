@@ -1,11 +1,6 @@
 //!
-//! Regression coverage for a CPI event envelope that pads between the envelope
-//! tag and the event discriminator.
-//!
-//! The IDL declares a 1-byte envelope `fe` at offset 0 and the event
-//! discriminator `a1a2` at offset 4, so `payload_offset` is 4. Before the
-//! envelope was sourced from the IDL, the generated parser stripped a fixed 8
-//! bytes, landing 4 bytes inside the borsh payload; both tests below failed.
+//! Regression: envelope `fe`@0 and event discriminator `a1a2`@4 put the payload
+//! at offset 4. The old fixed 8-byte strip landed inside the borsh payload.
 //!
 
 use std::sync::Arc;

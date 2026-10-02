@@ -20,11 +20,8 @@ pub fn rust_types_from_ir(schema_ir: &crate::intermediate_representation::Schema
         .map(|oneof_ir| oneof_ir.parent_message.as_str())
         .collect();
 
-    // Oneof parents from dispatch oneofs only (InstructionDispatch / EventDispatch).
-    // Used to exclude dispatch wrapper types (e.g. "Instructions") from the payload
-    // type lists. We must NOT use the full `oneof_parents` set here because defined
-    // type enum names (e.g. "SetRealmConfigItemArgs") would accidentally exclude
-    // instruction/event payload types that share the same name.
+    // Dispatch oneof parents only: the full `oneof_parents` set would also exclude
+    // payload types that share a name with a defined type enum.
     let dispatch_oneof_parents: HashSet<&str> = schema_ir
         .oneofs
         .iter()
@@ -58,10 +55,8 @@ pub fn rust_types_from_ir(schema_ir: &crate::intermediate_representation::Schema
         .map(|t| t.name.as_str())
         .collect();
 
-    // Collect account-kind names so we can skip DefinedTypes that share the same name.
-    // This happens when an IDL declares both an account and a type with the same name
-    // (e.g. `MarginAccount`). The Account version is authoritative; emitting both would
-    // produce duplicate struct definitions.
+    // Skip DefinedTypes named like an account (e.g. `MarginAccount`); the account
+    // version is authoritative and both would be duplicate structs.
     let account_type_names: HashSet<&str> = schema_ir
         .types
         .iter()
@@ -193,11 +188,8 @@ fn render_dispatch(
     let oneof_ident = format_ident!("{}", enum_name);
     let field_ident = format_ident!("{}", oneof_ir.field_name);
 
-    // Wrapper types (e.g. `Swap`) have fields that always reference local instruction
-    // types (`SwapAccounts`, `SwapArgs`). Non-wrapper types (like `SwapArgs` itself)
-    // may reference top-level defined types. When a name collides (instruction type
-    // and defined type share the same name), non-wrapper types need collision-adjusted
-    // `local_names` so their fields resolve to `super::`.
+    // Wrapper types always reference local types; on a name collision, non-wrapper
+    // types need the adjusted `local_names` so their fields resolve to `super::`.
     let wrapper_names: HashSet<&str> = oneof_ir
         .variants
         .iter()
@@ -221,13 +213,9 @@ fn render_dispatch(
         })
         .collect();
 
-    // Re-export top-level types for variants whose `<IxName>Args` (or
-    // `<EvName>Args`) wrapper was suppressed because it would collide with a
-    // top-level DefinedType. The variant's `args:` field then resolves to the
-    // re-exported (FLAT) type, matching what the proto schema declares — so
-    // encode/decode through the schema agree byte-for-byte. See
-    // `build_instructions_schema::build_instruction_messages` for the
-    // suppression rule.
+    // Re-export the top-level type when a variant's `Args` wrapper was suppressed
+    // (see `build_instructions_schema::build_instruction_messages`), so encode and
+    // decode match the proto schema byte for byte.
     let module_reexports: Vec<TokenStream> = oneof_ir
         .variants
         .iter()

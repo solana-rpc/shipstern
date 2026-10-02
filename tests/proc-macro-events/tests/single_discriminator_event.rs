@@ -1,12 +1,6 @@
 //!
-//! An event that declares no envelope must behave exactly as it did before the
-//! envelope work, on both paths.
-//!
-//! `epsilonEvent` has one discriminator, `e1e2`@0, so `envelope_of` returns
-//! `Ok(None)`, nothing is rebased, and the CPI path falls back to Anchor's
-//! default envelope. This is the precedence rule that keeps every pre-existing
-//! IDL working, and it was previously covered only implicitly by other test
-//! files continuing to pass.
+//! An event with no envelope (`e1e2`@0) behaves as before on both paths: nothing
+//! is rebased and the CPI path falls back to Anchor's default envelope.
 //!
 
 use std::sync::Arc;

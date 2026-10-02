@@ -209,26 +209,10 @@ mod dispatch_index_tests {
 }
 
 ///
-/// Wire-compatibility guards for the protobuf `package` declarations.
-///
-/// These strings are part of the public wire contract, not an internal naming
-/// detail. The package determines the gRPC method path
-/// (`/shipstern.stream.ProgramStreams/Subscribe`) and the `google.protobuf.Any`
-/// type URLs carried in `SubscribeUpdate.parsed`
-/// (`type.googleapis.com/shipstern.parser.token.TokenAccount`).
-///
-/// The packages were renamed `vixen.*` -> `shipstern.*` in 0.8.0. That was a
-/// deliberate, one-time break: deployed clients on the old packages get
-/// `UNIMPLEMENTED` on the gRPC path, and their `Any` type URLs stop matching
-/// *without* erroring, so the failure is silent. Consumers must regenerate.
-///
-/// These guards pin the post-rename contract so the next accidental rename is
-/// caught, and reject any `vixen.*` declaration left behind by an incomplete
-/// sweep. Nothing else in the suite covers these strings.
-///
-/// A proto-only sweep fails to compile first, since generated file names track
-/// the package and `include!` stops resolving. This guard covers the
-/// consistent rename, where package and include paths move together.
+/// Guards the protobuf `package` names, which are wire contract: they set the
+/// gRPC method path and the `Any` type URLs in `SubscribeUpdate.parsed`. The
+/// 0.8.0 `vixen.*` -> `shipstern.*` rename broke old clients silently, so these
+/// pin the new names and reject any leftover `vixen.*` declaration.
 ///
 #[cfg(all(test, feature = "parser"))]
 mod wire_compat_tests {

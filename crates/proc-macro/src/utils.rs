@@ -72,16 +72,9 @@ pub fn to_pascal_case(str: &str) -> String {
 }
 
 ///
-/// Render a count, size or offset as an **unsuffixed** integer literal.
-///
-/// `quote!` interpolates a bare integer as a *suffixed* literal: a `usize`
-/// becomes `558usize`, a `u64` becomes `558u64`. That pins the generated code
-/// to the width codama happens to use for that field. Generated parsers compare
-/// against `data.len()` and declare `usize` consts, so the day codama widens a
-/// count/size/offset the emitted code stops compiling.
-///
-/// An unsuffixed literal lets inference pick the width at the use site, which
-/// keeps the generated code correct on both sides of that change.
+/// Render a count, size or offset as an unsuffixed integer literal, so the
+/// generated code infers the width at the use site. `quote!` would emit
+/// `558usize` or `558u64`, which stops compiling when codama widens the field.
 ///
 /// Example output:
 ///
@@ -98,15 +91,9 @@ pub(crate) fn unsuffixed(value: u64) -> proc_macro2::Literal {
 }
 
 ///
-/// Narrow a codama count, size or offset to a buffer index.
-///
-/// codama types these `u64` because that is what its JSON schema says, but every
-/// use here indexes an in-memory slice, where the type is `usize`. Converting at
-/// the boundary keeps that widening out of the rest of the macro.
-///
-/// Panics on a value that does not fit, which on a 64-bit host means never. A
-/// proc-macro panic surfaces as a compile error naming the value, which is the
-/// right outcome for an IDL declaring an offset larger than addressable memory.
+/// Narrow a codama `u64` count, size or offset to a `usize` buffer index at the
+/// boundary. Panics if it doesn't fit, which surfaces as a compile error naming
+/// the value; on a 64-bit host that never happens.
 ///
 pub(crate) fn as_index(value: u64) -> usize {
     usize::try_from(value)

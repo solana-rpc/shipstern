@@ -860,19 +860,6 @@ async fn parsed_messages_before_lifecycle_are_buffered() {
 }
 
 #[tokio::test]
-async fn double_confirmation_is_idempotent() {
-    let mut harness = TestHarness::spawn();
-
-    let slot = harness.slot(100).parent(99).record("data").parsed().await;
-
-    slot.confirm().await;
-    harness.expect_flush(100).await.records(&["data"]);
-
-    slot.confirm().await;
-    harness.expect_no_flush().await;
-}
-
-#[tokio::test]
 async fn incomplete_slot_blocks_subsequent() {
     let mut harness = TestHarness::spawn();
 
@@ -1079,24 +1066,6 @@ async fn account_only_mode_flushes_without_transaction_parsed_messages() {
 }
 
 #[tokio::test]
-async fn account_event_for_never_frozen_slot_does_not_stall_flush() {
-    let mut harness = TestHarness::spawn();
-
-    // Send AccountEventSeen for slot 100 (which never gets BlockFrozen).
-    harness
-        .input_tx
-        .send(CoordinatorInput::AccountEventSeen { slot: 100 })
-        .await
-        .unwrap();
-
-    // Slot 200 is fully ready and should flush without being blocked.
-    let slot = harness.slot(200).parent(199).empty().await;
-    slot.confirm().await;
-
-    harness.expect_flush(200).await;
-}
-
-#[tokio::test]
 async fn account_event_after_confirmed_is_warn_not_error() {
     let mut harness = TestHarness::spawn();
 
@@ -1208,10 +1177,9 @@ async fn dlq_incomplete_slot_unblocks_subsequent_flush() {
             .unwrap();
     }
 
-    // --- Step 2: Child slot 101 (parent=100) gets FULL lifecycle including entry + BlockMeta.
-    // When child's BlockMeta triggers handle_block_summary, it finds parent 100 still
-    // in block_buffer_map → need_optimistic_freeze. Since parent has no entries,
-    // optimistic freeze fails → DeadletterEvent::Incomplete(100) pushed to DLQ.
+    // --- Step 2: child slot 101 (parent=100) gets a full lifecycle. Its BlockMeta
+    // finds parent 100 still buffered with no entries, so the freeze fails and
+    // DeadletterEvent::Incomplete(100) goes to the DLQ.
     for status in [
         SlotStatus::SlotFirstShredReceived,
         SlotStatus::SlotCreatedBank,

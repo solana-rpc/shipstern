@@ -462,11 +462,9 @@ impl SlotWriteExecutor {
         plan: &SlotWritePlan<'_>,
         timeout: Duration,
     ) -> Result<(), SinkError> {
-        // Keep two retry scopes on purpose:
-        // - transactional control ops retry locally for transient producer state
-        // - the outer slot-level retry replays the full logical write after an abort/failure
-        // This keeps committed visibility atomic at the slot boundary without giving up too
-        // quickly on retriable begin/commit/abort errors.
+        // Two retry scopes on purpose: control ops retry locally on transient producer
+        // state, and the slot-level retry replays the whole write after an abort, so
+        // visibility stays atomic per slot.
         run_transactional_op(
             self.producer(),
             timeout,
