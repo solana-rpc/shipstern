@@ -224,18 +224,20 @@ impl CuckooAccounts {
             return None;
         }
 
-        // At 95% load an insert can fail; retry with twice the room.
-        let mut capacity = self.0.len();
-        loop {
+        // Near 95% load an insert can fail after evicting a key, so rebuild once at 2x.
+        let build = |capacity: usize| {
             let mut filter =
                 yellowstone_grpc_proto::cuckoo::CuckooFilter::<[u8; 32]>::with_capacity(capacity)
                     .ok()?;
-            if self.0.iter().all(|key| filter.insert(&key.0).is_ok()) {
-                return Some((&filter).into());
-            }
 
-            capacity = capacity.checked_mul(2)?;
-        }
+            self.0
+                .iter()
+                .all(|key| filter.insert(&key.0).is_ok())
+                .then(|| (&filter).into())
+        };
+
+        let len = self.0.len();
+        build(len).or_else(|| build(len.saturating_mul(2)))
     }
 }
 
@@ -1366,9 +1368,9 @@ impl PrefilterBuilder {
         })
     }
 
-    /// Like [`Self::accounts`], sent as a cuckoo filter, which can also match
-    /// keys outside the set. A server without cuckoo support ignores it, and
-    /// one with a lower size limit rejects the subscription.
+    /// Like [`Self::accounts`], sent as a cuckoo filter, which can also match keys
+    /// outside the set. A server without cuckoo support ignores it (a cuckoo-only
+    /// filter then matches everything); one with a lower size limit rejects it.
     pub fn account_cuckoo<I: IntoIterator>(self, it: I) -> Self
     where I::Item: AsRef<[u8]> {
         self.mutate(|this| {
@@ -2119,6 +2121,23 @@ mod tests {
         ] {
             assert!(has(filter, 1) && has(filter, 2));
         }
+    }
+
+    // This set's first build at `with_capacity(243)` fails, so only the 2x rebuild holds every key.
+    #[test]
+    fn test_cuckoo_accounts_rebuild_when_the_first_build_fails() {
+        let accounts: CuckooAccounts = (0..243u16)
+            .map(|i| {
+                let mut key = [0u8; 32];
+                key[0] = 22;
+                key[1..3].copy_from_slice(&i.to_le_bytes());
+                Pubkey::new(key)
+            })
+            .collect();
+
+        let wire = accounts.to_filter().expect("filter must build");
+        let filter = yellowstone_grpc_proto::cuckoo::CuckooFilter::<[u8; 32]>::from(&wire);
+        assert!(accounts.0.iter().all(|key| filter.contains(&key.0)));
     }
 
     #[test]
