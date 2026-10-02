@@ -30,7 +30,7 @@ use serde::Deserialize;
 use yellowstone_grpc_proto::geyser::{
     self, subscribe_request_filter_accounts_filter as wire_filter,
     subscribe_request_filter_accounts_filter_lamports as wire_lamports,
-    subscribe_request_filter_accounts_filter_memcmp as wire_memcmp, SubscribeRequest,
+    subscribe_request_filter_accounts_filter_memcmp as wire_memcmp, CuckooFilter, SubscribeRequest,
     SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
     SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
     SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
@@ -203,6 +203,68 @@ fn merge_opt<T, F: FnOnce(&mut T, T)>(lhs: &mut Option<T>, rhs: Option<T>, f: F)
     }
 }
 
+/// Accounts sent as one cuckoo filter. It can match keys outside the set.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct CuckooAccounts(Vec<Pubkey>);
+
+impl CuckooAccounts {
+    fn merge(&mut self, other: CuckooAccounts) {
+        self.0.extend(other.0);
+        self.normalize();
+    }
+
+    // Sorted so a set always builds the same bytes.
+    fn normalize(&mut self) {
+        self.0.sort_unstable_by_key(|key| key.0);
+        self.0.dedup();
+    }
+
+    fn to_filter(&self) -> Option<CuckooFilter> {
+        if self.0.is_empty() {
+            return None;
+        }
+
+        // Near 95% load an insert can fail after evicting a key, so rebuild once at 2x.
+        let build = |capacity: usize| {
+            let mut filter =
+                yellowstone_grpc_proto::cuckoo::CuckooFilter::<[u8; 32]>::with_capacity(capacity)
+                    .ok()?;
+
+            self.0
+                .iter()
+                .all(|key| filter.insert(&key.0).is_ok())
+                .then(|| (&filter).into())
+        };
+
+        let len = self.0.len();
+        build(len).or_else(|| build(len.saturating_mul(2)))
+    }
+}
+
+impl FromIterator<Pubkey> for CuckooAccounts {
+    fn from_iter<I: IntoIterator<Item = Pubkey>>(iter: I) -> Self {
+        let mut this = Self(iter.into_iter().collect());
+        this.normalize();
+        this
+    }
+}
+
+/// If the filter can't be built, its keys go in the list instead.
+fn wire_keys(
+    keys: &HashSet<Pubkey>,
+    cuckoo: &CuckooAccounts,
+) -> (Vec<String>, Option<CuckooFilter>) {
+    let filter = cuckoo.to_filter();
+    let fallback = if filter.is_none() { &cuckoo.0[..] } else { &[] };
+
+    let list = keys
+        .iter()
+        .chain(fallback)
+        .map(ToString::to_string)
+        .collect();
+    (list, filter)
+}
+
 impl Prefilter {
     /// Create a new prefilter builder.
     #[inline]
@@ -326,6 +388,8 @@ pub struct AccountPrefilter {
     /// Whether to require a non-empty transaction signature on the update.
     /// `None` receives every account update, which is the default.
     pub nonempty_txn_signature: Option<bool>,
+    /// Like [`Self::accounts`], sent as a cuckoo filter.
+    pub cuckoo_accounts: CuckooAccounts,
 }
 
 impl AccountPrefilter {
@@ -337,9 +401,11 @@ impl AccountPrefilter {
             owners,
             filters,
             nonempty_txn_signature,
+            cuckoo_accounts,
         } = self;
         accounts.extend(other.accounts);
         owners.extend(other.owners);
+        cuckoo_accounts.merge(other.cuckoo_accounts);
 
         // The server ANDs the filter list, so the union of two different lists
         // is no comparison: over-deliver and let the parser reject.
@@ -405,6 +471,8 @@ pub struct TransactionPrefilter {
     /// - `Some(false)`: Only successful transactions (default)
     /// - `Some(true)`: Only failed transactions
     pub failed: Option<bool>,
+    /// Like [`Self::accounts_include`], sent as a cuckoo filter.
+    pub cuckoo_accounts_include: CuckooAccounts,
 }
 
 impl Default for TransactionPrefilter {
@@ -417,6 +485,7 @@ impl Default for TransactionPrefilter {
             signature: None,      // No single-signature narrowing, as before
             token_accounts: None, // Match account keys only, as before
             failed: Some(false),  // Default to successful transactions (keep original behaviour)
+            cuckoo_accounts_include: CuckooAccounts::default(),
         }
     }
 }
@@ -433,9 +502,11 @@ impl TransactionPrefilter {
             signature,
             token_accounts,
             failed,
+            cuckoo_accounts_include,
         } = self;
 
         accounts_include.extend(other.accounts_include);
+        cuckoo_accounts_include.merge(other.cuckoo_accounts_include);
         accounts_required.extend(other.accounts_required);
 
         // Exclusion is a negation, so the union of what two prefilters receive
@@ -502,6 +573,8 @@ pub struct BlockPrefilter {
     pub include_accounts: bool,
     /// include all entries
     pub include_entries: bool,
+    /// Like [`Self::accounts_include`], sent as a cuckoo filter.
+    pub cuckoo_accounts_include: CuckooAccounts,
 }
 
 impl BlockPrefilter {
@@ -512,9 +585,11 @@ impl BlockPrefilter {
             include_transactions,
             include_accounts,
             include_entries,
+            cuckoo_accounts_include,
         } = self;
 
         accounts_include.extend(other.accounts_include);
+        cuckoo_accounts_include.merge(other.cuckoo_accounts_include);
         *include_accounts |= other.include_accounts;
         *include_transactions |= other.include_transactions;
         *include_entries |= other.include_entries;
@@ -1100,6 +1175,8 @@ pub struct PrefilterBuilder {
     block_include_transactions: bool,
     /// Matching [`BlockPrefilter::include_entries`]
     block_include_entries: bool,
+    /// Matching [`BlockPrefilter::cuckoo_accounts_include`]
+    block_cuckoo_accounts_include: Option<CuckooAccounts>,
     /// Including all accounts
     accounts_include_all: bool,
     /// Matching [`AccountPrefilter::accounts`]
@@ -1110,6 +1187,8 @@ pub struct PrefilterBuilder {
     account_filters: Option<Vec<AccountFilter>>,
     /// Matching [`AccountPrefilter::nonempty_txn_signature`]
     account_nonempty_txn_signature: Option<bool>,
+    /// Matching [`AccountPrefilter::cuckoo_accounts`]
+    account_cuckoo: Option<CuckooAccounts>,
     /// Matching [`TransactionPrefilter::accounts_exclude`]
     transaction_accounts_exclude: Option<HashSet<Pubkey>>,
     /// Matching [`TransactionPrefilter::vote`]
@@ -1124,6 +1203,8 @@ pub struct PrefilterBuilder {
     transaction_accounts_include: Option<HashSet<Pubkey>>,
     /// Matching [`TransactionPrefilter::accounts_required`]
     transaction_accounts_required: Option<HashSet<Pubkey>>,
+    /// Matching [`TransactionPrefilter::cuckoo_accounts_include`]
+    transaction_cuckoo_accounts_include: Option<CuckooAccounts>,
 }
 
 fn set_opt<T>(opt: &mut Option<T>, field: &'static str, val: T) -> Result<(), PrefilterError> {
@@ -1173,6 +1254,9 @@ impl PrefilterBuilder {
             transaction_signature,
             transaction_token_accounts,
             slot_interslot_updates,
+            account_cuckoo,
+            transaction_cuckoo_accounts_include,
+            block_cuckoo_accounts_include,
         } = self;
         if let Some(err) = error {
             return Err(err);
@@ -1183,6 +1267,7 @@ impl PrefilterBuilder {
             owners: account_owners.unwrap_or_default(),
             filters: account_filters.unwrap_or_default(),
             nonempty_txn_signature: account_nonempty_txn_signature,
+            cuckoo_accounts: account_cuckoo.unwrap_or_default(),
         };
 
         let transaction = TransactionPrefilter {
@@ -1192,6 +1277,7 @@ impl PrefilterBuilder {
             vote: transaction_vote,
             signature: transaction_signature,
             token_accounts: transaction_token_accounts,
+            cuckoo_accounts_include: transaction_cuckoo_accounts_include.unwrap_or_default(),
             ..Default::default()
         };
 
@@ -1202,6 +1288,7 @@ impl PrefilterBuilder {
             include_accounts: block_include_accounts,
             include_transactions: block_include_transactions,
             include_entries: block_include_entries,
+            cuckoo_accounts_include: block_cuckoo_accounts_include.unwrap_or_default(),
         };
 
         let slot = SlotPrefilter {
@@ -1281,6 +1368,20 @@ impl PrefilterBuilder {
         })
     }
 
+    /// Like [`Self::accounts`], sent as a cuckoo filter, which can also match keys
+    /// outside the set. A server without cuckoo support ignores it (a cuckoo-only
+    /// filter then matches everything); one with a lower size limit rejects it.
+    pub fn account_cuckoo<I: IntoIterator>(self, it: I) -> Self
+    where I::Item: AsRef<[u8]> {
+        self.mutate(|this| {
+            set_opt(
+                &mut this.account_cuckoo,
+                "account_cuckoo",
+                collect_pubkeys(it)?.into_iter().collect(),
+            )
+        })
+    }
+
     /// Drop transactions touching any of these accounts.
     ///
     /// Exclusion wins over every other axis. Pair with
@@ -1328,6 +1429,19 @@ impl PrefilterBuilder {
                 &mut this.transaction_token_accounts,
                 "transaction_token_accounts",
                 mode,
+            )
+        })
+    }
+
+    /// Like [`Self::transaction_accounts_include`], sent as a cuckoo filter.
+    /// See [`Self::account_cuckoo`].
+    pub fn transaction_cuckoo_accounts_include<I: IntoIterator>(self, it: I) -> Self
+    where I::Item: AsRef<[u8]> {
+        self.mutate(|this| {
+            set_opt(
+                &mut this.transaction_cuckoo_accounts_include,
+                "transaction_cuckoo_accounts_include",
+                collect_pubkeys(it)?.into_iter().collect(),
             )
         })
     }
@@ -1424,6 +1538,19 @@ impl PrefilterBuilder {
                 &mut this.block_accounts_include,
                 "block_accounts_include",
                 collect_pubkeys(it)?,
+            )
+        })
+    }
+
+    /// Like [`Self::block_accounts_include`], sent as a cuckoo filter.
+    /// See [`Self::account_cuckoo`].
+    pub fn block_cuckoo_accounts_include<I: IntoIterator>(self, it: I) -> Self
+    where I::Item: AsRef<[u8]> {
+        self.mutate(|this| {
+            set_opt(
+                &mut this.block_cuckoo_accounts_include,
+                "block_cuckoo_accounts_include",
+                collect_pubkeys(it)?.into_iter().collect(),
             )
         })
     }
@@ -1622,15 +1749,14 @@ impl From<Filters> for SubscribeRequest {
                 .iter()
                 .filter_map(|(k, v)| {
                     let v = v.account.as_ref()?;
+                    let (account, cuckoo) = wire_keys(&v.accounts, &v.cuckoo_accounts);
 
                     Some((k.clone(), SubscribeRequestFilterAccounts {
-                        account: v.accounts.iter().map(ToString::to_string).collect(),
+                        account,
                         owner: v.owners.iter().map(ToString::to_string).collect(),
                         filters: v.filters.iter().map(Into::into).collect(),
                         nonempty_txn_signature: v.nonempty_txn_signature,
-                        // Cuckoo-filter account matching (proto 12.6) is not
-                        // exposed through `AccountPrefilter`; opt out for now.
-                        cuckoo_accounts_filter: None,
+                        cuckoo_accounts_filter: cuckoo,
                     }))
                 })
                 .collect(),
@@ -1650,19 +1776,15 @@ impl From<Filters> for SubscribeRequest {
                 .iter()
                 .filter_map(|(k, v)| {
                     let v = v.transaction.as_ref()?;
+                    let (account_include, cuckoo) =
+                        wire_keys(&v.accounts_include, &v.cuckoo_accounts_include);
 
                     Some((k.clone(), SubscribeRequestFilterTransactions {
                         vote: v.vote,
                         failed: v.failed,
-                        // Cuckoo-filter account matching (proto 12.6.0) is not
-                        // exposed through `TransactionFilter`; opt out for now.
-                        cuckoo_account_include: None,
+                        cuckoo_account_include: cuckoo,
                         signature: v.signature.clone(),
-                        account_include: v
-                            .accounts_include
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect(),
+                        account_include,
                         account_exclude: v
                             .accounts_exclude
                             .iter()
@@ -1688,17 +1810,15 @@ impl From<Filters> for SubscribeRequest {
                 .iter()
                 .filter_map(|(k, v)| {
                     let v = v.block.as_ref()?;
+                    let (account_include, cuckoo) =
+                        wire_keys(&v.accounts_include, &v.cuckoo_accounts_include);
 
                     Some((k.clone(), SubscribeRequestFilterBlocks {
-                        account_include: v
-                            .accounts_include
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect(),
+                        account_include,
                         include_transactions: Some(v.include_transactions),
                         include_accounts: Some(v.include_accounts),
                         include_entries: Some(v.include_entries),
-                        cuckoo_account_include: None,
+                        cuckoo_account_include: cuckoo,
                     }))
                 })
                 .collect(),
@@ -1860,6 +1980,7 @@ mod tests {
             include_accounts,
             include_transactions,
             include_entries,
+            cuckoo_accounts_include: CuckooAccounts::default(),
         }
     }
 
@@ -1969,6 +2090,54 @@ mod tests {
             let wired = one(p.expect("prefilter must build")).transactions["p"].token_accounts;
             assert_eq!(wired, Some(wire), "{mode:?}");
         }
+    }
+
+    #[test]
+    fn test_cuckoo_accounts_merge_into_one_filter() {
+        let with = |key: u8| {
+            Prefilter::builder()
+                .account_cuckoo([[key; 32]])
+                .transaction_cuckoo_accounts_include([[key; 32]])
+                .block_cuckoo_accounts_include([[key; 32]])
+                .build()
+                .unwrap()
+        };
+        let has = |filter: Option<&CuckooFilter>, key: u8| {
+            filter.is_some_and(|filter| {
+                yellowstone_grpc_proto::cuckoo::CuckooFilter::<[u8; 32]>::from(filter)
+                    .contains(&[key; 32])
+            })
+        };
+
+        let mut merged = with(1);
+        merged.merge(with(2));
+        let request = one(merged);
+
+        assert!(request.accounts["p"].account.is_empty());
+        for filter in [
+            request.accounts["p"].cuckoo_accounts_filter.as_ref(),
+            request.transactions["p"].cuckoo_account_include.as_ref(),
+            request.blocks["p"].cuckoo_account_include.as_ref(),
+        ] {
+            assert!(has(filter, 1) && has(filter, 2));
+        }
+    }
+
+    // This set's first build at `with_capacity(243)` fails, so only the 2x rebuild holds every key.
+    #[test]
+    fn test_cuckoo_accounts_rebuild_when_the_first_build_fails() {
+        let accounts: CuckooAccounts = (0..243u16)
+            .map(|i| {
+                let mut key = [0u8; 32];
+                key[0] = 22;
+                key[1..3].copy_from_slice(&i.to_le_bytes());
+                Pubkey::new(key)
+            })
+            .collect();
+
+        let wire = accounts.to_filter().expect("filter must build");
+        let filter = yellowstone_grpc_proto::cuckoo::CuckooFilter::<[u8; 32]>::from(&wire);
+        assert!(accounts.0.iter().all(|key| filter.contains(&key.0)));
     }
 
     #[test]
@@ -2501,6 +2670,7 @@ mod tests {
             include_accounts: false,
             include_transactions: false,
             include_entries: false,
+            cuckoo_accounts_include: CuckooAccounts::default(),
         };
 
         let b = BlockPrefilter {
@@ -2508,6 +2678,7 @@ mod tests {
             include_accounts: false,
             include_transactions: false,
             include_entries: false,
+            cuckoo_accounts_include: CuckooAccounts::default(),
         };
 
         a.merge(b);

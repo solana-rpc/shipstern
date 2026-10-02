@@ -1089,6 +1089,7 @@ slot-end = 2000
                 include_transactions: false,
                 include_accounts: false,
                 include_entries: true,
+                cuckoo_accounts_include: Default::default(),
             }),
             slot: None,
         });
@@ -1213,6 +1214,7 @@ slot-end = 2000
                 include_transactions: false,
                 include_accounts: false,
                 include_entries: true,
+                cuckoo_accounts_include: Default::default(),
             }),
             slot: None,
         });
@@ -1390,6 +1392,7 @@ slot-end = 2000
                 include_transactions: true,
                 include_accounts: false,
                 include_entries: false,
+                cuckoo_accounts_include: Default::default(),
             }),
             slot: Some(SlotPrefilter::default()),
         });
