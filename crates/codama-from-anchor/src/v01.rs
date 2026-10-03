@@ -58,8 +58,6 @@ fn program_node(idl: &Idl) -> Result<ProgramNode, Error> {
         .map(|t| defined_type_node(t, &generics).map_err(|e| e.at(ItemKind::Type, &t.name)))
         .collect::<Result<_, _>>()?;
 
-    check_names(ItemKind::Type, unclaimed.iter().map(|t| t.name.as_str()))?;
-
     let accounts = idl
         .accounts
         .iter()
@@ -93,6 +91,7 @@ fn program_node(idl: &Idl) -> Result<ProgramNode, Error> {
         .collect::<Result<_, _>>()?;
 
     // After the conversions, so an IDL JS also fails reports what JS does.
+    check_names(ItemKind::Type, unclaimed.iter().map(|t| t.name.as_str()))?;
     check_items(
         ItemKind::Account,
         idl.accounts
@@ -142,7 +141,8 @@ fn check_names<'a>(kind: ItemKind, names: impl Iterator<Item = &'a str>) -> Resu
 }
 
 /// The parser tries discriminators in IDL order, so a proper prefix of another can
-/// match its data. Equal instructions are told apart by account count.
+/// match its data. Equal instructions are told apart by account count, or fail at
+/// parse time as ambiguous when the counts match.
 fn check_items<'a>(
     kind: ItemKind,
     items: impl Iterator<Item = (&'a str, &'a [u8])>,
@@ -186,7 +186,7 @@ fn defined_type_node(ty: &idl::TypeDef, generics: &Generics<'_>) -> Result<Defin
     })
 }
 
-fn fixed_bytes(len: usize) -> TypeNode {
+pub(crate) fn fixed_bytes(len: usize) -> TypeNode {
     TypeNode::FixedSize(FixedSizeTypeNode {
         size: len,
         r#type: Box::new(TypeNode::Bytes(BytesTypeNode {})),
@@ -200,8 +200,24 @@ fn base16_bytes(bytes: &[u8]) -> BytesValueNode {
     }
 }
 
-fn find_type<'a>(types: &[&'a idl::TypeDef], name: &str) -> Option<&'a idl::TypeDef> {
-    types.iter().copied().find(|t| t.name == name)
+/// An account's or event's type. Looked up before the discriminator check, so an
+/// IDL wrong in both ways reports what JS does.
+fn payload(
+    name: &str,
+    discriminator: &[u8],
+    types: &[&idl::TypeDef],
+    generics: &Generics<'_>,
+) -> Result<TypeNode, Error> {
+    let ty = types
+        .iter()
+        .find(|t| t.name == name)
+        .ok_or(Error::TypeMissing)?;
+
+    if discriminator.is_empty() {
+        return Err(Error::EmptyDiscriminator);
+    }
+
+    type_node(ty.ty.as_ref().unwrap_or(&Value::Null), generics)
 }
 
 fn account_node(
@@ -209,16 +225,8 @@ fn account_node(
     types: &[&idl::TypeDef],
     generics: &Generics<'_>,
 ) -> Result<AccountNode, Error> {
-    let ty = find_type(types, &account.name).ok_or(Error::TypeMissing)?;
-
-    // After the type lookup, so an IDL wrong in both ways reports what JS does.
-    if account.discriminator.is_empty() {
-        return Err(Error::EmptyDiscriminator);
-    }
-
-    let body = ty.ty.clone().unwrap_or(Value::Null);
-
-    let TypeNode::Struct(data) = type_node(&body, generics)? else {
+    let TypeNode::Struct(data) = payload(&account.name, &account.discriminator, types, generics)?
+    else {
         return Err(Error::TypeNotStruct);
     };
 
@@ -255,16 +263,9 @@ fn event_node(
     types: &[&idl::TypeDef],
     generics: &Generics<'_>,
 ) -> Result<EventNode, Error> {
-    let ty = find_type(types, &event.name).ok_or(Error::TypeMissing)?;
-
-    if event.discriminator.is_empty() {
-        return Err(Error::EmptyDiscriminator);
-    }
-
-    let body = ty.ty.clone().unwrap_or(Value::Null);
-
-    // JS writes any payload, and the event renderer panics on anything but a struct.
-    let data @ TypeNode::Struct(_) = type_node(&body, generics)? else {
+    // JS writes any payload, and the `program-events` parser panics on anything but a struct.
+    let data @ TypeNode::Struct(_) = payload(&event.name, &event.discriminator, types, generics)?
+    else {
         return Err(Error::TypeNotStruct);
     };
 
@@ -524,17 +525,18 @@ fn instruction_account_node(
     let name = prefixed(prefix, &account.name);
 
     let default_value = match (&account.address, &account.pda) {
-        (Some(address), _) => Some(InstructionInputValueNode::PublicKeyValue(
-            PublicKeyValueNode {
+        // JS treats an empty address as absent.
+        (Some(address), _) if !address.is_empty() => Some(
+            InstructionInputValueNode::PublicKeyValue(PublicKeyValueNode {
                 public_key: address.clone(),
                 identifier: Some(camel(&name)?),
-            },
-        )),
+            }),
+        ),
 
-        (None, Some(pda)) => pda_default(pda, &name, arguments, prefix)
+        (_, Some(pda)) => pda_default(pda, &name, arguments, prefix)
             .map_err(|e| e.at(ItemKind::Account, &name))?,
 
-        (None, None) => None,
+        (_, None) => None,
     };
 
     Ok(InstructionAccountNode {

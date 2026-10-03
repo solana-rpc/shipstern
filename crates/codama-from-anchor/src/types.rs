@@ -26,7 +26,6 @@ struct Defs<'a> {
 
 /// Arguments bound to the parameters of the type being expanded, resolved in the
 /// caller's scope so a parameter name the callee reuses cannot capture them.
-#[derive(Clone)]
 pub(crate) struct Generics<'a> {
     defs: Rc<Defs<'a>>,
     const_args: HashMap<String, Value>,
@@ -86,6 +85,9 @@ impl<'a> Generics<'a> {
                     if let Some(len) = self.const_args.get(name) {
                         return Ok(Value::from(const_value(len)?));
                     }
+
+                    // Passed through, the callee's own parameter of this name would capture it.
+                    return Err(Error::GenericArgMissing(name.clone()));
                 }
 
                 // A const argument names an outer const parameter by value.
@@ -194,11 +196,9 @@ fn type_node_at(ty: &Value, generics: &Generics<'_>, depth: usize) -> Result<Typ
     }
 
     if kind == Some("struct") {
-        let empty = Vec::new();
-
         let fields = match obj.get("fields") {
-            Some(Value::Array(fields)) => fields,
-            None | Some(Value::Null) => &empty,
+            Some(Value::Array(fields)) => fields.as_slice(),
+            None | Some(Value::Null) => &[],
             Some(_) => return Err(unrecognized(ty)),
         };
 
@@ -287,6 +287,11 @@ fn array_len(len: &Value, generics: &Generics<'_>) -> Result<u64, Error> {
 /// A const argument's value goes through JS `parseInt`, which reads a leading
 /// run of digits, in hex after a `0x` prefix, and ignores the rest.
 fn const_value(arg: &Value) -> Result<u64, Error> {
+    // Anchor passes a const parameter on to another generic as `{"kind": "type", "type": N}`.
+    if let Some(len) = arg.get("type").and_then(Value::as_u64) {
+        return Ok(len);
+    }
+
     let raw = arg
         .get("value")
         .and_then(Value::as_str)
@@ -364,7 +369,13 @@ fn defined_type(
         .ok_or_else(|| Error::GenericTypeMissing(name.to_owned()))?;
 
     // Generics expand inline, and the renderer panics on an inline enum.
-    if generic_type.ty.as_ref().and_then(|ty| ty.get("kind")) == Some(&Value::from("enum")) {
+    if generic_type
+        .ty
+        .as_ref()
+        .and_then(|ty| ty.get("kind"))
+        .and_then(Value::as_str)
+        == Some("enum")
+    {
         return Err(Error::GenericEnum(name.to_owned()));
     }
 

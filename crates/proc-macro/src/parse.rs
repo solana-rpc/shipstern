@@ -19,10 +19,11 @@ impl std::fmt::Display for IdlError {
             ) => {
                 write!(
                     f,
-                    "{e}. The file has no top-level `kind` or `program`, so it was read as an \
-                     Anchor IDL. Codama JSON needs a top-level `program` object; upgrade an older \
-                     Anchor IDL with `anchor idl convert`, or convert it with `npx -p codama -p \
-                     @codama/nodes-from-anchor codama convert` and pass the Codama JSON instead"
+                    "{e}. The file has no top-level `kind` and no `program` object, so it was \
+                     read as an Anchor IDL. Codama JSON needs a top-level `program` object; \
+                     upgrade an older Anchor IDL with `anchor idl convert`, or convert it with \
+                     `npx -p codama -p @codama/nodes-from-anchor codama convert` and pass the \
+                     Codama JSON instead"
                 )
             },
             IdlError::ConvertAnchor(e) => write!(f, "Failed to convert Anchor IDL: {}", e),

@@ -124,7 +124,7 @@ pub enum Error {
     )]
     PaddedBorshType,
 
-    #[error("is zero_copy(unsafe) repr(C), but its layout cannot be computed")]
+    #[error("is zero_copy(unsafe), but its layout cannot be computed")]
     UnknownLayout,
 
     #[error("no type definition")]

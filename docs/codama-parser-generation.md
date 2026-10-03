@@ -16,7 +16,8 @@ Codama JSON ─────────────┘       (compile time)     
 0.30+) works as it is. See [the Anchor IDL guide](anchor-idl-parser.md).
 
 An older Anchor IDL has no `metadata.spec` and fails to compile with a message saying so.
-Convert it to Codama JSON first and pass that instead:
+Upgrade it with `anchor idl convert` (see [Older Anchor IDLs](anchor-idl-parser.md#older-anchor-idls)),
+or convert it to Codama JSON and pass that instead:
 
 ```bash
 npx -p codama -p @codama/nodes-from-anchor codama convert idl.json codama.json
@@ -66,7 +67,7 @@ shipstern-proc-macro = { version = "0.11.0", features = ["program-events"] }
 ```rust
 use shipstern_proc_macro::include_shipstern_parser;
 
-include_shipstern_parser!("path/to/codama.json");
+include_shipstern_parser!("path/to/idl.json");
 ```
 
 **4. Use the generated module.** It is named after the program, in snake_case, and

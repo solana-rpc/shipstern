@@ -5,12 +5,12 @@
 use std::collections::{HashMap, HashSet};
 
 use codama_nodes::{
-    BytesTypeNode, CountNode, EnumVariantTypeNode, FixedSizeTypeNode, InstructionArgumentNode,
-    InstructionInputValueNode, InstructionNode, NestedTypeNode, NumberFormat, PdaSeedNode,
-    PdaValuePda, ProgramNode, StructTypeNode, TypeNode,
+    CountNode, EnumVariantTypeNode, InstructionArgumentNode, InstructionInputValueNode,
+    InstructionNode, NestedTypeNode, NumberFormat, PdaSeedNode, PdaValuePda, ProgramNode,
+    StructTypeNode, TypeNode,
 };
 
-use crate::{case::ident, Error, ItemKind};
+use crate::{case::ident, v01::fixed_bytes, Error, ItemKind};
 
 pub(crate) fn run(program: &mut ProgramNode) -> Result<(), Error> {
     unwrap_instruction_args_defined_types(program);
@@ -198,15 +198,8 @@ fn unwrap_instruction_args_defined_types(program: &mut ProgramNode) {
 
     let mut replace = |ty: &mut TypeNode| inline_links(ty, &inline);
 
-    for account in &mut program.accounts {
-        if let NestedTypeNode::Value(s) = &mut account.data {
-            struct_children_mut(s, &mut replace);
-        }
-    }
-
-    for defined in &mut program.defined_types {
-        replace(&mut defined.r#type);
-    }
+    // Links in accounts and defined types are all counted, so an inlined type is
+    // linked only from an instruction.
 
     for ix in &mut program.instructions {
         instruction_types_mut(ix, &mut replace);
@@ -327,8 +320,5 @@ fn u8_arrays_to_bytes(ty: &mut TypeNode) {
         return;
     };
 
-    *ty = TypeNode::FixedSize(FixedSizeTypeNode {
-        size,
-        r#type: Box::new(TypeNode::Bytes(BytesTypeNode {})),
-    });
+    *ty = fixed_bytes(size);
 }

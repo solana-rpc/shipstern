@@ -79,11 +79,13 @@ Failed to load/parse IDL from "/path/to/my_crate/idls/my_program.json": Failed t
 | `clashes with the instruction discriminator` | An argument named `discriminator` | Rename it in the IDL |
 | `is not defined` | A `defined` type with no entry in `types` | Add the type, or fix the name |
 | `used without arguments` | A generic type referenced without its `generics` | Pass its arguments in the IDL |
+| `is not bound` | A `generic` that the enclosing type does not declare | Declare the parameter, or pass a concrete type |
+| `invalid array length` | An array length that is not a whole number or a bound const generic | Use the real length |
 | `generic enum` | An enum with `generics`, which would be expanded inline | Not supported yet; with `codama convert` output the macro panics instead |
 | `type nesting exceeds 128 levels` | A type nested more than 128 levels deep | Flatten the type in the IDL |
 | `type expansion exceeds` | Generic types nested so their expansion doubles at every level | Simplify the nesting in the IDL |
 | `Borsh also reads it` | A `zero_copy(unsafe)` `repr(C)` type with implicit padding that is also an instruction argument, an event, or a Borsh account field | Split it into two types in the IDL, one per use |
-| `layout cannot be computed` | A `zero_copy(unsafe)` `repr(C)` struct holding an option, a generic, a tuple struct or an enum with data, at any depth | Not supported: its padding cannot be placed, and `codama convert` output misreads the fields after a gap |
+| `layout cannot be computed` | A `zero_copy(unsafe)` struct holding an option, a vec, a string, a generic, a tuple struct, a `repr(Rust)` struct, an enum with data or an enum with a `repr`, at any depth | Not supported: its padding cannot be placed, and `codama convert` output misreads the fields after a gap |
 
 ## 5. Check the parser against real data
 
@@ -98,7 +100,8 @@ in this repository shows the shape of such a test, with hand-built instruction b
   Codama-converted parser has the same limit.
 - **The Codama output is not identical to `codama convert`.** Account sizes, PDAs in
   `program.pdas` and client-side account defaults are left out, because the parser
-  does not read them. The generated parser is the same. The full list is in
+  does not read them. A few IDLs do get a different parser, such as one with implicit
+  `repr(C)` padding that `codama convert` misreads. The full list is in
   [the converter's README](../crates/codama-from-anchor/README.md#known-divergences).
 
 ## Older Anchor IDLs

@@ -22,14 +22,19 @@ pub(crate) fn pad_zero_copy(idl: &mut Idl) -> Result<(), Error> {
             known: RefCell::default(),
         };
 
-        let roots: Vec<&TypeDef> = idl.types.iter().filter(|t| is_unsafe_c(t)).collect();
+        // A generic struct is laid out at each use, inside a non-generic root.
+        let roots: Vec<&TypeDef> = idl
+            .types
+            .iter()
+            .filter(|t| is_bytemuck_unsafe(t) && t.generics.is_none())
+            .collect();
 
         if let Some(ty) = roots.iter().find(|t| layouts.struct_layout(t, 0).is_none()) {
             return Err(Error::UnknownLayout.at(ItemKind::Type, &ty.name));
         }
 
-        // A nested struct sits in zero-copy memory with its own padding,
-        // whatever its `serialization` says.
+        // A nested struct sits in zero-copy memory with its own padding, whatever
+        // its `serialization` says and however its holder is packed.
         let in_zero_copy = reachable(
             &layouts.defs,
             roots.iter().map(|t| t.name.as_str()).collect(),
@@ -130,13 +135,11 @@ fn is_borsh(ty: &TypeDef) -> bool {
         .is_none_or(|s| s.as_str() == Some("borsh"))
 }
 
-fn is_unsafe_c(ty: &TypeDef) -> bool {
-    let repr = ty.repr.as_ref();
-
+fn is_bytemuck_unsafe(ty: &TypeDef) -> bool {
     ty.serialization.as_ref().and_then(Value::as_str) == Some("bytemuckunsafe")
-        && repr.and_then(|r| r.get("kind")).and_then(Value::as_str) == Some("c")
-        && !is_packed(ty)
 }
+
+fn repr_kind(ty: &TypeDef) -> Option<&str> { ty.repr.as_ref()?.get("kind")?.as_str() }
 
 fn is_packed(ty: &TypeDef) -> bool {
     ty.repr
@@ -227,6 +230,11 @@ impl<'a> Layouts<'a> {
 
         let fields = ty.ty.as_ref()?.get("fields")?.as_array()?;
         let packed = is_packed(ty);
+
+        // `repr(Rust)` may reorder fields; packing pins them in order.
+        if repr_kind(ty) == Some("rust") && !packed {
+            return None;
+        }
 
         let (mut offset, mut widest) = (0_u64, 1_u64);
         let mut pads = Vec::with_capacity(fields.len());

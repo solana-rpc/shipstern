@@ -211,7 +211,7 @@ pub struct TypeDef {
     #[serde(default, deserialize_with = "docs")]
     pub docs: Vec<String>,
 
-    /// Present, even when empty, marks the type as generic.
+    /// Present and not null, even when empty, marks the type as generic.
     pub generics: Option<Vec<GenericParam>>,
 
     /// Kept as JSON: one mainnet IDL writes `{"custom": ...}` here.

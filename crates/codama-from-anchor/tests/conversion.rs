@@ -126,8 +126,8 @@ fn a_pda_whose_seed_does_not_resolve_is_dropped() {
     }
 }
 
-/// JS resolves arguments in the callee's scope, so a reused parameter name
-/// takes the callee's binding and Anchor's own `generics.json` overflows it.
+/// JS resolves arguments in the callee's scope, so a reused parameter name takes
+/// the callee's binding, and on Anchor's own `generics.json` JS overflows the stack.
 #[test]
 fn generic_arguments_resolve_in_the_scope_that_wrote_them() {
     let arg = |ty: Value| json!({ "kind": "type", "type": ty });
@@ -155,6 +155,30 @@ fn generic_arguments_resolve_in_the_scope_that_wrote_them() {
 
     assert_eq!(w["fields"][0]["type"]["format"], "u32", "{w}");
     assert_eq!(w["fields"][1]["type"]["format"], "u8", "{w}");
+}
+
+/// Anchor passes `N` on to `Inner` as a type argument; JS writes no count there.
+#[test]
+fn a_const_generic_passed_on_as_a_type_argument_keeps_its_value() {
+    let generic = |name: &str, field: Value| {
+        json!({ "name": name, "generics": [{ "kind": "const", "name": "N", "type": "usize" }],
+                "type": { "kind": "struct", "fields": [{ "name": "f", "type": field }] } })
+    };
+
+    let inner = generic("Inner", json!({ "array": ["u16", { "generic": "N" }] }));
+    let outer = generic(
+        "Outer",
+        json!({ "defined": { "name": "Inner", "generics": [{ "kind": "type", "type": { "generic": "N" } }] } }),
+    );
+    let holder = json!({ "name": "Holder", "type": { "kind": "struct", "fields": [
+        { "name": "o", "type": { "defined": { "name": "Outer", "generics": [{ "kind": "const", "value": "3" }] } } }
+    ] } });
+
+    let root = convert(json!({ "types": [inner, outer, holder] })).expect("converts");
+    let array = &root["program"]["definedTypes"][0]["type"]["fields"][0]["type"]["fields"][0]
+        ["type"]["fields"][0]["type"];
+
+    assert_eq!(array["count"]["value"], 3, "{array}");
 }
 
 /// Each use expands its argument again, so every level of nesting doubles it.
@@ -202,6 +226,15 @@ fn a_link_to_a_missing_or_generic_type_is_rejected() {
     assert!(
         matches!(convert(link("Wrapper")), Err(Error::GenericArgsMissing(n)) if n == "Wrapper")
     );
+
+    let unbound = json!({ "types": [
+        { "name": "Box", "generics": [{ "kind": "type", "name": "T" }], "type": { "kind": "struct", "fields": [{ "name": "v", "type": { "generic": "T" } }] } },
+        { "name": "User", "type": { "kind": "struct", "fields": [
+            { "name": "b", "type": { "defined": { "name": "Box", "generics": [{ "kind": "type", "type": { "generic": "T" } }] } } }
+        ] } }
+    ] });
+
+    assert!(matches!(convert(unbound), Err(Error::GenericArgMissing(n)) if n == "T"));
 }
 
 #[test]
@@ -465,6 +498,14 @@ fn a_struct_nested_in_a_zero_copy_struct_gets_its_padding() {
         json!([["x", null], ["paddingBeforeY", 7], ["y", null]])
     );
 
+    let mut packed = outer.clone();
+
+    packed["repr"] = json!({ "kind": "c", "packed": true });
+    assert_eq!(
+        first_type_fields(json!([inner, packed])),
+        json!([["x", null], ["paddingBeforeY", 7], ["y", null]])
+    );
+
     let mut borsh_reads = ix(
         json!([{ "name": "inner", "type": { "defined": { "name": "Inner" } } }]),
         json!([]),
@@ -475,8 +516,8 @@ fn a_struct_nested_in_a_zero_copy_struct_gets_its_padding() {
     assert!(matches!(convert(borsh_reads), Err(Error::PaddedBorshType)));
 }
 
-/// Skipping the padding would misread every field after a gap. A one-variant enum
-/// is zero bytes, and Anchor writes `repr(u8)` and `repr(u32)` alike.
+/// Skipping the padding would misread every field after a gap. A one-variant enum is
+/// zero bytes, a `repr` hides an enum's size, and `repr(Rust)` may reorder fields.
 #[test]
 fn a_zero_copy_struct_with_an_unknown_layout_is_rejected() {
     let types = |field: Value| {
@@ -484,6 +525,10 @@ fn a_zero_copy_struct_with_an_unknown_layout_is_rejected() {
             { "name": "Data", "type": { "kind": "enum", "variants": [{ "name": "A", "fields": ["u64"] }, { "name": "B" }] } },
             { "name": "One", "type": { "kind": "enum", "variants": [{ "name": "A" }] } },
             { "name": "Repr", "repr": { "kind": "rust" }, "type": { "kind": "enum", "variants": [{ "name": "A" }, { "name": "B" }] } },
+            { "name": "Reordered", "repr": { "kind": "rust" }, "type": { "kind": "struct", "fields": [
+                { "name": "a", "type": "u8" },
+                { "name": "b", "type": "u64" }
+            ] } },
             { "name": "Wrap", "generics": [{ "kind": "type", "name": "T" }], "type": { "kind": "struct", "fields": [
                 { "name": "v", "type": { "generic": "T" } }
             ] } },
@@ -496,8 +541,17 @@ fn a_zero_copy_struct_with_an_unknown_layout_is_rejected() {
         json!({ "defined": { "name": "Data" } }),
         json!({ "defined": { "name": "One" } }),
         json!({ "defined": { "name": "Repr" } }),
+        json!({ "defined": { "name": "Reordered" } }),
         json!({ "defined": { "name": "Wrap", "generics": [{ "kind": "type", "type": "u64" }] } }),
     ];
+
+    let mut generic = zero_copy_c("G", json!([{ "name": "v", "type": { "generic": "T" } }]));
+
+    generic["generics"] = json!([{ "kind": "type", "name": "T" }]);
+    assert!(
+        convert(json!({ "types": [generic] })).is_ok(),
+        "only its uses are laid out"
+    );
 
     for field in unknown {
         let err = convert_at(json!({ "types": types(field) })).expect_err("must fail");
@@ -690,6 +744,20 @@ fn an_event_that_is_not_a_struct_is_rejected() {
 
         assert_eq!(err.to_string(), "event `Ev`: type is not a struct");
     }
+}
+
+/// JS treats an empty `address` as absent, so the PDA still gives the default.
+#[test]
+fn an_empty_address_falls_back_to_the_pda() {
+    let seed = json!({ "kind": "const", "value": [1] });
+    let account = json!([{ "name": "vault", "address": "", "pda": { "seeds": [seed] } }]);
+
+    let root = convert(ix(json!([]), account)).expect("converts");
+
+    assert_eq!(
+        root["program"]["instructions"][0]["accounts"][0]["defaultValue"]["kind"],
+        "pdaValueNode"
+    );
 }
 
 /// Without this, a bad field anywhere in the IDL reports no location.
