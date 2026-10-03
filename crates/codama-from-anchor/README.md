@@ -97,6 +97,8 @@ JS writes output for each of these that fails to compile, panics in the renderer
 
 Equal instruction discriminators are kept: the parser tells them apart by account count and fails at parse time on two with the same count. Equal event discriminators already fail to compile in the `program-events` parser. Anchor's IDL build rejects every discriminator case above.
 
+Two inputs fail in both converters, and only the error differs. An argument named `discriminator` clashes with the discriminator argument both prepend, and flattening struct arguments can leave two arguments with one name. JS's flatten pass throws `Cannot flatten struct ... [name]` for both, without naming the instruction. This crate fails with `DiscriminatorArgument` or `ConflictingFlattenedArguments` at that instruction.
+
 ### Differences that do not reach the parser
 
 | Codama JSON field | JS 1.5.6 | This crate |
