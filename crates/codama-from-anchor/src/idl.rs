@@ -214,6 +214,11 @@ pub struct TypeDef {
     /// Present, even when empty, marks the type as generic.
     pub generics: Option<Vec<GenericParam>>,
 
+    /// Kept as JSON: one mainnet IDL writes `{"custom": ...}` here.
+    pub serialization: Option<Value>,
+
+    pub repr: Option<Value>,
+
     #[serde(rename = "type")]
     pub ty: Option<Value>,
 }

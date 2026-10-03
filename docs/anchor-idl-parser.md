@@ -80,6 +80,8 @@ Failed to load/parse IDL from "/path/to/my_crate/idls/my_program.json": Failed t
 | `generic enum` | An enum with `generics`, which would be expanded inline | Not supported yet; with `codama convert` output the macro panics instead |
 | `type nesting exceeds 128 levels` | A type nested more than 128 levels deep | Flatten the type in the IDL |
 | `type expansion exceeds` | Generic types nested so their expansion doubles at every level | Simplify the nesting in the IDL |
+| `Borsh also reads it` | A `zero_copy(unsafe)` `repr(C)` type with implicit padding that is also an instruction argument, an event, or a Borsh account field | Split it into two types in the IDL, one per use |
+| `layout cannot be computed` | A `zero_copy(unsafe)` `repr(C)` struct holding an option, a generic, a tuple struct or an enum with data, at any depth | Not supported: its padding cannot be placed, and `codama convert` output misreads the fields after a gap |
 
 ## 5. Check the parser against real data
 
@@ -92,9 +94,6 @@ in this repository shows the shape of such a test, with hand-built instruction b
 - **Accounts are read by position.** An instruction that passes fewer accounts than
   the IDL declares fails to parse with `Account does not exist at index N`. A
   Codama-converted parser has the same limit.
-- **Zero-copy accounts.** `serialization` is ignored, so these accounts are read as
-  Borsh. That is wrong only where a `zero_copy(unsafe)` `repr(C)` type has implicit
-  padding: 1 account among 105 mainnet programs (`voltr_vault` `AdaptorAddReceipt`).
 - **The Codama output is not identical to `codama convert`.** Account sizes, PDAs in
   `program.pdas` and client-side account defaults are left out, because the parser
   does not read them. The generated parser is the same. The full list is in

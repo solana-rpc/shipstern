@@ -1,6 +1,5 @@
 //! Convert an Anchor IDL (spec `0.1.0`) into `codama-nodes`, matching
-//! `@codama/nodes-from-anchor@1.5.6` wherever the result reaches a generated
-//! parser.
+//! `@codama/nodes-from-anchor@1.5.6` except where the README lists a divergence.
 //!
 //! ```rust, ignore
 //! let idl = serde_json::from_slice(&std::fs::read("idl.json")?)?;
@@ -12,6 +11,7 @@ use serde::Deserialize;
 
 mod case;
 mod idl;
+mod layout;
 mod passes;
 mod types;
 mod v01;
@@ -110,6 +110,14 @@ pub enum Error {
     #[error("type expansion exceeds {TYPE_NODE_LIMIT} type nodes (nested generics?)")]
     TooLarge,
 
+    #[error(
+        "has implicit repr(C) padding but Borsh also reads it, so one of the two would be misread"
+    )]
+    PaddedBorshType,
+
+    #[error("is zero_copy(unsafe) repr(C), but its layout cannot be computed")]
+    UnknownLayout,
+
     #[error("no type definition")]
     TypeMissing,
 
@@ -143,8 +151,10 @@ impl Error {
 pub fn root_node_from_anchor(idl: serde_json::Value) -> Result<RootNode, Error> {
     check_spec(&idl)?;
 
-    let idl =
+    let mut idl =
         idl::Idl::deserialize(&idl).map_err(|err| idl::locate(&idl).unwrap_or(Error::Json(err)))?;
+
+    layout::pad_zero_copy(&mut idl)?;
 
     let mut root = v01::root_node(&idl)?;
 

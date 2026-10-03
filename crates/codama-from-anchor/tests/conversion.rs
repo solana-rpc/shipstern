@@ -300,6 +300,229 @@ fn types_whose_names_camel_case_alike_are_rejected() {
     );
 }
 
+/// The first defined type's fields as `[name, size]`; only padding has a size.
+fn first_type_fields(types: Value) -> Value {
+    let root = convert(json!({ "types": types })).expect("converts");
+
+    root["program"]["definedTypes"][0]["type"]["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .map(|f| json!([f["name"], f["type"]["size"]]))
+        .collect()
+}
+
+fn zero_copy_c(name: &str, fields: Value) -> Value {
+    json!({
+        "name": name,
+        "serialization": "bytemuckunsafe",
+        "repr": { "kind": "c" },
+        "type": { "kind": "struct", "fields": fields }
+    })
+}
+
+/// Borsh would read `b` at offset 1; `repr(C)` puts it at 8.
+#[test]
+fn a_zero_copy_c_struct_gets_its_implicit_padding() {
+    let fields = |repr: Value| {
+        let mut ty = zero_copy_c(
+            "R",
+            json!([{ "name": "a", "type": "u8" }, { "name": "b", "type": "u64" }]),
+        );
+
+        ty["repr"] = repr;
+        first_type_fields(json!([ty]))
+    };
+
+    assert_eq!(
+        fields(json!({ "kind": "c" })),
+        json!([["a", null], ["paddingBeforeB", 7], ["b", null]])
+    );
+    assert_eq!(
+        fields(json!({ "kind": "c", "packed": true })),
+        json!([["a", null], ["b", null]])
+    );
+}
+
+/// A fieldless enum is one byte, which puts `b` at 8.
+#[test]
+fn a_fieldless_enum_in_a_zero_copy_struct_is_one_byte() {
+    let kind = json!({ "name": "Kind", "type": { "kind": "enum", "variants": [{ "name": "A" }, { "name": "B" }] } });
+
+    let ty = zero_copy_c(
+        "R",
+        json!([
+            { "name": "a", "type": "u8" },
+            { "name": "kind", "type": { "defined": { "name": "Kind" } } },
+            { "name": "b", "type": "u64" }
+        ]),
+    );
+
+    assert_eq!(
+        first_type_fields(json!([ty, kind])),
+        json!([["a", null], ["kind", null], ["paddingBeforeB", 6], [
+            "b", null
+        ]])
+    );
+}
+
+/// Anchor labels a nested struct Borsh unless it derives `zero_copy(unsafe)`
+/// itself, yet it still sits in zero-copy memory with its own padding.
+#[test]
+fn a_struct_nested_in_a_zero_copy_struct_gets_its_padding() {
+    let inner = json!({ "name": "Inner", "repr": { "kind": "c" }, "type": { "kind": "struct", "fields": [
+        { "name": "x", "type": "u8" },
+        { "name": "y", "type": "u64" }
+    ] } });
+
+    let outer = zero_copy_c(
+        "Outer",
+        json!([{ "name": "inner", "type": { "defined": { "name": "Inner" } } }]),
+    );
+
+    assert_eq!(
+        first_type_fields(json!([inner, outer])),
+        json!([["x", null], ["paddingBeforeY", 7], ["y", null]])
+    );
+
+    let mut borsh_reads = ix(
+        json!([{ "name": "inner", "type": { "defined": { "name": "Inner" } } }]),
+        json!([]),
+    );
+
+    borsh_reads["types"] = json!([inner, outer]);
+
+    assert!(matches!(convert(borsh_reads), Err(Error::PaddedBorshType)));
+}
+
+/// Skipping the padding would misread every field after a gap. A one-variant enum
+/// is zero bytes, and Anchor writes `repr(u8)` and `repr(u32)` alike.
+#[test]
+fn a_zero_copy_struct_with_an_unknown_layout_is_rejected() {
+    let types = |field: Value| {
+        json!([
+            { "name": "Data", "type": { "kind": "enum", "variants": [{ "name": "A", "fields": ["u64"] }, { "name": "B" }] } },
+            { "name": "One", "type": { "kind": "enum", "variants": [{ "name": "A" }] } },
+            { "name": "Repr", "repr": { "kind": "rust" }, "type": { "kind": "enum", "variants": [{ "name": "A" }, { "name": "B" }] } },
+            { "name": "Wrap", "generics": [{ "kind": "type", "name": "T" }], "type": { "kind": "struct", "fields": [
+                { "name": "v", "type": { "generic": "T" } }
+            ] } },
+            zero_copy_c("Outer", json!([{ "name": "x", "type": field }]))
+        ])
+    };
+
+    let unknown = [
+        json!({ "option": "u64" }),
+        json!({ "defined": { "name": "Data" } }),
+        json!({ "defined": { "name": "One" } }),
+        json!({ "defined": { "name": "Repr" } }),
+        json!({ "defined": { "name": "Wrap", "generics": [{ "kind": "type", "type": "u64" }] } }),
+    ];
+
+    for field in unknown {
+        let err = convert_at(json!({ "types": types(field) })).expect_err("must fail");
+
+        assert!(
+            matches!(&err, Error::At { name, error, .. } if name == "Outer" && matches!(**error, Error::UnknownLayout)),
+            "{err}"
+        );
+    }
+}
+
+/// Zero-copy memory has the padding and Borsh bytes do not, so no one
+/// definition reads both.
+#[test]
+fn a_padded_type_that_borsh_also_reads_is_rejected() {
+    let rec = json!({ "defined": { "name": "Rec" } });
+
+    let types = json!([
+        { "name": "Rec", "serialization": "bytemuckunsafe", "repr": { "kind": "c" }, "type": { "kind": "struct", "fields": [
+            { "name": "a", "type": "u8" },
+            { "name": "b", "type": "u64" }
+        ] } },
+        { "name": "Holder", "serialization": "bytemuckunsafe", "repr": { "kind": "c" }, "type": { "kind": "struct", "fields": [
+            { "name": "rec", "type": rec }
+        ] } },
+        { "name": "Acc", "type": { "kind": "struct", "fields": [{ "name": "rec", "type": rec }] } },
+        { "name": "Ev", "type": { "kind": "struct", "fields": [{ "name": "rec", "type": rec }] } }
+    ]);
+
+    let idl = |args: Value, accounts: Value, events: Value| {
+        let mut idl = ix(args, json!([]));
+
+        idl["types"] = types.clone();
+        idl["accounts"] = accounts;
+        idl["events"] = events;
+        idl
+    };
+
+    let holder = json!({ "name": "Holder", "discriminator": [1] });
+
+    let borsh_reads = [
+        idl(
+            json!([{ "name": "recs", "type": { "vec": rec } }]),
+            json!([holder]),
+            json!([]),
+        ),
+        idl(
+            json!([]),
+            json!([holder, { "name": "Acc", "discriminator": [2] }]),
+            json!([]),
+        ),
+        idl(
+            json!([]),
+            json!([holder]),
+            json!([{ "name": "Ev", "discriminator": [3] }]),
+        ),
+    ];
+
+    for idl in borsh_reads {
+        let err = convert_at(idl).expect_err("must fail").to_string();
+
+        assert!(err.contains("type `Rec`") && err.contains("Borsh"), "{err}");
+    }
+
+    let root = convert(idl(json!([]), json!([holder]), json!([]))).expect("converts");
+
+    assert_eq!(
+        root["program"]["definedTypes"][0]["type"]["fields"][1]["name"],
+        "paddingBeforeB"
+    );
+}
+
+/// Recomputed per use, this 60-deep chain of two-field structs would take 2^60
+/// steps. The self-referencing struct must end too, in an error.
+#[test]
+fn nested_zero_copy_layouts_are_not_a_hang() {
+    let zero_copy = |name: &str, field: Value| {
+        zero_copy_c(
+            name,
+            json!([{ "name": "a", "type": field }, { "name": "b", "type": field }]),
+        )
+    };
+
+    let types: Vec<Value> = (0..60)
+        .map(|i| {
+            let next = if i == 59 {
+                json!("u8")
+            } else {
+                json!({ "defined": { "name": format!("T{}", i + 1) } })
+            };
+
+            zero_copy(&format!("T{i}"), next)
+        })
+        .collect();
+
+    assert!(convert(json!({ "types": types })).is_ok());
+
+    let looped = zero_copy("Loop", json!({ "defined": { "name": "Loop" } }));
+
+    assert!(matches!(
+        convert(json!({ "types": [looped] })),
+        Err(Error::UnknownLayout)
+    ));
+}
+
 /// An empty discriminator would match every instruction, account or event of
 /// the program; the error names the item.
 #[test]
