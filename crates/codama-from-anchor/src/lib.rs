@@ -83,6 +83,15 @@ pub enum Error {
     #[error("same Rust name as `{0}`")]
     NameCollision(String),
 
+    #[error("discriminator {discriminator:?} is a prefix of `{other}`'s")]
+    AmbiguousDiscriminator {
+        discriminator: Vec<u8>,
+        other: String,
+    },
+
+    #[error("same discriminator as `{0}`")]
+    DuplicateDiscriminator(String),
+
     #[error("unrecognized Anchor IDL type {0}")]
     UnrecognizedType(String),
 
@@ -122,7 +131,7 @@ pub enum Error {
     TypeMissing,
 
     #[error("type is not a struct")]
-    AccountTypeNotStruct,
+    TypeNotStruct,
 
     #[error("flattening produces duplicate arguments {0:?}")]
     ConflictingFlattenedArguments(Vec<String>),

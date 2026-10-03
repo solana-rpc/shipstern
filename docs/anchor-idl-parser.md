@@ -66,12 +66,14 @@ Failed to load/parse IDL from "/path/to/my_crate/idls/my_program.json": Failed t
 |---|---|---|
 | `unsupported Anchor IDL spec` | IDL from before Anchor 0.30 | See [Older Anchor IDLs](#older-anchor-idls) |
 | `missing field` and `address` | The IDL has no program address | Add the program id as the top-level `address` |
-| `unrecognized Anchor IDL type` | A type the converter does not know, such as `u256` or a `{"kind": "type", "alias": ...}` definition | Replace it in the IDL; `codama convert` rejects it too |
+| `unrecognized Anchor IDL type` | A type the converter does not know, such as `u256` | Replace it in the IDL; `codama convert` rejects it too |
 | `does not convert to a Rust identifier` | A name that is empty or starts with a digit | Rename it in the IDL |
-| `same Rust name as` | Two types whose names differ only in case or underscores, such as `MyType` and `my_type` | Rename one of them in the IDL |
+| `same Rust name as` | Two types, instructions, accounts or events whose names differ only in case or underscores, such as `MyType` and `my_type` | Rename one of them in the IDL |
 | `discriminator is empty` | `"discriminator": []` on an instruction, account or event | Use the real discriminator bytes |
+| `is a prefix of` | Two instructions, accounts or events where one discriminator starts the other and is shorter | Use the real discriminators; `anchor build` rejects these |
+| `same discriminator as` | Two accounts with the same discriminator | Use the real discriminators; `anchor build` rejects these |
 | `no type definition` | An account or event with no entry in `types` | Add the type, or regenerate the IDL with `anchor build` |
-| `type is not a struct` | An account whose entry in `types` is an enum or alias | Anchor accounts are structs; regenerate the IDL |
+| `type is not a struct` | An account or event whose entry in `types` is an enum, alias or tuple struct | Name a tuple struct's fields in the IDL, which reads the same bytes; enums are not supported |
 | `invalid Anchor IDL JSON` | A field has the wrong JSON shape, such as a discriminator byte above 255 | Fix that item in the IDL |
 | `produces duplicate arguments` | A struct argument has a field with the same name as another argument | Rename one of them |
 | `clashes with the instruction discriminator` | An argument named `discriminator` | Rename it in the IDL |

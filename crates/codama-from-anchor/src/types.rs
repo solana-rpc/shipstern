@@ -181,10 +181,8 @@ fn type_node_at(ty: &Value, generics: &Generics<'_>, depth: usize) -> Result<Typ
         return enum_type(variants, generics, depth);
     }
 
-    if kind == Some("alias")
-        && let Some(value) = obj.get("value")
-    {
-        return type_node_at(value, generics, depth);
+    if let Some(target) = alias_target(ty) {
+        return type_node_at(target, generics, depth);
     }
 
     if let Some(item) = obj.get("option") {
@@ -214,6 +212,16 @@ fn type_node_at(ty: &Value, generics: &Generics<'_>, depth: usize) -> Result<Typ
     }
 
     Err(unrecognized(ty))
+}
+
+/// Anchor writes an alias as `{"kind": "type", "alias": T}`; JS 1.5.6 reads only
+/// `{"kind": "alias", "value": T}`.
+pub(crate) fn alias_target(ty: &Value) -> Option<&Value> {
+    match ty.get("kind")?.as_str()? {
+        "type" => ty.get("alias"),
+        "alias" => ty.get("value"),
+        _ => None,
+    }
 }
 
 fn leaf_type_node(leaf: &str) -> Option<TypeNode> {

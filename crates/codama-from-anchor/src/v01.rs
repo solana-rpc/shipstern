@@ -58,13 +58,7 @@ fn program_node(idl: &Idl) -> Result<ProgramNode, Error> {
         .map(|t| defined_type_node(t, &generics).map_err(|e| e.at(ItemKind::Type, &t.name)))
         .collect::<Result<_, _>>()?;
 
-    // Names that camel-case alike would generate the same Rust type twice.
-    let mut seen = HashMap::new();
-    for (node, ty) in defined_types.iter().zip(&unclaimed) {
-        if let Some(first) = seen.insert(&node.name, ty.name.as_str()) {
-            return Err(Error::NameCollision(first.to_owned()).at(ItemKind::Type, &ty.name));
-        }
-    }
+    check_names(ItemKind::Type, unclaimed.iter().map(|t| t.name.as_str()))?;
 
     let accounts = idl
         .accounts
@@ -98,6 +92,26 @@ fn program_node(idl: &Idl) -> Result<ProgramNode, Error> {
         })
         .collect::<Result<_, _>>()?;
 
+    // After the conversions, so an IDL JS also fails reports what JS does.
+    check_items(
+        ItemKind::Account,
+        idl.accounts
+            .iter()
+            .map(|a| (a.name.as_str(), a.discriminator.as_slice())),
+    )?;
+    check_items(
+        ItemKind::Event,
+        idl.events
+            .iter()
+            .map(|e| (e.name.as_str(), e.discriminator.as_slice())),
+    )?;
+    check_items(
+        ItemKind::Instruction,
+        idl.instructions
+            .iter()
+            .map(|ix| (ix.name.as_str(), ix.discriminator.as_slice())),
+    )?;
+
     Ok(ProgramNode {
         name: ident(&idl.metadata.name).map_err(|e| e.at(ItemKind::Program, &idl.metadata.name))?,
         public_key: idl.address.clone(),
@@ -112,6 +126,54 @@ fn program_node(idl: &Idl) -> Result<ProgramNode, Error> {
         errors,
         constants,
     })
+}
+
+/// Names that camel-case alike would generate the same Rust item twice.
+fn check_names<'a>(kind: ItemKind, names: impl Iterator<Item = &'a str>) -> Result<(), Error> {
+    let mut seen = HashMap::new();
+
+    for name in names {
+        if let Some(first) = seen.insert(camel_case(name), name) {
+            return Err(Error::NameCollision(first.to_owned()).at(kind, name));
+        }
+    }
+
+    Ok(())
+}
+
+/// The parser tries discriminators in IDL order, so a proper prefix of another can
+/// match its data. Equal instructions are told apart by account count.
+fn check_items<'a>(
+    kind: ItemKind,
+    items: impl Iterator<Item = (&'a str, &'a [u8])>,
+) -> Result<(), Error> {
+    let items: Vec<_> = items.collect();
+
+    check_names(kind, items.iter().map(|(name, _)| *name))?;
+
+    // The account parser has no collision group, so the first of two equal ones always wins.
+    let rejects_equal = kind == ItemKind::Account;
+
+    for (i, (name, discriminator)) in items.iter().enumerate() {
+        for (j, (other, other_discriminator)) in items.iter().enumerate() {
+            let err = if other_discriminator.len() > discriminator.len()
+                && other_discriminator.starts_with(discriminator)
+            {
+                Error::AmbiguousDiscriminator {
+                    discriminator: discriminator.to_vec(),
+                    other: (*other).to_owned(),
+                }
+            } else if rejects_equal && j < i && other_discriminator == discriminator {
+                Error::DuplicateDiscriminator((*other).to_owned())
+            } else {
+                continue;
+            };
+
+            return Err(err.at(kind, name));
+        }
+    }
+
+    Ok(())
 }
 
 fn defined_type_node(ty: &idl::TypeDef, generics: &Generics<'_>) -> Result<DefinedTypeNode, Error> {
@@ -157,7 +219,7 @@ fn account_node(
     let body = ty.ty.clone().unwrap_or(Value::Null);
 
     let TypeNode::Struct(data) = type_node(&body, generics)? else {
-        return Err(Error::AccountTypeNotStruct);
+        return Err(Error::TypeNotStruct);
     };
 
     let discriminator = StructFieldTypeNode {
@@ -201,6 +263,11 @@ fn event_node(
 
     let body = ty.ty.clone().unwrap_or(Value::Null);
 
+    // JS writes any payload, and the event renderer panics on anything but a struct.
+    let data @ TypeNode::Struct(_) = type_node(&body, generics)? else {
+        return Err(Error::TypeNotStruct);
+    };
+
     let constant = ConstantValueNode {
         r#type: Box::new(fixed_bytes(event.discriminator.len())),
         value: Box::new(ValueNode::Bytes(base16_bytes(&event.discriminator))),
@@ -210,7 +277,7 @@ fn event_node(
         name: ident(&event.name)?,
         docs: Docs::default(),
         data: Box::new(TypeNode::HiddenPrefix(HiddenPrefixTypeNode {
-            r#type: Box::new(type_node(&body, generics)?),
+            r#type: Box::new(data),
             prefix: vec![constant.clone()],
         })),
         discriminators: vec![DiscriminatorNode::Constant(ConstantDiscriminatorNode {

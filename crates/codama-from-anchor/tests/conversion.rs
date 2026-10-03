@@ -233,6 +233,25 @@ fn an_enum_variant_with_non_array_fields_is_rejected() {
     assert!(convert(types(json!(null))).is_ok());
 }
 
+/// Anchor writes the first form, as in Raydium CLMM's `TickArrayBitmap`. JS
+/// 1.5.6 reads only the second.
+#[test]
+fn an_anchor_type_alias_converts_like_a_codama_one() {
+    let target = json!({ "array": ["u64", 8] });
+
+    let alias = |ty: Value| {
+        let root =
+            convert(json!({ "types": [{ "name": "Bitmap", "type": ty }] })).expect("converts");
+
+        root["program"]["definedTypes"][0]["type"].clone()
+    };
+
+    let anchor = alias(json!({ "kind": "type", "alias": target }));
+
+    assert_eq!(anchor["kind"], "arrayTypeNode");
+    assert_eq!(anchor, alias(json!({ "kind": "alias", "value": target })));
+}
+
 /// Either would generate a nameless field or variant. JS rejects the field but
 /// writes the variant with an empty name.
 #[test]
@@ -287,17 +306,37 @@ fn a_name_that_is_not_an_identifier_is_rejected() {
     assert!(convert(unrendered).is_ok());
 }
 
+/// Each pair would render the same Rust items twice.
 #[test]
-fn types_whose_names_camel_case_alike_are_rejected() {
+fn items_whose_names_camel_case_alike_are_rejected() {
     let unit = |name: &str| json!({ "name": name, "type": { "kind": "struct", "fields": [] } });
+    let go = |name: &str, d: u8| json!({ "name": name, "discriminator": [d], "accounts": [], "args": [] });
+    let tagged = |name: &str, d: u8| json!({ "name": name, "discriminator": [d] });
 
-    let err = convert_at(json!({ "types": [unit("pool_state"), unit("PoolState")] }))
-        .expect_err("must fail");
+    let cases = [
+        (
+            json!({ "types": [unit("pool_state"), unit("PoolState")] }),
+            "type `PoolState`: same Rust name as `pool_state`",
+        ),
+        (
+            json!({ "instructions": [go("swap", 1), go("swap_", 2)] }),
+            "instruction `swap_`: same Rust name as `swap`",
+        ),
+        (
+            json!({ "accounts": [tagged("Pool", 1), tagged("pool", 2)], "types": [unit("Pool"), unit("pool")] }),
+            "account `pool`: same Rust name as `Pool`",
+        ),
+        (
+            json!({ "events": [tagged("Swapped", 1), tagged("swapped", 2)], "types": [unit("Swapped"), unit("swapped")] }),
+            "event `swapped`: same Rust name as `Swapped`",
+        ),
+    ];
 
-    assert_eq!(
-        err.to_string(),
-        "type `PoolState`: same Rust name as `pool_state`"
-    );
+    for (idl, message) in cases {
+        let err = convert_at(idl).expect_err("must fail");
+
+        assert_eq!(err.to_string(), message);
+    }
 }
 
 /// The first defined type's fields as `[name, size]`; only padding has a size.
@@ -364,6 +403,47 @@ fn a_fieldless_enum_in_a_zero_copy_struct_is_one_byte() {
             "b", null
         ]])
     );
+}
+
+/// An alias field takes its target's layout. Past the nesting limit a chain is an
+/// error, not a stack overflow.
+#[test]
+fn an_alias_field_in_a_zero_copy_struct_is_laid_out_as_its_target() {
+    let alias = |name: &str, body: Value| json!({ "name": name, "type": body });
+    let link = |name: &str| json!({ "defined": { "name": name } });
+
+    let ty = zero_copy_c(
+        "R",
+        json!([{ "name": "a", "type": "u8" }, { "name": "b", "type": link("Amount") }]),
+    );
+
+    let amount = alias("Amount", json!({ "kind": "type", "alias": "u64" }));
+
+    assert_eq!(
+        first_type_fields(json!([ty, amount])),
+        json!([["a", null], ["paddingBeforeB", 7], ["b", null]])
+    );
+
+    let chain: Vec<Value> = (0..200)
+        .map(|i| {
+            alias(
+                &format!("A{i}"),
+                json!({ "kind": "type", "alias": link(&format!("A{}", i + 1)) }),
+            )
+        })
+        .chain([alias("A200", json!({ "kind": "type", "alias": "u64" }))])
+        .collect();
+
+    let mut types = vec![zero_copy_c(
+        "R",
+        json!([{ "name": "a", "type": "u8" }, { "name": "b", "type": link("A0") }]),
+    )];
+
+    types.extend(chain);
+
+    let err = convert(json!({ "types": types })).expect_err("must fail");
+
+    assert!(matches!(err, Error::UnknownLayout), "{err}");
 }
 
 /// Anchor labels a nested struct Borsh unless it derives `zero_copy(unsafe)`
@@ -548,6 +628,67 @@ fn an_empty_discriminator_is_rejected_with_its_item() {
         let err = convert_at(idl).expect_err("must fail");
 
         assert_eq!(err.to_string(), format!("{item}: discriminator is empty"));
+    }
+}
+
+/// `short` data whose next byte is 7 would read as `long`. Equal instructions are
+/// told apart by account count; equal accounts would read as the first.
+#[test]
+fn an_ambiguous_discriminator_is_rejected() {
+    let unit = |name: &str| json!({ "name": name, "type": { "kind": "struct", "fields": [] } });
+    let go = |name: &str, d: Value| json!({ "name": name, "discriminator": d, "accounts": [], "args": [] });
+
+    let prefix =
+        json!({ "instructions": [go("long", json!([5, 6, 7])), go("short", json!([5, 6]))] });
+
+    assert_eq!(
+        convert_at(prefix).expect_err("must fail").to_string(),
+        "instruction `short`: discriminator [5, 6] is a prefix of `long`'s"
+    );
+
+    let equal_instructions =
+        json!({ "instructions": [go("place", json!([1])), go("cancel", json!([1]))] });
+
+    assert!(convert(equal_instructions).is_ok());
+
+    let equal_accounts = json!({
+        "accounts": [{ "name": "A", "discriminator": [1] }, { "name": "B", "discriminator": [1] }],
+        "types": [unit("A"), unit("B")]
+    });
+
+    assert_eq!(
+        convert_at(equal_accounts)
+            .expect_err("must fail")
+            .to_string(),
+        "account `B`: same discriminator as `A`"
+    );
+
+    let across_kinds = json!({
+        "instructions": [go("go", json!([1]))],
+        "events": [{ "name": "E", "discriminator": [1, 2] }],
+        "types": [unit("E")]
+    });
+
+    assert!(convert(across_kinds).is_ok());
+}
+
+/// The event renderer panics on any payload but a struct; JS writes it as is.
+#[test]
+fn an_event_that_is_not_a_struct_is_rejected() {
+    let payloads = [
+        json!({ "kind": "enum", "variants": [{ "name": "A" }] }),
+        json!({ "kind": "struct", "fields": ["u8"] }),
+    ];
+
+    for ty in payloads {
+        let idl = json!({
+            "events": [{ "name": "Ev", "discriminator": [3] }],
+            "types": [{ "name": "Ev", "type": ty }]
+        });
+
+        let err = convert_at(idl).expect_err("must fail");
+
+        assert_eq!(err.to_string(), "event `Ev`: type is not a struct");
     }
 }
 

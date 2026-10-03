@@ -146,6 +146,15 @@ fn is_packed(ty: &TypeDef) -> bool {
         == Some(true)
 }
 
+/// A generic alias has no fixed layout.
+fn alias_target(ty: &TypeDef) -> Option<&Value> {
+    if ty.generics.is_some() {
+        return None;
+    }
+
+    crate::types::alias_target(ty.ty.as_ref()?)
+}
+
 /// A fieldless enum of 2 to 256 variants is one byte in Rust and in Borsh.
 /// Anchor writes `repr(u8)` and `repr(u32)` both as `rust`, so a repr hides the size.
 fn is_byte_enum(ty: &TypeDef) -> bool {
@@ -251,6 +260,11 @@ impl<'a> Layouts<'a> {
     /// Size and alignment on SBF, where 128-bit integers align to 8 (checked
     /// against live `voltr_vault` accounts) and a pubkey is a `[u8; 32]`.
     fn field_layout(&self, ty: &'a Value, depth: usize) -> Option<(u64, u64)> {
+        // An alias chain recurses here without passing `struct_layout`'s bound.
+        if depth > crate::NESTING_LIMIT {
+            return None;
+        }
+
         if let Some(leaf) = ty.as_str() {
             let size = match leaf {
                 "bool" | "u8" | "i8" => 1,
@@ -290,6 +304,8 @@ impl<'a> Layouts<'a> {
 
         let layout = if is_byte_enum(def) {
             Some((1, 1))
+        } else if let Some(target) = alias_target(def) {
+            self.field_layout(target, depth + 1)
         } else {
             self.struct_layout(def, depth + 1)
                 .map(|l| (l.size, l.align))
