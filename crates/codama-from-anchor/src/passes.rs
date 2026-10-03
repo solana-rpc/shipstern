@@ -1,5 +1,5 @@
 //! The `defaultVisitor.ts` passes that reach a generated parser, in JS order;
-//! the README has the evidence for the four left out. Traversal covers only
+//! the README has the evidence for what is left out. Traversal covers only
 //! the node kinds the v01 mapping emits.
 
 use std::collections::{HashMap, HashSet};
@@ -7,17 +7,135 @@ use std::collections::{HashMap, HashSet};
 use codama_nodes::{
     CountNode, EnumVariantTypeNode, InstructionArgumentNode, InstructionInputValueNode,
     InstructionNode, NestedTypeNode, NumberFormat, PdaSeedNode, PdaValuePda, ProgramNode,
-    StructTypeNode, TypeNode,
+    PublicKeyValueNode, StructTypeNode, TypeNode,
 };
 
-use crate::{case::ident, v01::fixed_bytes, Error, ItemKind};
+use crate::{
+    case::{camel, ident},
+    v01::fixed_bytes,
+    Error, ItemKind,
+};
 
 pub(crate) fn run(program: &mut ProgramNode) -> Result<(), Error> {
+    set_instruction_account_default_values(program)?;
     unwrap_instruction_args_defined_types(program);
     flatten_instruction_data_arguments(program)?;
     transform_u8_arrays_to_bytes(program);
 
     Ok(())
+}
+
+/// Port of `setInstructionAccountDefaultValuesVisitor` with `@codama/visitors` 1.11.0
+/// `getCommonInstructionAccountDefaultRules`, for the rules that give an address.
+fn set_instruction_account_default_values(program: &mut ProgramNode) -> Result<(), Error> {
+    for account in program
+        .instructions
+        .iter_mut()
+        .flat_map(|ix| &mut ix.accounts)
+    {
+        // Every common rule sets `ignoreIfOptional`, which also skips an account
+        // that already has a default.
+        if account.is_optional.unwrap_or(false) || account.default_value.is_some() {
+            continue;
+        }
+
+        let Some((public_key, identifier)) = common_account_address(account.name.as_str()) else {
+            continue;
+        };
+
+        *account.default_value = Some(InstructionInputValueNode::PublicKeyValue(
+            PublicKeyValueNode {
+                public_key: public_key.to_owned(),
+                identifier: identifier.map(camel).transpose()?,
+            },
+        ));
+    }
+
+    Ok(())
+}
+
+/// The common rules in JS order, each regex spelled out as the camel-cased names
+/// it matches, so the first rule that matches wins as in JS.
+fn common_account_address(name: &str) -> Option<(&'static str, Option<&'static str>)> {
+    match name {
+        // The payer, identity and program ID rules: the parser never reads those defaults.
+        "payer" | "feePayer" | "authority" | "programId" => None,
+
+        "systemProgram" | "splSystemProgram" => {
+            Some(("11111111111111111111111111111111", Some("splSystem")))
+        },
+        "tokenProgram" | "splTokenProgram" => Some((
+            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+            Some("splToken"),
+        )),
+        "ataProgram" | "splAtaProgram" => Some((
+            "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+            Some("splAssociatedToken"),
+        )),
+        "tokenMetadataProgram" | "mplTokenMetadataProgram" => Some((
+            "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s",
+            Some("mplTokenMetadata"),
+        )),
+        "tokenAuthRulesProgram"
+        | "mplTokenAuthRulesProgram"
+        | "authorizationRulesProgram"
+        | "mplAuthorizationRulesProgram"
+        | "authRulesProgram"
+        | "mplAuthRulesProgram" => Some((
+            "auth9SigNpDKz4sJJ1DfCTuZrZNSAgh9sFD3rboVmgg",
+            Some("mplTokenAuthRules"),
+        )),
+        "candyMachineProgram" | "mplCandyMachineProgram" => Some((
+            "CndyV3LdqHUfDLmE5naZjVN8rBZz4tqhdefbAnjHG3JR",
+            Some("mplCandyMachine"),
+        )),
+        "candyGuardProgram" | "mplCandyGuardProgram" => Some((
+            "Guard1JwRhJkVH6XZhzoYxeBVQe872VH6QggF4BWmS9g",
+            Some("mplCandyGuard"),
+        )),
+
+        "clockSysvar" | "sysvarClock" => {
+            Some(("SysvarC1ock11111111111111111111111111111111", None))
+        },
+        "epochScheduleSysvar" | "sysvarEpochSchedule" => {
+            Some(("SysvarEpochSchedu1e111111111111111111111111", None))
+        },
+        "instructionSysvar"
+        | "instructionsSysvar"
+        | "sysvarInstruction"
+        | "sysvarInstructions"
+        | "instructionSysvarAccount"
+        | "instructionsSysvarAccount"
+        | "sysvarInstructionAccount"
+        | "sysvarInstructionsAccount" => {
+            Some(("Sysvar1nstructions1111111111111111111111111", None))
+        },
+        "recentBlockhashesSysvar" | "sysvarRecentBlockhashes" => {
+            Some(("SysvarRecentB1ockHashes11111111111111111111", None))
+        },
+        "rent" | "rentSysvar" | "sysvarRent" => {
+            Some(("SysvarRent111111111111111111111111111111111", None))
+        },
+        "rewardsSysvar" | "sysvarRewards" => {
+            Some(("SysvarRewards111111111111111111111111111111", None))
+        },
+        "slotHashesSysvar" | "sysvarSlotHashes" => {
+            Some(("SysvarS1otHashes111111111111111111111111111", None))
+        },
+        "slotHistorySysvar" | "sysvarSlotHistory" => {
+            Some(("SysvarS1otHistory11111111111111111111111111", None))
+        },
+        "stakeHistorySysvar" | "sysvarStakeHistory" => {
+            Some(("SysvarStakeHistory1111111111111111111111111", None))
+        },
+
+        "mplCoreProgram" => Some((
+            "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d",
+            Some("mplCore"),
+        )),
+
+        _ => None,
+    }
 }
 
 /// One walker, expanded as a read and a write version, so the passes that count

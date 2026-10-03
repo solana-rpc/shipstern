@@ -18,7 +18,7 @@ Only Anchor IDL spec `0.1.0` is supported, which is what Anchor 0.30 and later e
 The reference is `@codama/nodes-from-anchor@1.5.6` with `codama@1.11.0` and `@codama/visitors@1.11.0`, the code `codama convert` runs. Two tests hold this crate to it:
 
 - `shipstern-proc-macro`'s `anchor_parity_tests` expands a parser from the JS output and from this crate's output for every fixture and requires the two to be byte-identical.
-- `tests/js_parity.rs` diffs the full Codama JSON against the JS output, after undoing the three passes this crate does not port.
+- `tests/js_parity.rs` diffs the full Codama JSON against the JS output, after undoing extractPdas, setFixedAccountSizes and the payer, identity and program ID account defaults, which this crate does not port.
 
 ### Function map
 
@@ -43,18 +43,19 @@ The reference is `@codama/nodes-from-anchor@1.5.6` with `codama@1.11.0` and `@co
 | `camelCase`, `pascalCase`, `titleCase` (`@codama/nodes`) | `case.rs` `camel_case`, `pascal_case`, `title_words` | Same |
 | `CODAMA_VERSION` (`1.9.2`) | `v01.rs` `CODAMA_STANDARD_VERSION` | Same |
 | none | `layout.rs` `pad_zero_copy` | This crate only: implicit `repr(C)` padding |
-| `defaultVisitor` | `passes.rs` `run` | 3 of the 7 passes, in JS order; see Passes |
+| `defaultVisitor` | `passes.rs` `run` | 3 of the 7 passes and the address rules of a fourth, in JS order; see Passes |
+| `setInstructionAccountDefaultValuesVisitor`, `getCommonInstructionAccountDefaultRules` (`@codama/visitors`) | `passes.rs` `set_instruction_account_default_values`, `common_account_address` | Program and sysvar address rules only, each regex spelled out as the names it matches |
 
 ### Passes
 
-`codama convert` runs the mapping and then the seven passes in `defaultVisitor.ts`. The three that change the generated parser are ported, and extractPdas is emulated as the table shows. The other three were removed one at a time from the JS pipeline, and the parser came out byte-identical on every fixture, with and without the `proto` and `program-events` features. Removing any of the three ported passes does change it, so the comparison can tell the difference.
+`codama convert` runs the mapping and then the seven passes in `defaultVisitor.ts`. The three that change the parser on the fixtures are ported, as are the program and sysvar address rules of setInstructionAccountDefaultValues, and extractPdas is emulated. Removing deduplicateIdenticalDefinedTypes or setFixedAccountSizes from the JS pipeline left the parser byte-identical on every fixture, with and without the `proto` and `program-events` features; removing any of the three changes it. No fixture account takes an address from the name rules, so `tests/conversion.rs` covers them.
 
 | Pass | Ported | Effect on the generated parser |
 |---|---|---|
 | extractPdas | no, emulated | Its seed types count toward unwrapInstructionArgsDefinedTypes, so `passes.rs` counts them where they stay inline |
 | deduplicateIdenticalDefinedTypes | no | None on every fixture; colliding names are rejected instead |
 | setFixedAccountSizes | no | None: sets `account.size`, which no renderer reads |
-| setInstructionAccountDefaultValues | no | None: fills payer, identity, program and sysvar addresses for client code |
+| setInstructionAccountDefaultValues | partly: program and sysvar addresses | Used when an instruction leaves that account off; the payer, identity and program ID rules are not ported, the parser never reads them |
 | unwrapInstructionArgsDefinedTypes | yes | Changes `shapes`: a struct used only as one argument is inlined |
 | flattenInstructionDataArguments | yes | Changes `anchor_external` and `shapes` |
 | transformU8ArraysToBytes | yes | Changes `anchor_external` and `shapes` |
@@ -105,7 +106,7 @@ Two inputs fail in both converters, and only the error differs. An argument name
 |---|---|---|
 | `account.size` | Set by setFixedAccountSizes | `None` |
 | `program.pdas` | PDAs hoisted there, colliding names renamed | Empty; PDAs stay inline in account defaults |
-| Instruction account defaults | Payer, identity, program and sysvar addresses filled in | Only an `address` the IDL gives |
+| Instruction account defaults | Payer, identity and program ID filled in by account name | Not set |
 | Integer constants above 2^53 | Rounded to the nearest double | Exact; past `u64` or `i64` they become floats |
 | Missing `metadata.version`, or a missing error or constant `name` | `0.0.0` or an empty name | Fails to deserialize |
 | `null` where a list or flag is expected, or docs that are not strings | An empty list, `false`, or the value as is | Fails to deserialize |

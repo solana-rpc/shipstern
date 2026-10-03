@@ -565,7 +565,22 @@ fn single_instruction_helper_fn(
             } else {
                 let error_msg = format!("Account does not exist at index {idx}");
 
-                quote! { #field_name: *accounts.get(#at).ok_or(ParseError::from(#error_msg))? }
+                // Deployed programs accept a transaction that leaves off a fixed-address
+                // account, so use that address rather than fail the instruction.
+                let Some(codama_nodes::InstructionInputValueNode::PublicKeyValue(fixed)) =
+                    (*account.default_value).as_ref()
+                else {
+                    return quote! { #field_name: *accounts.get(#at).ok_or(ParseError::from(#error_msg))? };
+                };
+
+                let fixed = crate::render::program_pubkey(&fixed.public_key);
+
+                quote! {
+                    #field_name: accounts
+                        .get(#at)
+                        .copied()
+                        .unwrap_or(::shipstern_core::Pubkey::new(#fixed))
+                }
             }
         });
 

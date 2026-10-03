@@ -96,12 +96,15 @@ in this repository shows the shape of such a test, with hand-built instruction b
 ## Limits
 
 - **Accounts are read by position.** An instruction that passes fewer accounts than
-  the IDL declares fails to parse with `Account does not exist at index N`. A
-  Codama-converted parser has the same limit.
+  the IDL declares fails with `Account does not exist at index N`, unless each missing
+  required account has a fixed address: an IDL `address`, or a program or sysvar name
+  such as `tokenProgram`. The parser fills those in, except for instructions that
+  share a discriminator, which it tells apart by account count first. A
+  Codama-converted parser behaves the same.
 - **The Codama output is not identical to `codama convert`.** Account sizes, PDAs in
-  `program.pdas` and client-side account defaults are left out, because the parser
-  does not read them. A few IDLs do get a different parser, such as one with implicit
-  `repr(C)` padding that `codama convert` misreads. The full list is in
+  `program.pdas`, and payer, identity and program ID defaults are left out, because
+  the parser does not read them. A few IDLs get a different parser, such as one with
+  implicit `repr(C)` padding that `codama convert` misreads. The full list is in
   [the converter's README](../crates/codama-from-anchor/README.md#known-divergences).
 
 ## Older Anchor IDLs
