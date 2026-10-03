@@ -128,8 +128,13 @@ message ProofInfo {
   repeated bytes proof = 1;
 }
 
+message PayloadMapEntry {
+  string key = 1;
+  PayloadType value = 2;
+}
+
 message Payload {
-  bytes map = 1;
+  repeated PayloadMapEntry map = 1;
 }
 
 message Uses {
