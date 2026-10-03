@@ -1,0 +1,42 @@
+{
+  "address": "Dex1111111111111111111111111111111111111111",
+  "metadata": {
+    "name": "event_payload_links",
+    "version": "0.1.0",
+    "spec": "0.1.0"
+  },
+  "instructions": [
+    {
+      "name": "commit",
+      "discriminator": [1, 2, 3, 4, 5, 6, 7, 8],
+      "accounts": [],
+      "args": [
+        { "name": "authority", "type": { "defined": { "name": "VrfAuthority" } } },
+        { "name": "market_event", "type": { "defined": { "name": "MarketEvent" } } }
+      ]
+    }
+  ],
+  "events": [
+    { "name": "VrfAuthority", "discriminator": [9, 9, 9, 9, 9, 9, 9, 9] },
+    { "name": "MarketEventHeader", "discriminator": [8, 8, 8, 8, 8, 8, 8, 8] }
+  ],
+  "types": [
+    {
+      "name": "VrfAuthority",
+      "type": { "kind": "struct", "fields": [{ "name": "x", "type": "u64" }] }
+    },
+    {
+      "name": "MarketEventHeader",
+      "type": { "kind": "struct", "fields": [{ "name": "slot", "type": "u64" }] }
+    },
+    {
+      "name": "MarketEvent",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "Header", "fields": [{ "defined": { "name": "MarketEventHeader" } }] }
+        ]
+      }
+    }
+  ]
+}

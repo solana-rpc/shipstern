@@ -126,6 +126,8 @@ Two inputs fail in both converters, and only the error differs. An argument name
 | `dex_v1` | Carbon `examples/versioned-decoders` (MIT) |
 | `anchor_external` | Anchor's test suite (Apache-2.0) |
 | `shapes` | Written for this crate: structs, enums and aliases, generics, nested account groups, option, coption, vec and array wrappers, `string`, `bytes` and `[u8; N]`, events, errors, constants, PDA seeds and discriminators |
+| `event_payload_links` | Written for this crate: an instruction argument and an enum variant typed as event payloads (#335, #336) |
+| `event_payload_in_event` | Written for this crate: an event field typed as another event's payload |
 
 ## In `include_shipstern_parser!`
 
