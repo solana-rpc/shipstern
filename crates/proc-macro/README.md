@@ -1,6 +1,6 @@
 # shipstern-proc-macro
 
-This crate provides a procedural macro for generating Shipstern parser modules from [Codama JSON IDL](https://github.com/codama-idl/codama).
+This crate provides a procedural macro for generating Shipstern parser modules from an Anchor IDL (Anchor 0.30+) or a [Codama JSON IDL](https://github.com/codama-idl/codama).
 
 ## Usage
 
@@ -21,11 +21,11 @@ Then, in your code:
 ```rust
 use shipstern_proc_macro::include_shipstern_parser;
 
-// Provide the path (relative to your crate root) to your Codama JSON IDL file.
+// Provide the path (relative to your crate root) to your Anchor or Codama JSON IDL file.
 include_shipstern_parser!("path/to/idl.json");
 ```
 
-This macro will generate Rust modules containing type-safe account and instruction parsers for the specified Solana program. The input is a **Codama** JSON IDL, not a raw Anchor IDL. Output from Codama's own converter loads as it is, since `codama-nodes` defaults the collections its serializer omits. See [the Codama parser guide](../../docs/codama-parser-generation.md).
+This macro will generate Rust modules containing type-safe account and instruction parsers for the specified Solana program. The input is an Anchor IDL in spec `0.1.0` (Anchor 0.30 and later), converted in-process, or a Codama JSON IDL. Output from Codama's own converter loads as it is, since `codama-nodes` defaults the collections its serializer omits. See [the Anchor IDL guide](../../docs/anchor-idl-parser.md) and [the Codama parser guide](../../docs/codama-parser-generation.md).
 
 ## Events and self-CPI events
 

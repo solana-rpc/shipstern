@@ -6,6 +6,7 @@ use codama_nodes::{EventNode, RootNode};
 pub enum IdlError {
     ReadFile(std::io::Error),
     ParseFile(serde_json::Error),
+    ConvertAnchor(shipstern_codama_from_anchor::Error),
 }
 
 impl std::fmt::Display for IdlError {
@@ -13,22 +14,45 @@ impl std::fmt::Display for IdlError {
         match self {
             IdlError::ReadFile(e) => write!(f, "Failed to read file: {}", e),
             IdlError::ParseFile(e) => write!(f, "Failed to parse JSON: {}", e),
+            IdlError::ConvertAnchor(
+                e @ shipstern_codama_from_anchor::Error::UnsupportedSpec { .. },
+            ) => {
+                write!(
+                    f,
+                    "{e}. The file has no top-level `kind` and no `program` object, so it was \
+                     read as an Anchor IDL. Codama JSON needs a top-level `program` object; \
+                     upgrade an older Anchor IDL with `anchor idl convert`, or convert it with \
+                     `npx -p codama -p @codama/nodes-from-anchor codama convert` and pass the \
+                     Codama JSON instead"
+                )
+            },
+            IdlError::ConvertAnchor(e) => write!(f, "Failed to convert Anchor IDL: {}", e),
         }
     }
 }
 
-/// Load a codama IDL file, returning the root node and any events.
-pub fn load_codama_idl<P: AsRef<Path>>(path: P) -> Result<(RootNode, Vec<EventNode>), IdlError> {
+/// Load Codama JSON or an Anchor IDL, returning the root node and its events.
+/// Only Codama JSON has a top-level `kind` or `program` object.
+pub fn load_idl<P: AsRef<Path>>(path: P) -> Result<(RootNode, Vec<EventNode>), IdlError> {
     let data = fs::read_to_string(&path).map_err(IdlError::ReadFile)?;
 
     let mut value: serde_json::Value = serde_json::from_str(&data).map_err(IdlError::ParseFile)?;
 
-    // Some codama generators emit error codes as strings ("6000") instead of
-    // integers (6000). Coerce them before deserialization so `ErrorNode.code`
-    // (which expects `usize`) doesn't fail.
-    fix_string_error_codes(&mut value);
+    let is_codama = value.get("kind").is_some()
+        || value
+            .get("program")
+            .is_some_and(serde_json::Value::is_object);
 
-    let root = serde_json::from_value::<RootNode>(value).map_err(IdlError::ParseFile)?;
+    let root = if is_codama {
+        // Some generators write error codes as strings ("6000"), which `ErrorNode.code` rejects.
+        fix_string_error_codes(&mut value);
+
+        serde_json::from_value::<RootNode>(value).map_err(IdlError::ParseFile)?
+    } else {
+        shipstern_codama_from_anchor::root_node_from_anchor(value)
+            .map_err(IdlError::ConvertAnchor)?
+    };
+
     let events = root.program.events.clone();
 
     Ok((root, events))
@@ -198,7 +222,10 @@ pub fn envelope_of(event: &codama_nodes::EventNode) -> Result<Option<CpiEventEnv
         let (offset, bytes) = &window[0];
         let (next_offset, _) = &window[1];
 
-        if offset + bytes.len() > *next_offset {
+        if offset
+            .checked_add(bytes.len())
+            .is_none_or(|end| end > *next_offset)
+        {
             return Err(format!(
                 "event `{}` has overlapping discriminators: {} bytes at offset {offset} run past \
                  offset {next_offset}",
@@ -645,7 +672,7 @@ mod tests {
     ///
     #[test]
     fn codama_rejects_an_unknown_program_origin() {
-        let err = load_codama_idl(idl_with_origin("custom")).expect_err("custom is not an origin");
+        let err = load_idl(idl_with_origin("custom")).expect_err("custom is not an origin");
 
         let message = err.to_string();
 
@@ -657,12 +684,31 @@ mod tests {
     /// The enum is lowercase-tagged, so a case variant is a different token.
     #[test]
     fn codama_rejects_a_case_variant_origin() {
-        assert!(load_codama_idl(idl_with_origin("Anchor")).is_err());
+        assert!(load_idl(idl_with_origin("Anchor")).is_err());
     }
 
     #[test]
     fn codama_accepts_the_two_real_origins() {
-        assert!(load_codama_idl(idl_with_origin("anchor")).is_ok());
-        assert!(load_codama_idl(idl_with_origin("shank")).is_ok());
+        assert!(load_idl(idl_with_origin("anchor")).is_ok());
+        assert!(load_idl(idl_with_origin("shank")).is_ok());
+    }
+
+    /// codama-nodes loads a root with no `kind`, and it loaded before Anchor
+    /// input existed, so it must not be sent to the Anchor converter.
+    #[test]
+    fn codama_json_without_kind_still_loads() {
+        let path = std::env::temp_dir().join("shipstern-codama-without-kind.json");
+
+        std::fs::write(
+            &path,
+            r#"{"standard":"codama","version":"1.6.0",
+               "program":{"kind":"programNode","name":"p",
+               "publicKey":"11111111111111111111111111111111","version":"0.1.0",
+               "accounts":[],"instructions":[],"definedTypes":[],"errors":[],"constants":[]},
+               "additionalPrograms":[]}"#,
+        )
+        .expect("write fixture");
+
+        assert!(load_idl(path).is_ok());
     }
 }
