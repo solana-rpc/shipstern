@@ -1035,6 +1035,7 @@ mod discriminator_injectivity_tests {
         assert_eq!(
             with_groups,
             [
+                "ambiguous_collision_group",
                 "colliding_envelope",
                 "collision_safe_cpi_event_envelope",
                 "macro_arg_envelope_collision",

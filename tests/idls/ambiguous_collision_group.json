@@ -1,0 +1,71 @@
+{
+  "kind": "rootNode",
+  "standard": "codama",
+  "version": "1.6.0",
+  "program": {
+    "kind": "programNode",
+    "name": "ambiguousCollisionGroup",
+    "publicKey": "11111111111111111111111111111111",
+    "version": "0.1.0",
+    "accounts": [],
+    "instructions": [
+      {
+        "kind": "instructionNode",
+        "name": "wideA",
+        "accounts": [
+          { "kind": "instructionAccountNode", "name": "owner", "isWritable": false, "isSigner": false },
+          { "kind": "instructionAccountNode", "name": "vault", "isWritable": false, "isSigner": false }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": { "kind": "fixedSizeTypeNode", "size": 1, "type": { "kind": "bytesTypeNode" } },
+            "defaultValue": { "kind": "bytesValueNode", "encoding": "base16", "data": "01" }
+          }
+        ],
+        "discriminators": [{ "kind": "fieldDiscriminatorNode", "name": "discriminator", "offset": 0 }]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "wideB",
+        "accounts": [
+          { "kind": "instructionAccountNode", "name": "owner", "isWritable": false, "isSigner": false },
+          { "kind": "instructionAccountNode", "name": "vault", "isWritable": false, "isSigner": false }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": { "kind": "fixedSizeTypeNode", "size": 1, "type": { "kind": "bytesTypeNode" } },
+            "defaultValue": { "kind": "bytesValueNode", "encoding": "base16", "data": "01" }
+          }
+        ],
+        "discriminators": [{ "kind": "fieldDiscriminatorNode", "name": "discriminator", "offset": 0 }]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "narrow",
+        "accounts": [
+          { "kind": "instructionAccountNode", "name": "owner", "isWritable": false, "isSigner": false }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": { "kind": "fixedSizeTypeNode", "size": 1, "type": { "kind": "bytesTypeNode" } },
+            "defaultValue": { "kind": "bytesValueNode", "encoding": "base16", "data": "01" }
+          }
+        ],
+        "discriminators": [{ "kind": "fieldDiscriminatorNode", "name": "discriminator", "offset": 0 }]
+      }
+    ],
+    "definedTypes": [],
+    "errors": [],
+    "constants": []
+  },
+  "additionalPrograms": []
+}

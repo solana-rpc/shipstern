@@ -678,16 +678,29 @@ pub(crate) fn collision_group_match_arm(
         by_count.entry(ix.accounts.len()).or_default().push(ix);
     }
 
+    let ambiguous_error = |names: &[String]| {
+        let msg = format!(
+            "Ambiguous instruction: variants [{}] share the same discriminator and account count. \
+             Use CustomInstructionParser to disambiguate.",
+            names.join(", ")
+        );
+
+        quote! {
+            return Err(ParseError::from(#msg));
+        }
+    };
+
     let mut inner_arms = Vec::new();
     let mut ambiguous: Vec<String> = Vec::new();
 
     // Iterate from highest to lowest account count.
     for (&count, ixs) in by_count.iter().rev() {
+        let count = crate::utils::unsuffixed(count as u64);
+
         if ixs.len() == 1 {
             let ix_name_snake = crate::utils::to_snake_case(&ixs[0].name);
 
             let fn_ident = format_ident!("parse_{}", ix_name_snake);
-            let count = crate::utils::unsuffixed(count as u64);
 
             inner_arms.push(quote! {
                 if accounts.len() >= #count {
@@ -695,23 +708,23 @@ pub(crate) fn collision_group_match_arm(
                 }
             });
         } else {
-            for ix in ixs {
-                ambiguous.push(ix.name.to_string());
-            }
+            let names: Vec<String> = ixs.iter().map(|ix| ix.name.to_string()).collect();
+            let error = ambiguous_error(&names);
+
+            // Stop here: a lower-count member would otherwise parse these accounts as itself.
+            inner_arms.push(quote! {
+                if accounts.len() >= #count {
+                    #error
+                }
+            });
+
+            ambiguous.extend(names);
         }
     }
 
+    // Only reached below the group's lowest account count.
     let fallback = if !ambiguous.is_empty() {
-        let names = ambiguous.join(", ");
-
-        let msg = format!(
-            "Ambiguous instruction: variants [{names}] share the same discriminator and account \
-             count. Use CustomInstructionParser to disambiguate."
-        );
-
-        quote! {
-            return Err(ParseError::from(#msg));
-        }
+        ambiguous_error(&ambiguous)
     } else {
         quote! {}
     };
