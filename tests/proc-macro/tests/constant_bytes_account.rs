@@ -99,3 +99,19 @@ fn the_two_discriminators_do_not_overlap() {
         constant_bytes_account::Vault::DISCRIMINATOR
     );
 }
+
+/// The account wrapper derives serde behind the `serde` feature, like the instruction wrapper.
+#[test]
+fn account_wrapper_round_trips_through_json() {
+    let mut data = vec![1];
+    data.extend_from_slice(&42_u64.to_le_bytes());
+
+    let parsed = constant_bytes_account::ConstantBytesAccountAccount::try_unpack(&data)
+        .expect("byte-valued constant discriminator should match");
+
+    let json = serde_json::to_string(&parsed).expect("serialize");
+    let back: constant_bytes_account::ConstantBytesAccountAccount =
+        serde_json::from_str(&json).expect("deserialize");
+
+    assert_eq!(back, parsed);
+}
