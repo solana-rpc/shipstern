@@ -816,6 +816,15 @@ mod field_presence_tests {
 mod discriminator_injectivity_tests {
     use crate::render::instruction_parser::{extract_ix_discriminator_key, DiscriminatorKey};
 
+    /// A value its type cannot hold fails the build instead of dropping the arm.
+    #[test]
+    #[should_panic(expected = "number discriminator 300 does not fit U8")]
+    fn number_discriminator_out_of_range_fails_the_build() {
+        let u8_type = codama_nodes::NumberTypeNode::le(codama_nodes::NumberFormat::U8).into();
+
+        crate::render::instruction_parser::number_discriminator_bytes(&u8_type, 300);
+    }
+
     ///
     /// Can one buffer satisfy both discriminators? Each is "these bytes at this
     /// offset" or "exactly this length", so they conflict only where they overlap
