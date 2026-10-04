@@ -1,0 +1,94 @@
+{
+  "kind": "rootNode",
+  "standard": "codama",
+  "version": "1.6.0",
+  "program": {
+    "kind": "programNode",
+    "name": "wideNumberDiscriminator",
+    "publicKey": "11111111111111111111111111111111",
+    "version": "0.1.0",
+    "accounts": [
+      {
+        "kind": "accountNode",
+        "name": "config",
+        "data": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "accountType",
+              "type": { "kind": "numberTypeNode", "format": "u16", "endian": "le" }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "value",
+              "type": { "kind": "numberTypeNode", "format": "u64", "endian": "le" }
+            }
+          ]
+        },
+        "discriminators": [
+          {
+            "kind": "constantDiscriminatorNode",
+            "offset": 0,
+            "constant": {
+              "kind": "constantValueNode",
+              "type": { "kind": "numberTypeNode", "format": "u16", "endian": "le" },
+              "value": { "kind": "numberValueNode", "number": 513 }
+            }
+          }
+        ]
+      }
+    ],
+    "instructions": [
+      {
+        "kind": "instructionNode",
+        "name": "transferSol",
+        "accounts": [
+          { "kind": "instructionAccountNode", "name": "source", "isWritable": true, "isSigner": true },
+          { "kind": "instructionAccountNode", "name": "destination", "isWritable": true, "isSigner": false }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": { "kind": "numberTypeNode", "format": "u32", "endian": "le" },
+            "defaultValue": { "kind": "numberValueNode", "number": 2 }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "amount",
+            "type": { "kind": "numberTypeNode", "format": "u64", "endian": "le" }
+          }
+        ],
+        "discriminators": [{ "kind": "fieldDiscriminatorNode", "name": "discriminator", "offset": 0 }]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "allocate",
+        "accounts": [
+          { "kind": "instructionAccountNode", "name": "account", "isWritable": true, "isSigner": true }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": { "kind": "numberTypeNode", "format": "i16", "endian": "le" },
+            "defaultValue": { "kind": "numberValueNode", "number": 8 }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "space",
+            "type": { "kind": "numberTypeNode", "format": "u64", "endian": "le" }
+          }
+        ],
+        "discriminators": [{ "kind": "fieldDiscriminatorNode", "name": "discriminator", "offset": 0 }]
+      }
+    ],
+    "definedTypes": [],
+    "errors": [],
+    "constants": []
+  },
+  "additionalPrograms": []
+}

@@ -160,11 +160,16 @@ pub fn account_parser(
                             return None;
                         };
 
-                        let value_u8 = value as u8;
+                        let discriminator = super::instruction_parser::number_discriminator_bytes(
+                            &node.constant.r#type,
+                            value,
+                        );
+                        let end =
+                            crate::utils::unsuffixed((offset_at + discriminator.len()) as u64);
 
                         let arm = quote! {
-                            if let Some(discriminator) = data.get(#offset) {
-                                if *discriminator == #value_u8 {
+                            if let Some(slice) = data.get(#offset..#end) {
+                                if slice == &[#(#discriminator),*] {
                                     match <#account_ident as ::borsh::BorshDeserialize>::deserialize(&mut &data[..]) {
                                         Ok(parsed) => {
                                             return Ok(#account_struct_ident {
@@ -177,7 +182,7 @@ pub fn account_parser(
                             }
                         };
 
-                        (arm, discriminator_consts(&account_ident, &[value_u8], &offset))
+                        (arm, discriminator_consts(&account_ident, &discriminator, &offset))
                     },
 
                     // Byte discriminators are a prefix and are not part of the account struct.
