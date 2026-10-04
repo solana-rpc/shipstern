@@ -126,3 +126,30 @@ fn an_unsupported_anchor_idl_fails_to_compile_with_the_convert_hint() {
         "convert hint missing: {expanded}"
     );
 }
+
+/// A fixed account address that does not decode must fail the build, not be
+/// skipped or replaced by a wrong key.
+#[test]
+fn an_undecodable_fixed_account_address_fails_to_compile() {
+    let dir = std::env::temp_dir().join(format!("shipstern-bad-address-{}", std::process::id()));
+
+    std::fs::create_dir_all(&dir).expect("temp dir");
+
+    let path = dir.join("bad-address.json");
+
+    std::fs::write(
+        &path,
+        r#"{"address":"11111111111111111111111111111111","metadata":{"name":"t","version":"1","spec":"0.1.0"},
+            "instructions":[{"name":"go","discriminator":[1],"accounts":[{"name":"program","address":"not-a-key"}]}]}"#,
+    )
+    .expect("write IDL");
+
+    let expanded = expand_pretty(&path);
+
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        expanded.contains("Invalid base58 pubkey"),
+        "no decode error: {expanded}"
+    );
+}

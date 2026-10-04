@@ -760,6 +760,44 @@ fn an_empty_address_falls_back_to_the_pda() {
     );
 }
 
+/// Like `codama convert`, a program or sysvar account gets its address by name,
+/// unless it is optional or the IDL already gives one.
+#[test]
+fn program_and_sysvar_accounts_get_their_address_by_name() {
+    let accounts = json!([
+        { "name": "token_program" },
+        { "name": "spl_token_program", "optional": true },
+        { "name": "system_program", "address": "Dex1111111111111111111111111111111111111111" },
+        { "name": "sysvar_instructions_account" }
+    ]);
+
+    let root = convert(ix(json!([]), accounts)).expect("converts");
+    let defaults: Vec<&Value> = root["program"]["instructions"][0]["accounts"]
+        .as_array()
+        .expect("accounts")
+        .iter()
+        .map(|account| &account["defaultValue"])
+        .collect();
+
+    assert_eq!(defaults, [
+        &json!({
+            "kind": "publicKeyValueNode",
+            "publicKey": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+            "identifier": "splToken"
+        }),
+        &Value::Null,
+        &json!({
+            "kind": "publicKeyValueNode",
+            "publicKey": "Dex1111111111111111111111111111111111111111",
+            "identifier": "systemProgram"
+        }),
+        &json!({
+            "kind": "publicKeyValueNode",
+            "publicKey": "Sysvar1nstructions1111111111111111111111111"
+        }),
+    ]);
+}
+
 /// Without this, a bad field anywhere in the IDL reports no location.
 #[test]
 fn a_malformed_item_is_named() {

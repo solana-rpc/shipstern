@@ -471,3 +471,42 @@ fn check_json_serialization() {
     let _: perpetuals::instruction::CreateAndDelegateStakeAccount =
         serde_json::from_str(&json_str).expect("failed to json deserialize");
 }
+
+/// A missing account with a fixed IDL address falls back to it; a missing
+/// account without one still errors.
+#[test]
+fn missing_fixed_address_account_falls_back_to_idl_address() {
+    let data = perpetuals::Instructions::SET_TOKEN_LEDGER_DISCRIMINATOR;
+    let path = shipstern_core::instruction::Path::new_single(0);
+
+    let token_ledger = Pubkey::new([1; 32]);
+    let token_account = Pubkey::new([2; 32]);
+    let passed_program = Pubkey::new([3; 32]);
+
+    let token_program = |accounts: &[Pubkey]| {
+        let parsed = perpetuals::resolve_instruction_default(accounts, data, &path)
+            .expect("setTokenLedger parses");
+
+        let perpetuals::instruction::Instruction::SetTokenLedger { accounts, .. } =
+            parsed.instruction
+        else {
+            panic!("expected SetTokenLedger");
+        };
+
+        accounts.token_program
+    };
+
+    assert_eq!(
+        token_program(&[token_ledger, token_account]),
+        p("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+    );
+    assert_eq!(
+        token_program(&[token_ledger, token_account, passed_program]),
+        passed_program
+    );
+
+    let err = perpetuals::resolve_instruction_default(&[token_ledger], data, &path)
+        .expect_err("tokenAccount has no fixed address");
+
+    assert_eq!(err.to_string(), "Account does not exist at index 1");
+}

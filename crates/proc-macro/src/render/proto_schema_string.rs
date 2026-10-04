@@ -58,6 +58,13 @@ pub fn proto_schema_string(
     // type would be silently dropped. Rename the event side.
     let proto_rename = build_event_rename_map(schema);
 
+    let event_wrappers: HashSet<&str> = schema
+        .oneofs
+        .iter()
+        .filter(|o| o.kind == OneofKindIr::EventDispatch)
+        .flat_map(|o| o.variants.iter().map(|v| v.message_type.as_str()))
+        .collect();
+
     // Oneof parents are rendered separately below — skip them here to avoid duplicates.
     let oneof_parents: HashSet<&str> = schema
         .oneofs
@@ -87,7 +94,7 @@ pub fn proto_schema_string(
                 continue;
             }
 
-            render_type(&mut out, t, &proto_name, &proto_rename);
+            render_type(&mut out, t, &proto_name, &proto_rename, &event_wrappers);
 
             message_count += 1;
         }
@@ -199,10 +206,17 @@ fn resolve_proto_name(name: &str, rename: &HashMap<&str, String>) -> String {
         .unwrap_or_else(|| name.to_string())
 }
 
-fn render_type(out: &mut String, msg: &TypeIr, proto_name: &str, rename: &HashMap<&str, String>) {
-    // Only resolve field type references through the rename map for Event types.
-    // Instruction types reference instruction sub-messages (original names).
-    let apply_field_rename = matches!(msg.kind, TypeKindIr::Event);
+fn render_type(
+    out: &mut String,
+    msg: &TypeIr,
+    proto_name: &str,
+    rename: &HashMap<&str, String>,
+    event_wrappers: &HashSet<&str>,
+) {
+    // Only event dispatch wrappers reference event messages (their accounts and
+    // args). Other fields name top-level types, as the Rust types do.
+    let apply_field_rename =
+        matches!(msg.kind, TypeKindIr::Event) && event_wrappers.contains(msg.name.as_str());
 
     writeln!(out, "message {} {{", proto_name).unwrap();
 

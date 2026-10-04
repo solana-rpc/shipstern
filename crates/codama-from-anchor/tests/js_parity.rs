@@ -1,6 +1,6 @@
-//! The full Codama JSON must match the JS output once extractPdas,
-//! setInstructionAccountDefaultValues and setFixedAccountSizes are undone. This
-//! also covers errors, constants, PDA seeds and docs, which the parser never reads.
+//! The full Codama JSON, including errors, constants, PDA seeds and docs, must match
+//! the JS output once extractPdas, setFixedAccountSizes and the payer, identity and
+//! program ID defaults are undone.
 
 use std::path::{Path, PathBuf};
 
@@ -36,8 +36,8 @@ fn undo_unported_passes(js: &mut Value) {
         }
     }
 
-    // Only the defaults the pass invents; a `publicKeyValueNode` can also come
-    // from the IDL's `address`, so it stays and a dropped address still fails.
+    // Only the defaults this crate does not port; every `publicKeyValueNode` stays,
+    // so a dropped address or name rule still fails.
     if let Some(instructions) = js
         .pointer_mut("/program/instructions")
         .and_then(Value::as_array_mut)
