@@ -317,17 +317,23 @@ pub fn account_parser(
 
     let account_disc_consts = account_disc_consts.into_iter().flatten();
 
+    let serde_derive = quote! {
+        #[cfg_attr(feature = "serde", derive(::serde::Serialize, ::serde::Deserialize))]
+    };
+
     let (struct_and_mod, proto_impls) = if accounts.is_empty() {
         let empty_struct = if cfg!(feature = "proto") {
             quote! {
                 /// Wrapper struct for program accounts (no accounts defined).
                 #[derive(Clone, PartialEq, ::prost::Message)]
+                #serde_derive
                 pub struct #account_struct_ident {}
             }
         } else {
             quote! {
                 /// Wrapper struct for program accounts (no accounts defined).
                 #[derive(Clone, Debug, PartialEq)]
+                #serde_derive
                 pub struct #account_struct_ident {}
             }
         };
@@ -349,12 +355,14 @@ pub fn account_parser(
         let s = quote! {
             /// Wrapper struct for program accounts.
             #[derive(Clone, #debug_derive PartialEq)]
+            #serde_derive
             pub struct #account_struct_ident {
                 pub account: #account_mod_ident::Account,
             }
 
             pub mod #account_mod_ident {
                 #enum_derive
+                #serde_derive
                 pub enum Account {
                     #(#oneof_variants),*
                 }
