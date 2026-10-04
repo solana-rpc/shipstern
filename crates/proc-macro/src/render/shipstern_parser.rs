@@ -608,6 +608,8 @@ fn option_borsh_helpers() -> TokenStream {
             writer.write_all(&bytes)
         }
 
+        // SPL's COption keeps the old value when it is set to None, so these
+        // bytes are skipped rather than required to be zero.
         fn borsh_deserialize_option_none_padding<
             const NONE_PADDING: usize,
             R: ::borsh::io::Read,
@@ -615,16 +617,8 @@ fn option_borsh_helpers() -> TokenStream {
             reader: &mut R,
         ) -> ::core::result::Result<(), ::borsh::io::Error> {
             let mut padding = ::std::vec![0u8; NONE_PADDING];
-            reader.read_exact(&mut padding)?;
 
-            if padding.iter().all(|byte| *byte == 0) {
-                ::core::result::Result::Ok(())
-            } else {
-                ::core::result::Result::Err(::borsh::io::Error::new(
-                    ::borsh::io::ErrorKind::InvalidData,
-                    "fixed Codama option padding must be zero",
-                ))
-            }
+            reader.read_exact(&mut padding)
         }
 
         fn borsh_serialize_option_none_padding<
