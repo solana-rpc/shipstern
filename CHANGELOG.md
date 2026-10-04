@@ -14,10 +14,12 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - `shipstern-core`: merging two prefilters that name the same comparison, one of them written with a repeat, now keeps the comparison instead of dropping it and widening ([#333](https://github.com/solana-rpc/shipstern/pull/333) by @senzenn).
+- `shipstern-proc-macro`: map fields are generated as `Vec<{Base}Entry>` with `key` and `value` instead of `Vec<u8>`, and set fields as a `Vec` of their item, which proto schemas emit as `repeated` ([#342](https://github.com/solana-rpc/shipstern/pull/342) by @senzenn).
 
 ### Fixed
 
 - `shipstern-core`: `Prefilter::builder().account_filters(..)` drops repeated comparisons before checking the limit of four, so a config that repeats one is no longer refused ([#333](https://github.com/solana-rpc/shipstern/pull/333) closing [#331](https://github.com/solana-rpc/shipstern/issues/331) by @senzenn).
+- `shipstern-proc-macro`: generated parsers read number discriminators at their declared width, skip the bytes after a fixed option's `None` tag, return the ambiguity error for an account count that two same-discriminator instructions share, keep instruction proto messages named like a type (renamed `Ix{Name}`), and derive serde on the account wrapper ([#342](https://github.com/solana-rpc/shipstern/pull/342) by @senzenn).
 
 ## [0.11.0] - 2026-09-18
 
