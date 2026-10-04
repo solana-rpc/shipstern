@@ -160,11 +160,16 @@ pub fn account_parser(
                             return None;
                         };
 
-                        let value_u8 = value as u8;
+                        let discriminator = super::instruction_parser::number_discriminator_bytes(
+                            &node.constant.r#type,
+                            value,
+                        );
+                        let end =
+                            crate::utils::unsuffixed((offset_at + discriminator.len()) as u64);
 
                         let arm = quote! {
-                            if let Some(discriminator) = data.get(#offset) {
-                                if *discriminator == #value_u8 {
+                            if let Some(slice) = data.get(#offset..#end) {
+                                if slice == &[#(#discriminator),*] {
                                     match <#account_ident as ::borsh::BorshDeserialize>::deserialize(&mut &data[..]) {
                                         Ok(parsed) => {
                                             return Ok(#account_struct_ident {
@@ -177,7 +182,7 @@ pub fn account_parser(
                             }
                         };
 
-                        (arm, discriminator_consts(&account_ident, &[value_u8], &offset))
+                        (arm, discriminator_consts(&account_ident, &discriminator, &offset))
                     },
 
                     // Byte discriminators are a prefix and are not part of the account struct.
@@ -312,17 +317,23 @@ pub fn account_parser(
 
     let account_disc_consts = account_disc_consts.into_iter().flatten();
 
+    let serde_derive = quote! {
+        #[cfg_attr(feature = "serde", derive(::serde::Serialize, ::serde::Deserialize))]
+    };
+
     let (struct_and_mod, proto_impls) = if accounts.is_empty() {
         let empty_struct = if cfg!(feature = "proto") {
             quote! {
                 /// Wrapper struct for program accounts (no accounts defined).
                 #[derive(Clone, PartialEq, ::prost::Message)]
+                #serde_derive
                 pub struct #account_struct_ident {}
             }
         } else {
             quote! {
                 /// Wrapper struct for program accounts (no accounts defined).
                 #[derive(Clone, Debug, PartialEq)]
+                #serde_derive
                 pub struct #account_struct_ident {}
             }
         };
@@ -330,9 +341,15 @@ pub fn account_parser(
         (empty_struct, quote! {})
     } else {
         let enum_derive = if cfg!(feature = "proto") {
-            quote! { #[derive(Clone, PartialEq, ::prost::Oneof)] }
+            quote! {
+                #[derive(Clone, PartialEq, ::prost::Oneof)]
+                #serde_derive
+            }
         } else {
-            quote! { #[derive(Clone, Debug, PartialEq)] }
+            quote! {
+                #[derive(Clone, Debug, PartialEq)]
+                #serde_derive
+            }
         };
 
         let debug_derive = if cfg!(feature = "proto") {
@@ -344,6 +361,7 @@ pub fn account_parser(
         let s = quote! {
             /// Wrapper struct for program accounts.
             #[derive(Clone, #debug_derive PartialEq)]
+            #serde_derive
             pub struct #account_struct_ident {
                 pub account: #account_mod_ident::Account,
             }

@@ -1,0 +1,63 @@
+{
+  "kind": "rootNode",
+  "standard": "codama",
+  "version": "1.6.0",
+  "program": {
+    "kind": "programNode",
+    "name": "instructionNameCollisions",
+    "publicKey": "11111111111111111111111111111111",
+    "version": "0.1.0",
+    "accounts": [],
+    "instructions": [
+      {
+        "kind": "instructionNode",
+        "name": "swap",
+        "accounts": [{ "kind": "instructionAccountNode", "name": "user", "isWritable": false, "isSigner": true }],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "amount",
+            "type": { "kind": "numberTypeNode", "format": "u64", "endian": "le" }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "mode",
+            "type": { "kind": "definedTypeLinkNode", "name": "swap" }
+          }
+        ],
+        "discriminators": [{ "kind": "sizeDiscriminatorNode", "size": 9 }]
+      }
+    ],
+    "definedTypes": [
+      {
+        "kind": "definedTypeNode",
+        "name": "swap",
+        "type": {
+          "kind": "enumTypeNode",
+          "variants": [
+            { "kind": "enumEmptyVariantTypeNode", "name": "exactIn" },
+            { "kind": "enumEmptyVariantTypeNode", "name": "exactOut" }
+          ],
+          "size": { "kind": "numberTypeNode", "format": "u8", "endian": "le" }
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "swapAccounts",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "count",
+              "type": { "kind": "numberTypeNode", "format": "u8", "endian": "le" }
+            }
+          ]
+        }
+      }
+    ],
+    "errors": [],
+    "constants": []
+  },
+  "additionalPrograms": []
+}
