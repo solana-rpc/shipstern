@@ -9,8 +9,8 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- `shipstern-core`: `TransactionPrefilter::token_accounts` and `PrefilterBuilder::transaction_token_accounts` pass Yellowstone's `token_accounts` ([rpcpool/yellowstone-grpc#762](https://github.com/rpcpool/yellowstone-grpc/pull/762)) through; merging disagreeing modes takes the wider one and drops `accounts_exclude`.
 - `shipstern-core`: `PrefilterBuilder::account_cuckoo`, `transaction_cuckoo_accounts_include` and `block_cuckoo_accounts_include` send account sets as Yellowstone cuckoo filters; merging unions the sets ([#334](https://github.com/solana-rpc/shipstern/pull/334) closing [#330](https://github.com/solana-rpc/shipstern/issues/330) by @senzenn).
+- `shipstern-core`: `TransactionPrefilter::token_accounts` and `PrefilterBuilder::transaction_token_accounts` pass Yellowstone's `token_accounts` ([rpcpool/yellowstone-grpc#762](https://github.com/rpcpool/yellowstone-grpc/pull/762)) through; merging disagreeing modes takes the wider one and drops `accounts_exclude`.
 
 ### Changed
 
