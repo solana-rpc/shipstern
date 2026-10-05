@@ -219,25 +219,44 @@ impl CuckooAccounts {
         self.0.dedup();
     }
 
-    fn to_filter(&self) -> Option<CuckooFilter> {
-        if self.0.is_empty() {
-            return None;
+    /// The filter at `capacity`, and the keys it does not hold. Near 95% load a
+    /// failed insert evicts an earlier key, so only a lookup afterwards finds it.
+    fn build(&self, capacity: usize) -> Option<(CuckooFilter, Vec<Pubkey>)> {
+        let mut filter =
+            yellowstone_grpc_proto::cuckoo::CuckooFilter::<[u8; 32]>::with_capacity(capacity)
+                .ok()?;
+
+        for key in &self.0 {
+            let _ = filter.insert(&key.0);
         }
 
-        // Near 95% load an insert can fail after evicting a key, so rebuild once at 2x.
-        let build = |capacity: usize| {
-            let mut filter =
-                yellowstone_grpc_proto::cuckoo::CuckooFilter::<[u8; 32]>::with_capacity(capacity)
-                    .ok()?;
+        let missed = self
+            .0
+            .iter()
+            .filter(|key| !filter.contains(&key.0))
+            .copied()
+            .collect();
 
-            self.0
-                .iter()
-                .all(|key| filter.insert(&key.0).is_ok())
-                .then(|| (&filter).into())
-        };
+        Some(((&filter).into(), missed))
+    }
 
+    fn to_filter(&self) -> (Option<CuckooFilter>, Vec<Pubkey>) {
+        if self.0.is_empty() {
+            return (None, Vec::new());
+        }
+
+        // Rebuild once at 2x to keep missed keys out of the list: a server without
+        // cuckoo support ignores the filter and would match only the listed keys.
         let len = self.0.len();
-        build(len).or_else(|| build(len.saturating_mul(2)))
+        let built = self
+            .build(len)
+            .filter(|(_, missed)| missed.is_empty())
+            .or_else(|| self.build(len.saturating_mul(2)));
+
+        built.map_or_else(
+            || (None, self.0.clone()),
+            |(filter, missed)| (Some(filter), missed),
+        )
     }
 }
 
@@ -249,17 +268,16 @@ impl FromIterator<Pubkey> for CuckooAccounts {
     }
 }
 
-/// If the filter can't be built, its keys go in the list instead.
+/// Keys the filter does not hold go in the list, which the server matches as well.
 fn wire_keys(
     keys: &HashSet<Pubkey>,
     cuckoo: &CuckooAccounts,
 ) -> (Vec<String>, Option<CuckooFilter>) {
-    let filter = cuckoo.to_filter();
-    let fallback = if filter.is_none() { &cuckoo.0[..] } else { &[] };
+    let (filter, missed) = cuckoo.to_filter();
 
     let list = keys
         .iter()
-        .chain(fallback)
+        .chain(&missed)
         .map(ToString::to_string)
         .collect();
     (list, filter)
@@ -2123,9 +2141,9 @@ mod tests {
         }
     }
 
-    // This set's first build at `with_capacity(243)` fails, so only the 2x rebuild holds every key.
+    // Building this set at `with_capacity(243)` evicts keys; the 2x rebuild holds them all.
     #[test]
-    fn test_cuckoo_accounts_rebuild_when_the_first_build_fails() {
+    fn test_cuckoo_accounts_track_the_keys_a_build_drops() {
         let accounts: CuckooAccounts = (0..243u16)
             .map(|i| {
                 let mut key = [0u8; 32];
@@ -2134,10 +2152,19 @@ mod tests {
                 Pubkey::new(key)
             })
             .collect();
+        let decode = yellowstone_grpc_proto::cuckoo::CuckooFilter::<[u8; 32]>::from;
 
-        let wire = accounts.to_filter().expect("filter must build");
-        let filter = yellowstone_grpc_proto::cuckoo::CuckooFilter::<[u8; 32]>::from(&wire);
-        assert!(accounts.0.iter().all(|key| filter.contains(&key.0)));
+        let (first, missed) = accounts.build(243).expect("filter must build");
+        let first = decode(&first);
+        assert!(!missed.is_empty(), "this set must overflow at 243");
+        assert!(accounts
+            .0
+            .iter()
+            .all(|key| first.contains(&key.0) != missed.contains(key)));
+
+        let (list, wire) = wire_keys(&HashSet::new(), &accounts);
+        let filter = decode(&wire.expect("filter must build"));
+        assert!(list.is_empty() && accounts.0.iter().all(|key| filter.contains(&key.0)));
     }
 
     #[test]
