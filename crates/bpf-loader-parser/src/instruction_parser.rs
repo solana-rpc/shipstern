@@ -17,7 +17,7 @@ impl Parser for InstructionParser {
 
     fn prefilter(&self) -> Prefilter {
         Prefilter::builder()
-            .transaction_accounts([solana_sdk_ids::bpf_loader_upgradeable::ID])
+            .transaction_accounts_include([solana_sdk_ids::bpf_loader_upgradeable::ID])
             .build()
             .unwrap()
     }
