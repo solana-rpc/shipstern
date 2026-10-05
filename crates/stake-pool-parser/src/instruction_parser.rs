@@ -18,7 +18,7 @@ impl Parser for InstructionParser {
 
     fn prefilter(&self) -> Prefilter {
         Prefilter::builder()
-            .transaction_accounts([spl_stake_pool::id()])
+            .transaction_accounts_include([spl_stake_pool::id()])
             .build()
             .unwrap()
     }
