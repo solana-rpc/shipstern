@@ -211,6 +211,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "anchor-lang-idl"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62076a3c298f5447488e31c0198675b2fcbada1f71381af7104333cf6ff2581d"
+dependencies = [
+ "anchor-lang-idl-spec",
+ "anyhow",
+ "heck 0.3.3",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "anchor-lang-idl-spec"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bdf143115440fe621bdac3a29a1f7472e09f6cd82b2aa569429a0c13f103838"
+dependencies = [
+ "anyhow",
+ "serde",
+]
+
+[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -993,7 +1017,7 @@ version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1110bd8a634a1ab8cb04345d8d878267d57c3cf1b38d91b71af6686408bbca6a"
 dependencies = [
- "heck",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -2073,6 +2097,15 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
  "equivalent",
  "foldhash 0.2.0",
+]
+
+[[package]]
+name = "heck"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d621efb26863f0e9924c6ac577e8275e5e6b77455db64ffa6c65c904e9e132c"
+dependencies = [
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -3293,7 +3326,7 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
- "heck",
+ "heck 0.5.0",
  "itertools 0.14.0",
  "log",
  "multimap",
@@ -4198,7 +4231,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -4217,7 +4250,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-block-coordinator"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "bs58",
@@ -4241,7 +4274,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-block-meta-parser"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "prost",
  "prost-types",
@@ -4251,8 +4284,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "shipstern-codama-from-anchor"
+version = "0.11.0"
+dependencies = [
+ "anchor-lang-idl",
+ "bs58",
+ "codama-nodes",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "shipstern-core"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "base64 0.22.1",
  "borsh 1.8.1",
@@ -4268,7 +4315,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-kafka-sink"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "futures",
  "prost",
@@ -4286,7 +4333,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-mock"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "futures",
  "regex",
@@ -4302,7 +4349,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-parser"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "base64 0.22.1",
  "bs58",
@@ -4315,7 +4362,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-proc-macro"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "base64 0.22.1",
  "bs58",
@@ -4325,13 +4372,14 @@ dependencies = [
  "quote",
  "serde",
  "serde_json",
+ "shipstern-codama-from-anchor",
  "shipstern-core",
  "syn 2.0.117",
 ]
 
 [[package]]
 name = "shipstern-proto"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "prost",
  "protobuf-src",
@@ -4340,7 +4388,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-spl-token-extensions-parser"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "borsh 1.8.1",
  "bs58",
@@ -4364,7 +4412,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-spl-token-parser"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "bs58",
  "prost",
@@ -4381,7 +4429,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-stake-pool-parser"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "borsh 1.8.1",
  "bs58",
@@ -4405,7 +4453,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-yellowstone-grpc-source"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -9607,7 +9655,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea61de684c3ea68cb082b7a88508a8b27fcc8b797d738bfc99a82facf1d752dc"
 dependencies = [
  "anyhow",
- "heck",
+ "heck 0.5.0",
  "wit-parser",
 ]
 
@@ -9618,7 +9666,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7c566e0f4b284dd6561c786d9cb0142da491f46a9fbed79ea69cdad5db17f21"
 dependencies = [
  "anyhow",
- "heck",
+ "heck 0.5.0",
  "indexmap",
  "prettyplease",
  "syn 2.0.117",

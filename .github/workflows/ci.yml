@@ -130,6 +130,10 @@ jobs:
       - name: Run protobuf wire-compat tests
         run: cargo test -p shipstern-proto --lib --features parser,stream
 
+      # Events only render with `program-events`, which the workspace run leaves off.
+      - name: Run Anchor parity tests with events
+        run: cargo test -p shipstern-proc-macro --lib --features program-events anchor_parity
+
       - name: Run experimental account parser tests
         run: cargo test -p shipstern-kafka-sink --features experimental-account-parser --lib --tests
 
