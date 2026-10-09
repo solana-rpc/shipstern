@@ -1711,6 +1711,7 @@ impl From<Filters> for SubscribeRequest {
                 })
                 .collect(),
             entry: [].into_iter().collect(),
+            block_footer: [].into_iter().collect(),
             commitment: None,
             // Request-level rather than per-parser, so it is set by the source
             // from its configuration after this conversion.

@@ -193,6 +193,7 @@ impl SourceTrait for SolanaSnapshotSource {
                 parent: None,
                 status: SlotStatus::SlotFinalized.into(),
                 dead_error: None,
+                bank_id: Some(snapshot_slot),
             })),
         }))
         .await
@@ -270,6 +271,7 @@ impl SourceTrait for SolanaSnapshotSource {
                                 }),
                                 slot: snapshot_slot,
                                 is_startup: true,
+                                bank_id: None,
                             },
                             filters: filter_owner_key_lookup
                                 .lookup_by_owner(&Pubkey::from(owner.to_bytes()))

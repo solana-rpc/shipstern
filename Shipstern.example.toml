@@ -16,10 +16,10 @@ x-token = "<X-TOKEN>"
 timeout = 60
 
 # Built-in auto-reconnect for the gRPC stream.
-# When enabled (the default), the stream reconnects with exponential backoff
-# after a transient failure, resumes from the last seen slot, and deduplicates
-# replayed events. The server must have `replay_stored_slots` configured for
-# gap-free recovery. Set to false to disable reconnect entirely.
+# When enabled (the default), a processed stream with no from-slot and no filter
+# updates reconnects with exponential backoff and replays from the last
+# unfinalized slot. Updates of a block that was cut off can arrive twice. Other
+# streams stop on stream loss. Set to false to disable reconnect entirely.
 #auto-reconnect = true
 
 # Maximum reconnect attempts before the stream gives up.
@@ -27,11 +27,6 @@ timeout = 60
 # 500ms/2.0x backoff covers outages up to ~4 minutes. Increase for longer
 # tolerated outages.
 #reconnect-max-retries = 10
-
-# Number of recent slots retained for deduplication during the replay window.
-# Only applies when auto-reconnect is enabled. Defaults to the client library
-# value; raise it if your replay window is large.
-#reconnect-slot-retention = 150
 
 # Windows of account data to receive in place of the whole account.
 # Applies to the whole subscription rather than to one parser, so every account

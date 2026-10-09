@@ -78,11 +78,10 @@ entry under `InstructionPipeline::ID` whose prefilter is the union of theirs.
 Naming an individual instruction parser is refused as unknown, and widening
 there widens the whole bundle. `handle.filters().parser_ids()` reports the keys
 that exist. Only the newest set matters: two updates in quick
-succession may reach the source as the second alone, and a set rejected while
-the source is between connections is retried once the stream recovers, but the
-sender is not told either way. With auto-reconnect off there is nothing to
-recover into, so such a set is dropped with a warning while `filters()` still
-reports it.
+succession may reach the source as the second alone, and a set the sink rejects
+is dropped with a warning while `filters()` still reports it. A stream that can
+take filter updates does not reconnect, because the client cannot replay a
+changed request.
 
 The server applies the new set promptly once it has it, but two different lags
 sit in front of that. The source awaits the runtime buffer inside the same
@@ -98,14 +97,7 @@ once. A returned `send` means the request was handed off, not that the
 subscription has changed.
 
 A set the server refuses, by exceeding its configured filter limits for
-example, comes back on the stream rather than on the sink. What happens next
-depends on the code. A code the client treats as terminal ends the run. A
-recoverable one does not: the sink records a request into its reconnect state
-as soon as the local channel takes it, before the server has seen it, so the
-client reconnects and resubscribes with the same refused set, and the loop
-repeats. `ResourceExhausted` is recoverable and is exactly what a "too many
-filters" rejection can carry, so a set the provider will not accept can leave
-the runtime reconnecting indefinitely rather than either applying or stopping.
+example, comes back on the stream rather than on the sink, and it ends the run.
 Validate against the provider's limits before sending one, and read
 `filter_updates_sent` in the stream-error log to tell a refused update apart
 from an unrelated server error.

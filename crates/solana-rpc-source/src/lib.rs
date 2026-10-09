@@ -158,6 +158,7 @@ impl SourceTrait for SolanaAccountsRpcSource {
                                     }),
                                     slot,
                                     is_startup: true,
+                                    bank_id: None,
                                 })),
                             };
 

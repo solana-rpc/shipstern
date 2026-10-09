@@ -1921,6 +1921,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1137cd7e7fc0fb5d3c5a8678be38ec56e819125d8d7907411fe24ccb943faca8"
+dependencies = [
+ "crossbeam-channel",
+ "crossbeam-deque",
+ "crossbeam-epoch",
+ "crossbeam-queue",
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2202,7 +2215,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -2711,9 +2724,6 @@ name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
-dependencies = [
- "getrandom 0.4.3",
-]
 
 [[package]]
 name = "feature-probe"
@@ -2817,18 +2827,6 @@ dependencies = [
  "crc32fast",
  "miniz_oxide",
  "zlib-rs",
-]
-
-[[package]]
-name = "flume"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e139bc46ca777eb5efaf62df0ab8cc5fd400866427e56c68b22e414e53bd3be"
-dependencies = [
- "fastrand",
- "futures-core",
- "futures-sink",
- "spin",
 ]
 
 [[package]]
@@ -8132,6 +8130,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-clock"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "178fc0c31655aa16190cc112919dcdf279437e14b2f2f9790fe1ec29157ff20c"
+dependencies = [
+ "solana-sdk-macro 3.0.1",
+]
+
+[[package]]
 name = "solana-cluster-type"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11958,9 +11965,6 @@ name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
-dependencies = [
- "lock_api",
-]
 
 [[package]]
 name = "spki"
@@ -14243,9 +14247,9 @@ checksum = "aee1b19627c7c60102ab80d3a9cbe18de90bfe03bfa6c3715447681f0e8c8af6"
 
 [[package]]
 name = "yellowstone-block-machine"
-version = "0.4.0"
+version = "0.11.0-rc2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "012e23ea9f5f9186d2531fd9d3bfd38c02275118c67211e4603cf55c8e9876a5"
+checksum = "0c4fb7e5b3c0d54dec966d60d04a4c221c17fefa9c7016c171f1750814351ac3"
 dependencies = [
  "bs58",
  "bytesize 2.7.0",
@@ -14254,7 +14258,7 @@ dependencies = [
  "futures-util",
  "rustc-hash",
  "serde",
- "solana-clock 3.1.1",
+ "solana-clock 4.0.0",
  "solana-commitment-config",
  "solana-hash 4.5.0",
  "solana-pubkey 4.2.1",
@@ -14267,13 +14271,13 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-fumarole-client"
-version = "0.4.0+solana.3"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d7e9bcb6a37fccd419a751475833da7f933c2765c012b5cb435693b448a796d"
+checksum = "ecb58e7578c66c639035515f50ad5110c4463064d2675ed06b3ab2f17cfca03b"
 dependencies = [
  "async-trait",
  "bytesize 2.7.0",
- "flume",
+ "crossbeam",
  "futures 0.3.34",
  "http 1.5.0",
  "hyper 1.11.1",
@@ -14288,10 +14292,11 @@ dependencies = [
  "serde_json",
  "serde_with",
  "serde_yaml",
- "solana-clock 3.1.1",
+ "solana-clock 4.0.0",
  "thiserror 2.0.20",
  "tokio",
  "tokio-stream",
+ "tokio-util 0.7.19",
  "tonic 0.14.6",
  "tonic-build",
  "tonic-prost",
@@ -14304,9 +14309,9 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "13.2.1"
+version = "15.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "522f732c75365ae8e7c1d4607f33fa7acb163389f00debfa773ed2e7566cc94b"
+checksum = "14d2f909d0f39eff9f03fca11c60115660defcf85c3eee5511ebb13c0ebc91d4"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -14325,9 +14330,9 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "12.7.0"
+version = "14.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5c845c3eaa82bf075d1e553826e629eda16a74e9fdbe886ec07bd7434d132af"
+checksum = "8f913b2244559b96aa636abf53188a7df450e14a3f8cb5b3e5d3202822759ff4"
 dependencies = [
  "anyhow",
  "prost 0.14.4",

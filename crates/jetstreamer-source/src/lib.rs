@@ -361,6 +361,7 @@ impl ShipsternStreamHandler {
                             entries_count: entry_count,
                             parent_slot,
                             parent_blockhash: parent_blockhash.to_string(),
+                            bank_id: slot,
                         }),
                     )
                     .await?;
@@ -386,6 +387,7 @@ impl ShipsternStreamHandler {
                             parent_blockhash: parent_blockhash.to_string(),
                             executed_transaction_count,
                             entries_count: entry_count,
+                            bank_id: slot,
                         }),
                     )
                     .await?;
@@ -408,6 +410,7 @@ impl ShipsternStreamHandler {
                             parent: Some(parent_slot),
                             status: SlotStatus::SlotFinalized as i32,
                             dead_error: None,
+                            bank_id: Some(slot),
                         }),
                     )
                     .await?;
@@ -480,6 +483,7 @@ impl ShipsternStreamHandler {
             UpdateOneof::Transaction(yellowstone_grpc_proto::geyser::SubscribeUpdateTransaction {
                 slot: tx_data.slot,
                 transaction: transaction_info,
+                bank_id: tx_data.slot,
             }),
         )
         .await
@@ -2013,6 +2017,7 @@ slot-end = 2000
 
                 let txn = TransactionUpdate {
                     slot: 1,
+                    bank_id: 0,
                     transaction: Some(SubscribeUpdateTransactionInfo {
                         signature: vec![3u8; 64],
                         is_vote: false,
@@ -2079,6 +2084,7 @@ slot-end = 2000
 
             let txn = TransactionUpdate {
                 slot: 1,
+                bank_id: 0,
                 transaction: Some(SubscribeUpdateTransactionInfo {
                     signature: vec![3u8; 64],
                     is_vote: false,
@@ -2341,6 +2347,7 @@ slot-end = 2000
 
                 let txn = TransactionUpdate {
                     slot: f["slot"].as_u64().expect("slot"),
+                    bank_id: 0,
                     transaction: Some(SubscribeUpdateTransactionInfo {
                         signature,
                         is_vote: false,
@@ -2578,6 +2585,7 @@ mod convert {
                     - e.transaction_indexes.start)
                     as u64,
                 starting_transaction_index: e.transaction_indexes.start as u64,
+                bank_id: e.slot,
             })
             .collect()
     }
