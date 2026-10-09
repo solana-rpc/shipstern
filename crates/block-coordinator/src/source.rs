@@ -138,7 +138,7 @@ impl CoordinatorSubscription for SubscribeRequest {
 /// 2. Forward Account/Transaction events to the Shipstern Runtime (move, no clone)
 ///
 /// The source does not reconnect, so a stream loss ends it. It also stops when the
-/// server sends no bank IDs (Yellowstone before Agave 4.3).
+/// server sends no bank IDs.
 ///
 #[derive(Debug)]
 pub struct CoordinatorSource {

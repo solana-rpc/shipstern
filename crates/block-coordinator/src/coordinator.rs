@@ -165,12 +165,20 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         // Guard: validate BlockMeta.blockhash BEFORE feeding to wrapper.
         // The block machine's adapter panics on a malformed hash, so skip such an update here.
         let malformed = match &update.update_oneof {
-            Some(UpdateOneof::BlockMeta(meta)) => meta.blockhash.parse::<Hash>().is_err(),
-            Some(UpdateOneof::Entry(entry)) => entry.hash.len() != 32,
-            _ => false,
+            Some(UpdateOneof::BlockMeta(meta)) if meta.blockhash.parse::<Hash>().is_err() => {
+                Some((meta.slot, meta.bank_id))
+            },
+            Some(UpdateOneof::Entry(entry)) if entry.hash.len() != 32 => {
+                Some((entry.slot, entry.bank_id))
+            },
+            _ => None,
         };
-        if malformed {
-            tracing::warn!("BlockMeta or Entry has a malformed hash — skipping");
+        if let Some((slot, bank_id)) = malformed {
+            tracing::warn!(
+                slot,
+                bank_id,
+                "BlockMeta or Entry has a malformed hash; skipping it"
+            );
             return events;
         }
 
@@ -251,6 +259,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                 },
                 BlockStateMachineOutput::SlotStatus(_) => {},
                 BlockStateMachineOutput::DeadSlotDetected(dead) => {
+                    self.missing_parents.remove(&dead.slot);
                     events.push(CoordinatorEvent::SlotDiscarded {
                         slot: dead.slot,
                         reason: DiscardReason::Dead,
@@ -258,6 +267,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                     });
                 },
                 BlockStateMachineOutput::ForksDetected(fork) => {
+                    self.missing_parents.remove(&fork.slot);
                     events.push(CoordinatorEvent::SlotDiscarded {
                         slot: fork.slot,
                         reason: DiscardReason::Forked,

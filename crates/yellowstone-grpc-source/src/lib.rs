@@ -76,13 +76,14 @@ pub struct YellowstoneGrpcConfig {
     #[arg(long, env)]
     pub accept_compression: Option<ShipsternCompressionEncoding>,
 
+    ///
     /// Enable the client's auto-reconnect on the gRPC stream.
     ///
-    /// The client reconnects only a processed stream with no `from_slot` and no
-    /// filter updates, because it replays banks and cannot replay a changed
-    /// request. Other streams stop on stream loss. After a reconnect, updates of a
-    /// block that was cut off arrive again, and bank IDs come from the new connection.
-    /// Defaults to `true`, including for configs that omit the key.
+    /// Only a processed stream with no `from_slot` and no filter updates reconnects,
+    /// because the client replays banks and cannot replay a changed request. Other
+    /// streams stop on stream loss. A reconnect repeats the updates of the cut-off block.
+    /// Defaults to `true`.
+    ///
     #[arg(long, env, default_value_t = true)]
     #[serde(default = "default_auto_reconnect")]
     pub auto_reconnect: bool,

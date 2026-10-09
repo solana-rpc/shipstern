@@ -145,7 +145,8 @@ impl<R> CoordinatorState<R> {
                 metadata,
             } => {
                 let key = (slot, bank_id);
-                if self.is_already_flushed(slot, "BlockFrozen") || self.is_discarded(key) {
+                if self.is_discarded(key) || self.is_behind_instruction_frontier(key, "BlockFrozen")
+                {
                     return Ok(());
                 }
                 if self.discarded_slots.remove(&slot) {
@@ -156,7 +157,9 @@ impl<R> CoordinatorState<R> {
             },
             CoordinatorEvent::SlotConfirmed { slot, bank_id } => {
                 let key = (slot, bank_id);
-                if self.is_already_flushed(slot, "SlotConfirmed") || !self.commit_bank(key)? {
+                if self.is_behind_instruction_frontier(key, "SlotConfirmed")
+                    || !self.commit_bank(key)?
+                {
                     return Ok(());
                 }
                 if self.account_commit_at == AccountCommitAt::Confirmed {
@@ -194,11 +197,11 @@ impl<R> CoordinatorState<R> {
             },
             CoordinatorEvent::AccountEventSeen { slot, bank_id } => {
                 let key = (slot, bank_id);
-                if self.is_already_flushed(slot, "AccountEventSeen") {
-                    return Ok(());
-                }
                 if self.is_discarded(key) {
                     self.log_discarded_bank_drop(key, "AccountEventSeen");
+                    return Ok(());
+                }
+                if self.is_already_flushed(slot, "AccountEventSeen") {
                     return Ok(());
                 }
                 if let Some(buf) = self.buffer.get(&key)
@@ -303,8 +306,9 @@ impl<R> CoordinatorState<R> {
                 break;
             };
             let key = (slot, bank_id);
+            // The winner's buffer is gone once it drained, so nothing is left for this slot.
             let Some(buf) = self.buffer.get(&key) else {
-                break;
+                continue;
             };
             if buf.instructions_drained() || !buf.instruction_gate_reached() {
                 // Stop at the first non-ready slot to maintain ordering.
@@ -359,7 +363,7 @@ impl<R> CoordinatorState<R> {
             };
             let key = (slot, bank_id);
             let Some(buf) = self.buffer.get_mut(&key) else {
-                break;
+                continue;
             };
             if buf.accounts_drained() || !buf.account_gate_reached() {
                 if !buf.accounts_drained() {
@@ -427,6 +431,25 @@ impl<R> CoordinatorState<R> {
             return true;
         }
         false
+    }
+
+    /// A bank that freezes or confirms at or behind the instruction frontier can never
+    /// flush in order, so it stays discarded. The account frontier lags in finalized mode.
+    fn is_behind_instruction_frontier(&self, key: BankKey, event: &'static str) -> bool {
+        let (slot, bank_id) = key;
+        let behind = self
+            .last_instruction_flushed_slot
+            .is_some_and(|last| slot <= last);
+        if behind {
+            tracing::warn!(
+                slot,
+                bank_id,
+                event,
+                last_instruction_flushed = ?self.last_instruction_flushed_slot,
+                "Lifecycle event behind the instruction frontier; dropping it"
+            );
+        }
+        behind
     }
 
     /// Instruction events for slots at or behind the flush frontier are stale.
@@ -706,6 +729,42 @@ mod tests {
         let ix = state.drain_instruction_flushable()?;
         let _ = state.drain_account_flushable();
         Ok(ix)
+    }
+
+    /// In finalized mode the account frontier lags. A bank that freezes for a discarded
+    /// slot behind the instruction frontier must stay discarded, or later slots stall.
+    #[test]
+    fn late_bank_behind_instruction_frontier_stays_discarded() {
+        let mut state = CoordinatorState::<String>::new(AccountCommitAt::Finalized);
+        apply_ready_slot(&mut state, 41, 40, 0);
+        state
+            .apply(CoordinatorEvent::SlotDiscarded {
+                slot: 42,
+                reason: DiscardReason::Dead,
+                bank_ids: vec![0],
+            })
+            .unwrap();
+        apply_ready_slot(&mut state, 43, 42, 0);
+        assert_eq!(drain_both(&mut state).unwrap().len(), 2);
+
+        state
+            .apply(CoordinatorEvent::BlockFrozen {
+                slot: 42,
+                bank_id: 1,
+                metadata: metadata(41, 0),
+            })
+            .unwrap();
+        state
+            .apply(CoordinatorEvent::SlotConfirmed {
+                slot: 42,
+                bank_id: 1,
+            })
+            .unwrap();
+        apply_ready_slot(&mut state, 44, 43, 0);
+
+        let flushed = drain_both(&mut state).unwrap();
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0].slot, 44);
     }
 
     /// A confirmed bank that froze incomplete can never flush, so its slot is discarded

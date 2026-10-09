@@ -169,6 +169,7 @@ impl shipstern::Handler<AccountUpdate, AccountUpdate> for BufferingHandler {
         let slot = update.slot;
         // Only startup accounts lack a bank; CoordinatorSource rejects any other account without one.
         let Some(bank_id) = update.bank_id else {
+            tracing::debug!(slot, "Account update without bank_id skipped");
             return Ok(());
         };
 

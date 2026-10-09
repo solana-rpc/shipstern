@@ -256,14 +256,17 @@ impl TestHarness {
         SlotBuilder::new(self.input_tx.clone(), self.parsed_tx.clone(), slot)
     }
 
-    async fn send_orphan_block_summary(&self, slot: u64, parent: u64) {
-        let blockhash = Hash::new_unique();
-        self.input_tx
-            .send(CoordinatorInput::GeyserUpdate(Box::new(
-                make_block_meta_update(slot, parent, 1, &blockhash),
-            )))
-            .await
-            .unwrap();
+    /// Create a bank and freeze it with no entries, so the coordinator discards it.
+    async fn send_incomplete_bank(&self, slot: u64, parent: u64) {
+        for update in [
+            make_slot_update(slot, parent, SlotStatus::SlotCreatedBank),
+            make_block_meta_update(slot, parent, 0, &Hash::new_unique()),
+        ] {
+            self.input_tx
+                .send(CoordinatorInput::GeyserUpdate(Box::new(update)))
+                .await
+                .unwrap();
+        }
     }
 
     async fn expect_flush(&mut self, slot: u64) -> FlushAssertion {
@@ -402,13 +405,7 @@ async fn late_block_meta_for_losing_bank_keeps_confirmed_bank() {
             make_entry_update(slot, 0, 1),
             make_block_meta_update(slot, parent, 1, &blockhash),
         ] {
-            harness
-                .input_tx
-                .send(CoordinatorInput::GeyserUpdate(Box::new(with_bank_id(
-                    update, bank_id,
-                ))))
-                .await
-                .unwrap();
+            send_to_bank(&harness, update, bank_id).await;
         }
         harness
             .input_tx
@@ -437,13 +434,7 @@ async fn late_block_meta_for_losing_bank_keeps_confirmed_bank() {
         (make_slot_update(slot, parent, SlotStatus::SlotConfirmed), 8),
         (make_block_meta_update(slot, parent, 1, &loser_blockhash), 7),
     ] {
-        harness
-            .input_tx
-            .send(CoordinatorInput::GeyserUpdate(Box::new(with_bank_id(
-                update, bank_id,
-            ))))
-            .await
-            .unwrap();
+        send_to_bank(&harness, update, bank_id).await;
     }
     harness.expect_no_flush().await;
 
@@ -902,16 +893,28 @@ async fn empty_slot_flushes() {
 async fn incomplete_block_discarded() {
     let mut harness = TestHarness::spawn();
 
-    harness.send_orphan_block_summary(100, 99).await;
-    harness.expect_no_flush().await;
+    // Flush one slot first, so slot 101 cannot skip the parent check as the first flush.
+    let first = harness.slot(99).parent(98).empty().await;
+    first.confirm().await;
+    harness.expect_flush(99).await.empty();
 
+    harness.send_incomplete_bank(100, 99).await;
     send_record_to_slot(&harness.parsed_tx, 100, "ignored-incomplete").await;
+    harness
+        .input_tx
+        .send(CoordinatorInput::GeyserUpdate(Box::new(make_slot_update(
+            100,
+            99,
+            SlotStatus::SlotConfirmed,
+        ))))
+        .await
+        .unwrap();
     harness.expect_no_flush().await;
 
     let next = harness.slot(101).parent(100).empty().await;
     next.confirm().await;
 
-    harness.expect_flush(101).await;
+    harness.expect_flush(101).await.empty();
 }
 
 #[tokio::test]
