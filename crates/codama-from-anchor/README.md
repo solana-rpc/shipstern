@@ -11,7 +11,7 @@ let root = shipstern_codama_from_anchor::root_node_from_anchor(idl)?;
 
 ## Scope
 
-Anchor IDL spec `0.1.0`, which Anchor 0.30 and later emit, is converted directly. A legacy IDL from an older Anchor (top-level `name` and `instructions`, no top-level `address` or `metadata.spec`) is first upgraded to spec `0.1.0` with Anchor's own converter, `anchor-lang-idl`; see [Legacy IDLs](#legacy-idls). Any other input fails with `Error::UnsupportedSpec`.
+Anchor IDL spec `0.1.0`, which Anchor 0.30 and later emit, is converted directly. A legacy IDL from an older Anchor (top-level `name` and `instructions`, no `metadata.spec`) is first upgraded to spec `0.1.0` with Anchor's own converter, `anchor-lang-idl`; see [Legacy IDLs](#legacy-idls). Any other input fails with `Error::UnsupportedSpec`.
 
 ## Compared with `@codama/nodes-from-anchor`
 
@@ -72,7 +72,8 @@ JS writes output for each of these that fails to compile, panics in the renderer
 
 | Input | JS 1.5.6 | Error |
 |---|---|---|
-| `zero_copy(unsafe)` account with `repr(Rust)`, no `repr`, `packed`, an option, a vec, a string, a generic, a tuple struct, or an enum, at any depth | Reads it as Borsh | `UnknownLayout` |
+| `zero_copy(unsafe)` account with `repr(Rust)`, no `repr`, an option, a vec, a string, a generic, or a tuple struct, at any depth | Reads it as Borsh | `UnknownLayout` |
+| Enum at any depth of a `zero_copy` or `zero_copy(unsafe)` account | Reads it as a one-byte Borsh enum: misreads every field after Stakenet steward's `repr(u64)` enum | `UnknownLayout` |
 | Type with implicit padding in a `zero_copy(unsafe)` account that Borsh also reads (an instruction argument, an event, or a Borsh account field) | Misreads one of the two | `PaddedBorshType` |
 | Two types, instructions, accounts or events of one kind whose names camel-case alike, such as `MyType` and `my_type` | Writes both, which do not compile; deletes every copy of identical types and leaves dangling links | `NameCollision` |
 | Instruction, account or event discriminator that is a proper prefix of another of its kind | Writes it; the parser can read one as the other | `AmbiguousDiscriminator` |
@@ -109,9 +110,9 @@ Two inputs fail in both converters, and only the error differs. An argument name
 
 ### Notes
 
-- The padding layout is computed from numbers, `bool`, pubkeys, arrays, structs, and type aliases. Enums fail because the IDL does not prove their memory size.
+- The padding layout is computed from numbers, `bool`, pubkeys, arrays, structs, and type aliases. Enums fail because the IDL does not keep their size in memory.
 - A struct with no `repr` uses `repr(Rust)`. Rust does not guarantee its field order. The converter rejects both forms.
-- Anchor writes `repr(packed(N))` as plain `packed`. The converter rejects all packed layouts because it cannot recover `N`.
+- `repr(C, packed)` is read as `packed(1)`, which live Raydium and Whirlpool accounts match. Anchor writes `repr(packed(N))` as plain `packed`, so a `packed(N)` type with `N` above 1 is misread.
 - `bytemuck` types need no added padding in their own fields. A `zero_copy(unsafe)` struct inside one still needs a verified layout.
 - The deepest IDL among 105 mainnet programs nests 11 levels by this crate's count. Through the macro, plain deep nesting hits serde_json's parser limit before the 128-level one.
 - Read by neither converter: instruction `returns`, account `relations`, a seed's `account` hint, and metadata beyond name, version and spec. A legacy IDL's `metadata.address` and `metadata.origin` are read too.

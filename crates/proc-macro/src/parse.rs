@@ -29,8 +29,9 @@ impl std::fmt::Display for IdlError {
                 write!(
                     f,
                     "{e}. Convert it with `npx -p codama -p @codama/nodes-from-anchor codama \
-                     convert` and pass the Codama JSON instead; for a Steel IDL, remove \
-                     `program.origin` from it first"
+                     convert`, add each account's `discriminators` (the output has none), and \
+                     pass the Codama JSON instead; for a Steel IDL, remove `program.origin` from \
+                     it first"
                 )
             },
             IdlError::ConvertAnchor(e @ shipstern_codama_from_anchor::Error::MissingAddress) => {

@@ -679,6 +679,10 @@ fn a_zero_copy_c_struct_gets_its_implicit_padding() {
         fields(json!({ "kind": "c" })),
         json!([["a", null], ["paddingBeforeB", 7], ["b", null]])
     );
+    assert_eq!(
+        fields(json!({ "kind": "c", "packed": true })),
+        json!([["a", null], ["b", null]])
+    );
     // A real field already named like the padding keeps its name.
     let taken = zero_copy_c(
         "T",
@@ -790,10 +794,6 @@ fn a_zero_copy_struct_with_an_unknown_layout_is_rejected() {
                 { "name": "a", "type": "u8" },
                 { "name": "b", "type": "u64" }
             ] } },
-            { "name": "PackedC", "repr": { "kind": "c", "packed": true }, "type": { "kind": "struct", "fields": [
-                { "name": "a", "type": "u8" },
-                { "name": "b", "type": "u64" }
-            ] } },
             { "name": "AlignedZst", "repr": { "kind": "c", "align": 8 }, "type": { "kind": "struct", "fields": [] } },
             { "name": "BadTransparent", "repr": { "kind": "transparent" }, "type": { "kind": "struct", "fields": [
                 { "name": "value", "type": "u64" },
@@ -822,13 +822,11 @@ fn a_zero_copy_struct_with_an_unknown_layout_is_rejected() {
         json!({ "defined": { "name": "NoRepr" } }),
         json!({ "defined": { "name": "PackedBool" } }),
         json!({ "defined": { "name": "PackedRust" } }),
-        json!({ "defined": { "name": "PackedC" } }),
         json!({ "defined": { "name": "BadTransparent" } }),
         json!({ "defined": { "name": "Wrap", "generics": [{ "kind": "type", "type": "u64" }] } }),
     ];
 
-    // `bytemuck` forbids padding, so a safe account is not laid out at all, as with
-    // marginfi's `Bank` and its `repr(u8)` enums, which Anchor writes as `rust`.
+    // A safe account is not laid out, but the IDL does not prove its enum's size.
     let mut safe = idl(json!({ "defined": { "name": "Repr" } }));
 
     if let Some(outer) = safe["types"]
@@ -838,7 +836,7 @@ fn a_zero_copy_struct_with_an_unknown_layout_is_rejected() {
         outer["serialization"] = json!("bytemuck");
     }
 
-    assert!(convert(safe).is_ok());
+    assert!(matches!(convert(safe), Err(Error::UnknownLayout)));
 
     for field in unknown {
         let err = convert_at(idl(field)).expect_err("must fail");

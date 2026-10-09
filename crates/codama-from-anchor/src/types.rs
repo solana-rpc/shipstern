@@ -404,13 +404,7 @@ fn defined_type(
         .ok_or_else(|| Error::GenericTypeMissing(name.to_owned()))?;
 
     // Generics expand inline, and the renderer panics on an inline enum.
-    if generic_type
-        .ty
-        .as_ref()
-        .and_then(|ty| ty.get("kind"))
-        .and_then(Value::as_str)
-        == Some("enum")
-    {
+    if generic_type.is_enum() {
         return Err(Error::GenericEnum(name.to_owned()));
     }
 

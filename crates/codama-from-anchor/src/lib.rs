@@ -147,7 +147,7 @@ pub enum Error {
     )]
     PaddedBorshType,
 
-    #[error("is zero_copy(unsafe), but its layout cannot be computed")]
+    #[error("is in zero-copy memory, but its layout cannot be computed")]
     UnknownLayout,
 
     #[error("no type definition")]
@@ -156,7 +156,7 @@ pub enum Error {
     #[error("type is not a struct")]
     TypeNotStruct,
 
-    #[error("flattening produces duplicate arguments {0:?}")]
+    #[error("duplicate arguments {0:?} after camel case or struct flattening")]
     ConflictingFlattenedArguments(Vec<String>),
 
     #[error("an argument named `discriminator` clashes with the instruction discriminator")]
@@ -197,11 +197,10 @@ pub fn root_node_from_anchor(idl: Value) -> Result<RootNode, Error> {
     Ok(root)
 }
 
-/// Upgrade a legacy IDL (top-level `name` and `instructions`, no `address` or
-/// `metadata.spec`) with Anchor's converter; anything else goes to the spec check.
+/// Upgrade a legacy IDL (top-level `name` and `instructions`, no `metadata.spec`)
+/// with Anchor's converter; anything else goes to the spec check.
 fn upgrade_legacy(mut idl: Value) -> Result<Value, Error> {
     let is_legacy = idl.pointer("/metadata/spec").is_none()
-        && idl.get("address").is_none()
         && idl.get("name").is_some_and(Value::is_string)
         && idl.get("instructions").is_some_and(Value::is_array);
 
@@ -221,30 +220,24 @@ fn upgrade_legacy(mut idl: Value) -> Result<Value, Error> {
         }
     }
 
-    // Anchor 0.29 wrote a `usize` constant's type as `{"defined": "usize"}`, which no
-    // IDL defines. `usize` is 64 bits on Solana.
-    if let Some(constants) = idl.get_mut("constants").and_then(Value::as_array_mut) {
-        for constant in constants {
-            if constant.pointer("/type/defined").and_then(Value::as_str) == Some("usize") {
-                constant["type"] = Value::from("u64");
-            }
-        }
-    }
+    // Anchor 0.29 wrote a `usize` type as `{"defined": "usize"}`, which no IDL
+    // defines. `usize` is 64 bits on Solana.
+    usize_to_u64(&mut idl);
 
     let mut upgraded = anchor_lang_idl::convert::convert_idl(&serde_json::to_vec(&idl)?)
         .map_err(|err| locate_legacy(&idl).unwrap_or_else(|| Error::Legacy(err.to_string())))?;
 
     check_shadowed_fields(&upgraded)?;
 
-    // The upgrade uses heck 0.3, which turns `setAB` (Rust `set_a_b`) into `set_ab`.
-    // JS's snake case gives `set_a_b`, the name the program hashes.
+    // The upgrade's heck 0.3 hashes `setAB` (Rust `set_a_b`) as `set_ab`; JS's snake
+    // case gives `set_a_b`. The legacy name stays, so errors match the user's file.
     let legacy_names =
         legacy_items(&idl, "instructions").map(|ix| ix.get("name").and_then(Value::as_str));
 
     for (ix, legacy_name) in upgraded.instructions.iter_mut().zip(legacy_names) {
         if let Some(legacy_name) = legacy_name {
-            ix.name = case::snake_case(legacy_name);
-            ix.discriminator = discriminator("global", &ix.name);
+            ix.discriminator = discriminator("global", &case::snake_case(legacy_name));
+            ix.name = legacy_name.to_owned();
         }
     }
 
@@ -308,7 +301,7 @@ fn check_legacy(idl: &Value) -> Result<(), Error> {
     if idl
         .pointer("/metadata/address")
         .and_then(Value::as_str)
-        .is_none()
+        .is_none_or(str::is_empty)
     {
         return Err(Error::MissingAddress);
     }
@@ -383,6 +376,17 @@ fn strip_docs(value: &mut Value) {
             map.values_mut().for_each(strip_docs);
         },
         Value::Array(items) => items.iter_mut().for_each(strip_docs),
+        _ => {},
+    }
+}
+
+fn usize_to_u64(value: &mut Value) {
+    match value {
+        Value::Object(map) if map.len() == 1 && map.get("defined") == Some(&"usize".into()) => {
+            *value = Value::from("u64");
+        },
+        Value::Object(map) => map.values_mut().for_each(usize_to_u64),
+        Value::Array(items) => items.iter_mut().for_each(usize_to_u64),
         _ => {},
     }
 }

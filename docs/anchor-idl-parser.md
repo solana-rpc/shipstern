@@ -67,15 +67,17 @@ Failed to load/parse IDL from "/path/to/my_crate/idls/my_program.json": Failed t
 | `unsupported Anchor IDL spec` | The file is not Anchor 0.1.0 or a legacy Anchor IDL | Regenerate it or pass Codama JSON |
 | `no program id in` | A legacy IDL has no program id | Add `metadata.address` for an Anchor program |
 | `legacy IDL is not from Anchor` | The IDL is from Shank, Steel, or another format | Convert it with `codama convert` and pass Codama JSON |
-| `cannot upgrade legacy Anchor IDL` | Anchor cannot read the named item | Fix the named item |
-| `invalid Anchor IDL JSON` | A field has the wrong JSON shape | Fix the named item |
-| `Rust identifier` or `same Rust name` | A name is invalid or duplicates another Rust name | Rename the item |
+| `cannot upgrade legacy Anchor IDL` or `in a legacy IDL is not supported` | Anchor cannot read the named item | Fix the named item |
+| `invalid Anchor IDL JSON` or `unrecognized Anchor IDL type` | A field has the wrong JSON shape | Fix the named item |
+| `no type definition` or `type is not a struct` | An account or event has no struct of its name in `types` | Add the struct to `types` |
+| `Rust identifier`, `same Rust name`, or `duplicate arguments` | A name is invalid or duplicates another Rust name | Rename the item |
+| `clashes with the instruction discriminator` | An argument is named `discriminator` | Rename the argument; argument names are not in the instruction data |
 | `discriminator` | A discriminator is empty, duplicated, or a prefix of another | Use the deployed program's discriminator bytes |
 | `is not defined`, `used without arguments`, or `is not bound` | A type link or generic argument is invalid | Fix the named type reference |
 | `nesting`, `expansion`, `fixed-size type`, or `invalid array length` | A type is too deep or too large | Simplify the named type |
 | `enum` or `coption` | The generated parser cannot render the type | Move or replace the named type |
 | `Borsh also reads it` | Borsh and zero-copy need different padding | Use separate IDL types |
-| `layout cannot be computed` | The IDL cannot prove the zero-copy layout | Use `repr(C)` without `packed`, or use verified Codama JSON |
+| `layout cannot be computed` | The IDL cannot prove the zero-copy layout | Pass Codama JSON whose layout you checked against live accounts |
 
 The [converter README](../crates/codama-from-anchor/README.md#known-divergences) lists every rejected shape.
 
@@ -98,7 +100,9 @@ in this repository shows the shape of such a test, with hand-built instruction b
 - **A `repr(Rust)` layout has no guaranteed field order.** The IDL has no field
   offsets, so the converter rejects this layout.
 - **A packed layout loses its pack value.** Anchor records `packed(N)` as a Boolean
-  value, so the converter rejects all packed layouts.
+  value. The converter reads `repr(C, packed)` as `packed(1)`, so `N` above 1 is misread.
+- **An enum in a zero-copy account has no known size.** Anchor does not record its
+  `repr`, so the converter rejects it.
 
 ## Older Anchor IDLs
 
@@ -116,9 +120,10 @@ like any other IDL. Four things to check first:
   For SPL Token, Token-2022 and Stake Pool, use `shipstern-spl-token-parser`,
   `shipstern-spl-token-extensions-parser` and `shipstern-stake-pool-parser` instead.
   An IDL marked as Shank or Steel in `metadata.origin`, or with an instruction
-  `discriminant`, is refused; convert it with `codama convert`, which reads those
-  discriminators. `codama-nodes` 0.13.2 cannot load the `steel` origin that a Steel IDL
-  gets, so remove `program.origin` from that output.
+  `discriminant`, is refused. Convert it with `codama convert`, which keeps the
+  instruction discriminators but gives accounts none and drops events. Add each
+  account's `discriminators` to that output by hand. `codama-nodes` 0.13.2 cannot load
+  the `steel` origin that a Steel IDL gets, so remove `program.origin` from it.
 - **Instruction names like `buy_2`.** Anchor 0.29 wrote that name as `buy2`, so the
   upgrade hashes the wrong name and the parser never matches that instruction. Fix it
   by hand, as below.

@@ -223,6 +223,16 @@ pub struct TypeDef {
     pub ty: Option<Value>,
 }
 
+impl TypeDef {
+    pub fn is_enum(&self) -> bool {
+        self.ty
+            .as_ref()
+            .and_then(|ty| ty.get("kind"))
+            .and_then(Value::as_str)
+            == Some("enum")
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct GenericParam {
     pub kind: String,

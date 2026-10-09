@@ -41,6 +41,15 @@ pub(crate) fn pad_zero_copy(idl: &mut Idl) -> Result<(), Error> {
                 .collect(),
         );
 
+        // The IDL drops an enum's `repr`, so steward's `repr(u64)` tag looks like one byte.
+        if let Some(ty) = idl
+            .types
+            .iter()
+            .find(|t| in_bytemuck.contains(t.name.as_str()) && t.is_enum())
+        {
+            return Err(Error::UnknownLayout.at(ItemKind::Type, &ty.name));
+        }
+
         let roots: Vec<&TypeDef> = accounts
             .into_iter()
             .chain(
@@ -292,20 +301,17 @@ impl<'a> Layouts<'a> {
             return None;
         };
 
-        // Anchor does not keep the value from `packed(N)`.
-        if modifier.packed {
-            return None;
-        }
-
         let (mut offset, mut widest) = (0_u64, 1_u64);
         let mut pads = Vec::with_capacity(shapes.len());
 
         for shape in &shapes {
-            let start = offset.checked_next_multiple_of(shape.align)?;
+            // `repr(C, packed)` is `packed(1)`. Anchor writes `packed(N)` the same way.
+            let align = if modifier.packed { 1 } else { shape.align };
+            let start = offset.checked_next_multiple_of(align)?;
 
             pads.push(start - offset);
             offset = start.checked_add(shape.size)?;
-            widest = widest.max(shape.align);
+            widest = widest.max(align);
         }
 
         let explicit = match modifier.align {

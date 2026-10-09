@@ -150,7 +150,9 @@ fn check_renderable(
         .map(|t| (t.name.as_str(), t.r#type.as_ref()))
         .collect();
 
-    let check = |ty: &TypeNode| check_node(ty, &defs);
+    // A size cache per node is quadratic in a long chain of links.
+    let mut known = HashMap::new();
+    let mut check = |ty: &TypeNode| check_node(ty, &defs, &mut known);
     let mut chains = HashMap::new();
 
     for (ty, def) in types.iter().zip(unclaimed) {
@@ -207,8 +209,12 @@ fn check_renderable(
     Ok(())
 }
 
-fn check_node(ty: &TypeNode, defs: &HashMap<&str, &TypeNode>) -> Result<(), Error> {
-    let fixed_size = fixed_size_of_type(ty, defs, &mut HashSet::new(), &mut HashMap::new(), 0);
+fn check_node<'a>(
+    ty: &TypeNode,
+    defs: &HashMap<&'a str, &'a TypeNode>,
+    known: &mut HashMap<&'a str, Option<u64>>,
+) -> Result<(), Error> {
+    let fixed_size = fixed_size_of_type(ty, defs, &mut HashSet::new(), known, 0);
 
     match ty {
         TypeNode::Enum(_) => return Err(Error::InlineEnum),
@@ -224,7 +230,7 @@ fn check_node(ty: &TypeNode, defs: &HashMap<&str, &TypeNode>) -> Result<(), Erro
 
     crate::passes::for_each_child(ty, &mut |child| {
         if checked.is_ok() {
-            checked = check_node(child, defs);
+            checked = check_node(child, defs, known);
         }
     });
 
@@ -269,7 +275,7 @@ fn fixed_size_sum<'a>(
 
 /// The fixed wire size, capped one byte above the parser limit.
 fn fixed_size_of_type<'a>(
-    ty: &'a TypeNode,
+    ty: &TypeNode,
     defs: &HashMap<&'a str, &'a TypeNode>,
     visiting: &mut HashSet<&'a str>,
     known: &mut HashMap<&'a str, Option<u64>>,
@@ -340,7 +346,7 @@ fn fixed_size_of_type<'a>(
             fixed_size_of_type(&option.item, defs, visiting, known, depth)?,
         )),
         TypeNode::Link(link) => {
-            let name = link.name.as_str();
+            let (&name, &def) = defs.get_key_value(link.name.as_str())?;
 
             if let Some(size) = known.get(name) {
                 return *size;
@@ -350,9 +356,7 @@ fn fixed_size_of_type<'a>(
                 return None;
             }
 
-            let fixed = defs
-                .get(name)
-                .and_then(|def| fixed_size_of_type(def, defs, visiting, known, depth));
+            let fixed = fixed_size_of_type(def, defs, visiting, known, depth);
 
             visiting.remove(name);
             known.insert(name, fixed);
