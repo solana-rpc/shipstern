@@ -63,12 +63,9 @@ pub fn proto_schema_string(
 
     // Only instruction wrappers point at other instruction messages; args fields
     // with a colliding name mean the defined type, as in the Rust renderer.
-    let instruction_wrappers: HashSet<&str> = schema
-        .oneofs
-        .iter()
-        .filter(|o| o.kind == OneofKindIr::InstructionDispatch)
-        .flat_map(|o| o.variants.iter().map(|v| v.message_type.as_str()))
-        .collect();
+    let instruction_wrappers = dispatch_wrappers(schema, &OneofKindIr::InstructionDispatch);
+
+    let event_wrappers = dispatch_wrappers(schema, &OneofKindIr::EventDispatch);
 
     // Oneof parents are rendered separately below — skip them here to avoid duplicates.
     let oneof_parents: HashSet<&str> = schema
@@ -83,9 +80,13 @@ pub fn proto_schema_string(
 
         for t in &schema.types {
             let (proto_name, field_rename) = match t.kind {
+                // Only event dispatch wrappers point at event messages; other fields
+                // name top-level types, as the Rust types do.
                 TypeKindIr::Event => (
                     resolve_proto_name(&t.name, &event_rename),
-                    Some(&event_rename),
+                    event_wrappers
+                        .contains(t.name.as_str())
+                        .then_some(&event_rename),
                 ),
                 TypeKindIr::Instruction => (
                     resolve_proto_name(&t.name, &instruction_rename),
@@ -230,6 +231,16 @@ fn build_instruction_rename_map(schema: &SchemaIr) -> HashMap<&str, String> {
     }
 
     rename
+}
+
+/// Message types of the dispatch oneof variants of one kind.
+fn dispatch_wrappers<'a>(schema: &'a SchemaIr, kind: &OneofKindIr) -> HashSet<&'a str> {
+    schema
+        .oneofs
+        .iter()
+        .filter(|o| &o.kind == kind)
+        .flat_map(|o| o.variants.iter().map(|v| v.message_type.as_str()))
+        .collect()
 }
 
 /// Resolve a type name through the rename map.

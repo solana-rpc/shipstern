@@ -1,0 +1,140 @@
+{
+  "kind": "rootNode",
+  "standard": "codama",
+  "version": "1.9.2",
+  "program": {
+    "kind": "programNode",
+    "name": "eventPayloadInEvent",
+    "publicKey": "Dex1111111111111111111111111111111111111111",
+    "version": "0.1.0",
+    "origin": "anchor",
+    "events": [
+      {
+        "kind": "eventNode",
+        "name": "inner",
+        "data": {
+          "kind": "hiddenPrefixTypeNode",
+          "type": {
+            "kind": "structTypeNode",
+            "fields": [
+              {
+                "kind": "structFieldTypeNode",
+                "name": "x",
+                "type": {
+                  "kind": "numberTypeNode",
+                  "format": "u64",
+                  "endian": "le"
+                }
+              }
+            ]
+          },
+          "prefix": [
+            {
+              "kind": "constantValueNode",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 8,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              },
+              "value": {
+                "kind": "bytesValueNode",
+                "data": "0909090909090909",
+                "encoding": "base16"
+              }
+            }
+          ]
+        },
+        "discriminators": [
+          {
+            "kind": "constantDiscriminatorNode",
+            "offset": 0,
+            "constant": {
+              "kind": "constantValueNode",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 8,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              },
+              "value": {
+                "kind": "bytesValueNode",
+                "data": "0909090909090909",
+                "encoding": "base16"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "kind": "eventNode",
+        "name": "outer",
+        "data": {
+          "kind": "hiddenPrefixTypeNode",
+          "type": {
+            "kind": "structTypeNode",
+            "fields": [
+              {
+                "kind": "structFieldTypeNode",
+                "name": "inner",
+                "type": {
+                  "kind": "definedTypeLinkNode",
+                  "name": "inner"
+                }
+              },
+              {
+                "kind": "structFieldTypeNode",
+                "name": "tail",
+                "type": {
+                  "kind": "numberTypeNode",
+                  "format": "u64",
+                  "endian": "le"
+                }
+              }
+            ]
+          },
+          "prefix": [
+            {
+              "kind": "constantValueNode",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 8,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              },
+              "value": {
+                "kind": "bytesValueNode",
+                "data": "0808080808080808",
+                "encoding": "base16"
+              }
+            }
+          ]
+        },
+        "discriminators": [
+          {
+            "kind": "constantDiscriminatorNode",
+            "offset": 0,
+            "constant": {
+              "kind": "constantValueNode",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 8,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              },
+              "value": {
+                "kind": "bytesValueNode",
+                "data": "0808080808080808",
+                "encoding": "base16"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

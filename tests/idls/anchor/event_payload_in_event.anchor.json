@@ -1,0 +1,29 @@
+{
+  "address": "Dex1111111111111111111111111111111111111111",
+  "metadata": {
+    "name": "event_payload_in_event",
+    "version": "0.1.0",
+    "spec": "0.1.0"
+  },
+  "instructions": [],
+  "events": [
+    { "name": "Inner", "discriminator": [9, 9, 9, 9, 9, 9, 9, 9] },
+    { "name": "Outer", "discriminator": [8, 8, 8, 8, 8, 8, 8, 8] }
+  ],
+  "types": [
+    {
+      "name": "Inner",
+      "type": { "kind": "struct", "fields": [{ "name": "x", "type": "u64" }] }
+    },
+    {
+      "name": "Outer",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "inner", "type": { "defined": { "name": "Inner" } } },
+          { "name": "tail", "type": "u64" }
+        ]
+      }
+    }
+  ]
+}

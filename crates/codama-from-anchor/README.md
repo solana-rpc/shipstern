@@ -163,6 +163,8 @@ Checked against the 64 legacy IDLs among 170 program IDLs fetched from mainnet o
 | `anchor_external` | Anchor's test suite (Apache-2.0) |
 | `anchor_external_legacy` | Anchor's test suite (Apache-2.0): an older, legacy-format version of the program in `anchor_external` |
 | `shapes` | Written for this crate: structs, enums and aliases, generics, nested account groups, option, coption, vec and array wrappers, `string`, `bytes` and `[u8; N]`, events, errors, constants, PDA seeds and discriminators |
+| `event_payload_links` | Written for this crate: an instruction argument and an enum variant typed as event payloads (#335, #336) |
+| `event_payload_in_event` | Written for this crate: an event field typed as another event's payload |
 
 ## In `include_shipstern_parser!`
 
