@@ -19,15 +19,13 @@ use std::{
 
 use async_trait::async_trait;
 use shipstern_core::{ParseResult, Parser, Prefilter, SlotUpdate};
-use tokio::sync::{mpsc::Sender, oneshot};
-use yellowstone_grpc_proto::{
-    geyser::{subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate, SubscribeUpdateSlot},
-    tonic,
+use yellowstone_grpc_proto::geyser::{
+    subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate, SubscribeUpdateSlot,
 };
 
 use crate::{
-    config::{BufferConfig, NullConfig, ShipsternConfig},
-    sources::{SourceExitStatus, SourceTrait},
+    config::BufferConfig,
+    sources::{SourceContext, SourceExitStatus, SourceTrait},
     Error, Handler, Pipeline, Runtime,
 };
 
@@ -77,25 +75,16 @@ struct FloodSource<const N: u64>;
 
 #[async_trait]
 impl<const N: u64> SourceTrait for FloodSource<N> {
-    type Config = NullConfig;
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext { tx, .. } = ctx;
 
-    fn new(_: NullConfig, _: shipstern_core::Filters) -> Self { Self }
-
-    async fn connect(
-        &self,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), Error> {
         for slot in 0..N {
             if tx.send(Ok(make_slot_update(slot))).await.is_err() {
-                let _ = status_tx.send(SourceExitStatus::ReceiverDropped);
-                return Ok(());
+                return Ok(SourceExitStatus::ReceiverDropped);
             }
         }
 
-        let _ = status_tx.send(SourceExitStatus::Completed);
-        drop(tx);
-        Ok(())
+        Ok(SourceExitStatus::Completed)
     }
 }
 
@@ -177,22 +166,19 @@ impl Handler<SlotUpdate, SlotUpdate> for LoadHandler {
     }
 }
 
-fn config_with_jobs(jobs: usize) -> ShipsternConfig<NullConfig> {
-    ShipsternConfig {
-        source: NullConfig,
-        buffer: BufferConfig {
-            jobs: Some(jobs),
-            ..BufferConfig::default()
-        },
+fn buffer_with_jobs(jobs: usize) -> BufferConfig {
+    BufferConfig {
+        jobs: Some(jobs),
+        ..BufferConfig::default()
     }
 }
 
 async fn run_flood<const N: u64>(jobs: usize, handler: LoadHandler) -> (Duration, bool) {
     reset_counters();
 
-    let runtime = Runtime::<FloodSource<N>>::builder()
+    let runtime = Runtime::builder()
         .slot(Pipeline::new(LoadParser, [handler]))
-        .try_build(config_with_jobs(jobs))
+        .try_build_with(FloodSource::<N>, buffer_with_jobs(jobs))
         .unwrap();
 
     let t0 = Instant::now();

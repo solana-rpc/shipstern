@@ -67,11 +67,11 @@ async fn main() {
         }
     });
 
-    shipstern::Runtime::<YellowstoneGrpcSource>::builder()
+    shipstern::Runtime::builder()
         .instruction(Pipeline::new(InstructionParser, [Logger]))
         .account(Pipeline::new(AccountParser, [Logger]))
         .metrics(prometheus_registry)
-        .build(config)
+        .build::<YellowstoneGrpcSource>(config)
         .run_async()
         .await;
 }

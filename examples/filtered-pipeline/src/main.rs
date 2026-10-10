@@ -43,7 +43,7 @@ fn main() {
     let config = std::fs::read_to_string(config).expect("Error reading config file");
     let config = toml::from_str(&config).expect("Error parsing config");
 
-    shipstern::Runtime::<YellowstoneGrpcSource>::builder()
+    shipstern::Runtime::builder()
         .instruction(FilterPipeline::new(
             InstructionParser,
             [Logger],
@@ -52,6 +52,6 @@ fn main() {
             )
             .unwrap()]),
         ))
-        .build(config)
+        .build::<YellowstoneGrpcSource>(config)
         .run();
 }

@@ -7,11 +7,11 @@ use async_trait::async_trait;
 use futures_util::FutureExt;
 use jetstreamer_firehose::firehose::{firehose, BlockData, EntryData, OnErrorFn, TransactionData};
 use shipstern::{
-    sources::{SourceExitStatus, SourceTrait},
+    sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     Error as ShipsternError,
 };
 use shipstern_core::Filters;
-use tokio::sync::{broadcast, mpsc, mpsc::Sender, oneshot};
+use tokio::sync::{broadcast, mpsc, mpsc::Sender};
 use tracing::{debug, error, info};
 use yellowstone_grpc_proto::{
     geyser::{
@@ -645,23 +645,20 @@ impl SlotRangeConfig {
 /// Jetstream source for historical Solana data streaming
 #[derive(Debug)]
 pub struct JetstreamSource {
-    filters: Filters,
     config: JetstreamSourceConfig,
+}
+
+impl FromConfig for JetstreamSource {
+    type Config = JetstreamSourceConfig;
+
+    fn from_config(config: Self::Config) -> Self { Self { config } }
 }
 
 #[async_trait]
 impl SourceTrait for JetstreamSource {
-    type Config = JetstreamSourceConfig;
-
-    fn new(config: Self::Config, filters: Filters) -> Self { Self { config, filters } }
-
-    async fn connect(
-        &self,
-        tx: Sender<Result<SubscribeUpdate, yellowstone_grpc_proto::tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), ShipsternError> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, ShipsternError> {
+        let SourceContext { filters, tx, .. } = ctx;
         let config = self.config.clone();
-        let filters = self.filters.clone();
 
         // jetstreamer-firehose reads configuration exclusively through env vars.
         // The caller must have set them *before* the runtime started via
@@ -680,23 +677,12 @@ impl SourceTrait for JetstreamSource {
             );
         }
 
-        tokio::spawn(async move {
-            let exit_status = match Self::stream_loop(config, filters, tx.clone()).await {
-                Ok(()) => SourceExitStatus::Completed,
-                Err(e) => {
-                    error!(error = %e, "Jetstream streaming failed");
-                    let _ = tx
-                        .send(Err(yellowstone_grpc_proto::tonic::Status::internal(
-                            e.to_string(),
-                        )))
-                        .await;
-                    SourceExitStatus::Error(e.to_string())
-                },
-            };
-            let _ = status_tx.send(exit_status);
-        });
+        if let Err(e) = Self::stream_loop(config, filters, tx).await {
+            error!(error = %e, "Jetstream streaming failed");
+            return Err(e.into());
+        }
 
-        Ok(())
+        Ok(SourceExitStatus::Completed)
     }
 }
 
@@ -788,8 +774,8 @@ impl JetstreamSource {
             None
         };
 
-        // Signals broadcast before this subscribe are lost, so callers should
-        // broadcast only after `connect()` returns.
+        // A signal broadcast before this subscribe is lost, so a shutdown sent
+        // while the source is still starting up does not stop the replay.
         let shutdown_signal = config.shutdown_signal_tx.as_ref().map(|tx| tx.subscribe());
 
         // `stats_interval_slots == 0` disables stats, which also avoids upstream's
@@ -950,8 +936,7 @@ mod tests {
             shutdown_signal_tx: None,
         };
 
-        let filters = Filters::new(std::collections::HashMap::new());
-        let source = JetstreamSource::new(config, filters);
+        let source = JetstreamSource::from_config(config);
 
         assert_eq!(source.config.archive_url, "https://api.old-faithful.net");
         assert_eq!(source.config.threads, 4);

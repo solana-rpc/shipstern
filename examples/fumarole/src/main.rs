@@ -41,10 +41,10 @@ async fn main() {
     let config = std::fs::read_to_string(config).expect("Error reading config file");
     let config = toml::from_str(&config).expect("Error parsing config");
 
-    shipstern::Runtime::<YellowstoneFumaroleSource>::builder()
+    shipstern::Runtime::builder()
         .instruction(Pipeline::new(InstructionParser, [Logger]))
         .account(Pipeline::new(AccountParser, [Logger]))
-        .build(config)
+        .build::<YellowstoneFumaroleSource>(config)
         .run_async()
         .await;
 }

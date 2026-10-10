@@ -72,9 +72,9 @@ impl FilterState {
 /// cheap to clone, share one view of the filters, and never await.
 ///
 /// ```rust, ignore
-/// let runtime = Runtime::<YellowstoneGrpcSource>::builder()
+/// let runtime = Runtime::builder()
 ///     .account(Pipeline::new(TokenProgramAccParser, [Handler]))
-///     .try_build(config)?;
+///     .try_build::<YellowstoneGrpcSource>(config)?;
 ///
 /// let handle = runtime.handle();
 /// tokio::spawn(runtime.run_async());

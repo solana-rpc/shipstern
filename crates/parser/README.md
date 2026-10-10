@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use clap::Parser as _;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use shipstern::Pipeline;
+use shipstern_yellowstone_grpc_source::YellowstoneGrpcSource;
 use shipstern_parser::{
     token_extension_program::{
         AccountParser as TokenExtensionProgramAccParser,
@@ -44,8 +45,8 @@ fn main() {
         .account(Pipeline::new(TokenProgramAccParser, [Handler]))
         .instruction(Pipeline::new(TokenExtensionProgramIxParser, [Handler]))
         .instruction(Pipeline::new(TokenProgramIxParser, [Handler]))
-        .metrics(shipstern::metrics::Prometheus)
-        .build(config)
+        .metrics(prometheus::Registry::new())
+        .build::<YellowstoneGrpcSource>(config)
         .run();
 }
 ```

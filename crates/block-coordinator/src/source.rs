@@ -9,19 +9,19 @@ use std::{path::PathBuf, time::Duration};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use shipstern::{
-    sources::{SourceExitStatus, SourceTrait},
+    sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     Error as ShipsternError,
 };
-use shipstern_core::{CommitmentLevel, Filters};
+use shipstern_core::CommitmentLevel;
 use shipstern_yellowstone_grpc_source::YellowstoneGrpcConfig;
-use tokio::sync::{mpsc::Sender, oneshot};
+use tokio::sync::mpsc::Sender;
 use yellowstone_grpc_client::GeyserGrpcClient;
 use yellowstone_grpc_proto::{
     geyser::{
         subscribe_update::UpdateOneof, SubscribeRequest, SubscribeRequestFilterBlocksMeta,
-        SubscribeRequestFilterEntry, SubscribeUpdate,
+        SubscribeRequestFilterEntry,
     },
-    tonic::{transport::ClientTlsConfig, Status},
+    tonic::transport::ClientTlsConfig,
 };
 
 use crate::{fixtures::FixtureWriter, types::CoordinatorInput};
@@ -118,20 +118,19 @@ impl CoordinatorSubscription for SubscribeRequest {
 #[derive(Debug)]
 pub struct CoordinatorSource {
     config: CoordinatorSourceConfig,
-    filters: Filters,
+}
+
+impl FromConfig for CoordinatorSource {
+    type Config = CoordinatorSourceConfig;
+
+    fn from_config(config: Self::Config) -> Self { Self { config } }
 }
 
 #[async_trait]
 impl SourceTrait for CoordinatorSource {
-    type Config = CoordinatorSourceConfig;
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, ShipsternError> {
+        let SourceContext { filters, tx, .. } = ctx;
 
-    fn new(config: Self::Config, filters: Filters) -> Self { Self { config, filters } }
-
-    async fn connect(
-        &self,
-        tx: Sender<Result<SubscribeUpdate, Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), ShipsternError> {
         let coordinator_tx = self.config.coordinator_input_tx.as_ref().ok_or_else(|| {
             ShipsternError::Io(std::io::Error::other(
                 "coordinator_input_tx must be set before connect",
@@ -169,7 +168,7 @@ impl SourceTrait for CoordinatorSource {
 
         let mut client = builder.connect().await?;
 
-        let subscribe_request = SubscribeRequest::from(self.filters.clone())
+        let subscribe_request = SubscribeRequest::from(filters)
             .with_coordinator_subscriptions()
             .with_from_slot(config.from_slot)
             .with_commitment_processed();
@@ -339,8 +338,6 @@ impl SourceTrait for CoordinatorSource {
 
         tracing::debug!("CoordinatorSource gRPC stream ended");
 
-        let _ = status_tx.send(exit_status);
-
-        Ok(())
+        Ok(exit_status)
     }
 }

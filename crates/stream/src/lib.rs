@@ -37,7 +37,7 @@ impl From<std::io::Error> for Error {
 }
 
 /// A Shipstern program stream server.
-pub struct Server<'a, S: SourceTrait> {
+pub struct Server<'a, S: SourceTrait = Box<dyn SourceTrait>> {
     grpc_cfg: GrpcConfig,
     desc_sets: Vec<&'a [u8]>,
     channels: Channels,
@@ -61,9 +61,11 @@ impl<S: SourceTrait> fmt::Debug for Server<'_, S> {
     }
 }
 
-impl<S: SourceTrait> Server<'_, S> {
-    /// Create a new stream server builder.
-    pub fn builder() -> StreamBuilder<'static, S> { StreamBuilder::default() }
+impl Server<'_> {
+    /// Create a new stream server builder. The source is chosen when it is
+    /// built, as with [`Runtime::builder`].
+    #[must_use]
+    pub fn builder() -> StreamBuilder<'static> { StreamBuilder::default() }
 }
 
 impl<S: SourceTrait> Server<'_, S> {
@@ -89,13 +91,13 @@ impl<S: SourceTrait> Server<'_, S> {
     ///
     /// // NOTE: The main function is not async
     /// fn main() {
-    ///     stream::Server::<YellowstoneGrpcSource>::builder()
+    ///     stream::Server::builder()
     ///         .descriptor_set(METEORA_DESCRIPTOR_SET)
     ///         .descriptor_set(PUMP_DESCRIPTOR_SET)
     ///         .account(Proto::new(MeteoraAccParser))
     ///         .instruction(Proto::new(MeteoraIxParser))
     ///         .instruction(Proto::new(PumpfunIxParser))
-    ///         .build(config)
+    ///         .build::<YellowstoneGrpcSource>(config)
     ///         .run(); // Process will exit if an error occurs
     /// }
     /// ```
@@ -135,13 +137,13 @@ impl<S: SourceTrait> Server<'_, S> {
     ///
     /// #[tokio::main]
     /// async fn main() {
-    ///     stream::Server::<YellowstoneGrpcSource>::builder()
+    ///     stream::Server::builder()
     ///         .descriptor_set(METEORA_DESCRIPTOR_SET)
     ///         .descriptor_set(PUMP_DESCRIPTOR_SET)
     ///         .account(Proto::new(MeteoraAccParser))
     ///         .instruction(Proto::new(MeteoraIxParser))
     ///         .instruction(Proto::new(PumpfunIxParser))
-    ///         .build(config)
+    ///         .build::<YellowstoneGrpcSource>(config)
     ///         .run_async()
     ///         .await;
     /// }

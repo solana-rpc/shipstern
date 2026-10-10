@@ -12,14 +12,14 @@
 //! Shipstern provides a simple API for requesting, parsing, and consuming data
 //! from Yellowstone.
 
-use std::{marker::PhantomData, sync::Arc};
+use std::sync::Arc;
 
 use config::BufferConfig;
 use shipstern_core::Filters;
 use tokio::sync::{mpsc, oneshot, watch};
 use yellowstone_grpc_proto::tonic::Status;
 
-use crate::sources::SourceExitStatus;
+use crate::sources::{SourceContext, SourceExitStatus};
 
 #[cfg(feature = "prometheus")]
 pub extern crate prometheus;
@@ -84,21 +84,49 @@ pub enum Error {
 }
 
 /// The main runtime for Shipstern.
+///
+/// `S` defaults to a boxed source, so a bare `Runtime` is one whose source was
+/// picked at startup.
 #[derive(Debug)]
-pub struct Runtime<S: SourceTrait> {
+pub struct Runtime<S: SourceTrait = Box<dyn SourceTrait>> {
     buffer: BufferConfig,
-    source: S::Config,
+    source: S,
     pipelines: handler::PipelineSets,
     filter_updates_rx: watch::Receiver<Filters>,
     filter_state: Arc<handle::FilterState>,
     #[cfg(feature = "prometheus")]
     metrics_registry: prometheus::Registry,
-    _source: PhantomData<S>,
 }
 
-impl<S: SourceTrait> Runtime<S> {
-    /// Create a new runtime builder.
-    pub fn builder() -> RuntimeBuilder<S> { RuntimeBuilder::<S>::default() }
+impl Runtime {
+    /// Create a new runtime builder. The source is chosen when it is built,
+    /// either as a value with
+    /// [`try_build_with`](RuntimeBuilder::try_build_with) or from a config
+    /// document with [`try_build`](RuntimeBuilder::try_build).
+    ///
+    /// ```rust, ignore
+    /// // A source value, whose type is inferred.
+    /// Runtime::builder()
+    ///     .account(Pipeline::new(AccountParser, [Handler]))
+    ///     .build_with(YellowstoneGrpcSource::from_config(grpc), buffer);
+    ///
+    /// // A config document, naming the source it configures.
+    /// Runtime::builder()
+    ///     .account(Pipeline::new(AccountParser, [Handler]))
+    ///     .build::<YellowstoneGrpcSource>(config);
+    ///
+    /// // A source picked at startup.
+    /// let source: Box<dyn SourceTrait> = match kind {
+    ///     Kind::Grpc => Box::new(YellowstoneGrpcSource::from_config(grpc)),
+    ///     Kind::Jetstream => Box::new(JetstreamSource::from_config(jetstream)),
+    /// };
+    ///
+    /// Runtime::builder()
+    ///     .account(Pipeline::new(AccountParser, [Handler]))
+    ///     .build_with(source, buffer);
+    /// ```
+    ///
+    pub fn builder() -> RuntimeBuilder { RuntimeBuilder::default() }
 }
 
 impl<S: FilterUpdateSource> Runtime<S> {
@@ -107,9 +135,9 @@ impl<S: FilterUpdateSource> Runtime<S> {
     /// running, since the run methods consume the runtime.
     ///
     /// ```rust, ignore
-    /// let runtime = Runtime::<YellowstoneGrpcSource>::builder()
+    /// let runtime = Runtime::builder()
     ///     .account(Pipeline::new(TokenProgramAccParser, [Handler]))
-    ///     .try_build(config)?;
+    ///     .try_build::<YellowstoneGrpcSource>(config)?;
     ///
     /// let handle = runtime.handle();
     /// tokio::spawn(runtime.run_async());
@@ -135,10 +163,10 @@ impl<S: SourceTrait> Runtime<S> {
     /// // MyHandler is a handler that implements the Handler trait
     /// // NOTE: The main function is not async
     /// fn main() {
-    ///     Runtime::builder::<YellowstoneGrpcSource>()
+    ///     Runtime::builder()
     ///         .account(Pipeline::new(AccountParser, [MyHandler]))
     ///         .instruction(Pipeline::new(InstructionParser, [MyHandler]))
-    ///         .build(config)
+    ///         .build::<YellowstoneGrpcSource>(config)
     ///         .run(); // Process will exit if an error occurs
     /// }
     /// ```
@@ -177,12 +205,12 @@ impl<S: SourceTrait> Runtime<S> {
     ///
     /// #[tokio::main]
     /// async fn main() {
-    ///     Runtime::builder::<YellowstoneGrpcSource>()
+    ///     Runtime::builder()
     ///         .account(Pipeline::new(TokenProgramAccParser, [MyHandler]))
     ///         .account(Pipeline::new(TokenExtensionProgramAccParser, [MyHandler]))
     ///         .instruction(Pipeline::new(TokenExtensionProgramIxParser, [MyHandler]))
     ///         .instruction(Pipeline::new(TokenProgramIxParser, [MyHandler]))
-    ///         .build(config)
+    ///         .build::<YellowstoneGrpcSource>(config)
     ///         .run_async()
     ///         .await;
     /// }
@@ -257,34 +285,45 @@ impl<S: SourceTrait> Runtime<S> {
         enum StopType<S> {
             Signal(S),
             Buffer(Result<(), Error>),
-            SourceExit(Result<SourceExitStatus, oneshot::error::RecvError>),
+            SourceExit(Result<Result<SourceExitStatus, Error>, oneshot::error::RecvError>),
         }
 
         let (tx, updates_rx) =
             mpsc::channel::<Result<SubscribeUpdate, Status>>(self.buffer.sources_channel_size);
 
-        let (status_tx, status_rx) = oneshot::channel::<SourceExitStatus>();
+        let (status_tx, status_rx) = oneshot::channel::<Result<SourceExitStatus, Error>>();
 
         #[cfg(feature = "prometheus")]
         metrics::register_metrics(&self.metrics_registry);
 
-        let mut filter_updates_rx = self.filter_updates_rx;
+        let mut filter_updates = self.filter_updates_rx;
 
         // Subscribe with the latest set, so an update sent before running is in the
         // first request. Marking it seen stops the source resending it.
-        let filters = filter_updates_rx.borrow_and_update().clone();
+        let filters = filter_updates.borrow_and_update().clone();
 
-        let source = S::new(self.source, filters);
+        let source = self.source;
 
         // Release the runtime's own reference so the slot closes once every
         // handle is gone, and a source that waits on updates is not left
         // waiting on a sender that can never produce one.
         drop(self.filter_state);
 
+        // Hold a sender until the exit status is reported. The source drops its
+        // own when it returns, and without this the buffer could see the
+        // channel close before the runtime learns how the source ended.
+        let status_guard = tx.clone();
+
         tokio::spawn(async move {
-            let _ = source
-                .connect_with_filter_updates(tx, status_tx, filter_updates_rx)
-                .await;
+            let ctx = SourceContext {
+                filters,
+                tx,
+                filter_updates,
+            };
+
+            let _ = status_tx.send(source.connect(ctx).await);
+
+            drop(status_guard);
         });
 
         let signal;
@@ -332,10 +371,15 @@ impl<S: SourceTrait> Runtime<S> {
 
         let mut buffer = buffer::Buffer::run_yellowstone(self.buffer, updates_rx, self.pipelines);
 
+        // Biased so the source's status beats the buffer's close: the status
+        // is sent before the last sender drops, and a source `Err` must not be
+        // read as the buffer's clean `Ok(())`.
         let stop_ty = tokio::select! {
+            biased;
+
             s = signal => StopType::Signal(s),
-            b = buffer.wait_for_stop() => StopType::Buffer(b),
             status = status_rx => StopType::SourceExit(status),
+            b = buffer.wait_for_stop() => StopType::Buffer(b),
         };
 
         match stop_ty {
@@ -351,7 +395,11 @@ impl<S: SourceTrait> Runtime<S> {
             .into()),
             StopType::Buffer(result) => result,
             StopType::Signal(Err(e)) => Err(e),
-            StopType::SourceExit(Ok(status)) => match status {
+            StopType::SourceExit(Ok(Err(err))) => {
+                tracing::error!(err = %Chain(&err), "Source stopped: error");
+                Err(err)
+            },
+            StopType::SourceExit(Ok(Ok(status))) => match status {
                 SourceExitStatus::ReceiverDropped => {
                     tracing::info!("Source stopped: receiver dropped (shutdown)");
                     Self::force_stop_buffer(buffer).await;
@@ -375,7 +423,7 @@ impl<S: SourceTrait> Runtime<S> {
                 },
             },
             StopType::SourceExit(Err(_)) => {
-                tracing::warn!("Source exit status channel closed unexpectedly");
+                tracing::warn!("Source task ended without reporting, most likely a panic");
                 Err(Error::ClientHangup)
             },
         }?;

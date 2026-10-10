@@ -33,9 +33,9 @@ fn main() {
     let config = std::fs::read_to_string(config).expect("Error reading config file");
     let config = toml::from_str(&config).expect("Error parsing config");
 
-    shipstern::Runtime::<YellowstoneGrpcSource>::builder()
+    shipstern::Runtime::builder()
         .account(Pipeline::new(pump_fun::AccountParser, [Logger]))
         .instruction(Pipeline::new(pump_fun::InstructionParser, [Logger]))
-        .build(config)
+        .build::<YellowstoneGrpcSource>(config)
         .run();
 }

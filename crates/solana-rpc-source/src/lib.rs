@@ -2,10 +2,9 @@ use std::{str::FromStr, time::Duration};
 
 use async_trait::async_trait;
 use shipstern::{
-    sources::{SourceExitStatus, SourceTrait},
+    sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     CommitmentLevel, Error as ShipsternError,
 };
-use shipstern_core::Filters;
 use solana_account_decoder_client_types::UiAccountEncoding;
 use solana_client::{
     nonblocking::rpc_client::RpcClient,
@@ -13,22 +12,15 @@ use solana_client::{
 };
 use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
-use tokio::{
-    sync::{mpsc::Sender, oneshot},
-    task::JoinSet,
-};
-use yellowstone_grpc_proto::{
-    geyser::{
-        subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateAccount,
-        SubscribeUpdateAccountInfo,
-    },
-    tonic::Status,
+use tokio::task::JoinSet;
+use yellowstone_grpc_proto::geyser::{
+    subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateAccount,
+    SubscribeUpdateAccountInfo,
 };
 
 /// A `Source` implementation for the Solana Accounts RPC API.
 #[derive(Debug)]
 pub struct SolanaAccountsRpcSource {
-    filters: Filters,
     config: SolanaAccountsRpcConfig,
 }
 
@@ -47,12 +39,6 @@ pub struct SolanaAccountsRpcConfig {
 }
 
 impl SolanaAccountsRpcSource {
-    /// Create a new `SolanaAccountsRpcSource`.
-    #[must_use]
-    pub fn new(config: SolanaAccountsRpcConfig, filters: Filters) -> Self {
-        Self { config, filters }
-    }
-
     fn get_commitment_config(&self) -> CommitmentConfig {
         match self.config.commitment_level {
             Some(CommitmentLevel::Finalized) => CommitmentConfig::finalized(),
@@ -62,19 +48,17 @@ impl SolanaAccountsRpcSource {
     }
 }
 
-#[async_trait]
-impl SourceTrait for SolanaAccountsRpcSource {
+impl FromConfig for SolanaAccountsRpcSource {
     type Config = SolanaAccountsRpcConfig;
 
-    fn new(config: Self::Config, filters: Filters) -> Self { Self { config, filters } }
+    fn from_config(config: Self::Config) -> Self { Self { config } }
+}
 
+#[async_trait]
+impl SourceTrait for SolanaAccountsRpcSource {
     #[allow(deprecated)] // get_program_accounts_with_config is deprecated but replacement not yet stable
-    async fn connect(
-        &self,
-        tx: Sender<Result<SubscribeUpdate, Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), ShipsternError> {
-        let filters = &self.filters;
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, ShipsternError> {
+        let SourceContext { filters, tx, .. } = ctx;
         let config = &self.config;
 
         let mut tasks_set = JoinSet::new();
@@ -177,33 +161,32 @@ impl SourceTrait for SolanaAccountsRpcSource {
             }
         }
 
-        let mut exit_status = SourceExitStatus::Completed;
-
         // One task runs per (filter, owner) pair and the runtime treats a source
-        // `Error` as fatal, so the first failure wins: keeping later errors adds
+        // `Err` as fatal, so the first failure wins: keeping later errors adds
         // nothing, and updates already sent by sibling tasks stay in the buffer.
+        let mut first_error: Option<String> = None;
+
         while let Some(task_result) = tasks_set.join_next().await {
-            match task_result {
-                Ok(Ok(())) => {},
+            let msg = match task_result {
+                Ok(Ok(())) => continue,
                 Ok(Err(msg)) => {
                     tracing::error!(%msg, "Solana RPC source task failed");
-
-                    if matches!(exit_status, SourceExitStatus::Completed) {
-                        exit_status = SourceExitStatus::Error(msg);
-                    }
+                    msg
                 },
                 Err(e) => {
                     tracing::error!(err = %e, "Solana RPC source task panicked or was cancelled");
-
-                    if matches!(exit_status, SourceExitStatus::Completed) {
-                        exit_status = SourceExitStatus::Error(e.to_string());
-                    }
+                    e.to_string()
                 },
-            }
+            };
+
+            first_error.get_or_insert(msg);
         }
 
-        let _ = status_tx.send(exit_status);
-        Ok(())
+        if let Some(msg) = first_error {
+            return Err(ShipsternError::Other(msg.into()));
+        }
+
+        Ok(SourceExitStatus::Completed)
     }
 }
 
@@ -211,9 +194,12 @@ impl SourceTrait for SolanaAccountsRpcSource {
 mod tests {
     use std::collections::HashMap;
 
-    use shipstern::{sources::SourceTrait, CommitmentLevel};
+    use shipstern::{
+        sources::{FromConfig, SourceContext, SourceTrait},
+        CommitmentLevel,
+    };
     use shipstern_core::{Filters, Prefilter};
-    use tokio::sync::{mpsc, oneshot};
+    use tokio::sync::mpsc;
 
     use super::{SolanaAccountsRpcConfig, SolanaAccountsRpcSource};
 
@@ -229,33 +215,27 @@ mod tests {
                     .build()
                     .expect("account owner filter should build"),
             )]));
-            let source = SolanaAccountsRpcSource::new(
-                SolanaAccountsRpcConfig {
-                    endpoint: "http://127.0.0.1:9".to_string(),
-                    timeout: 1,
-                    commitment_level: Some(CommitmentLevel::Confirmed),
-                },
-                filters,
-            );
+            let source = SolanaAccountsRpcSource::from_config(SolanaAccountsRpcConfig {
+                endpoint: "http://127.0.0.1:9".to_string(),
+                timeout: 1,
+                commitment_level: Some(CommitmentLevel::Confirmed),
+            });
             let (tx, mut rx) = mpsc::channel(1);
-            let (status_tx, status_rx) = oneshot::channel();
 
-            source
-                .connect(tx, status_tx)
-                .await
-                .expect("connect should report task failure through source status");
+            let result = source.connect(SourceContext::new(filters, tx)).await;
 
-            let status = status_rx.await.expect("source status should be sent");
-            let shipstern::sources::SourceExitStatus::Error(msg) = status else {
-                panic!("expected source error, got {status:?}");
+            let Err(shipstern::Error::Other(err)) = result else {
+                panic!("expected a connect error, got {result:?}");
             };
-            assert!(msg.contains("Failed to get slot for source: solana-rpc"));
+            assert!(err
+                .to_string()
+                .contains("Failed to get slot for source: solana-rpc"));
             assert!(rx.try_recv().is_err());
         });
     }
 
     #[test]
-    fn connect_with_multiple_filters_reports_single_error_status() {
+    fn connect_with_multiple_filters_reports_one_error() {
         let runtime = tokio::runtime::Runtime::new().expect("runtime should build");
 
         runtime.block_on(async {
@@ -275,29 +255,21 @@ mod tests {
                         .expect("account owner filter should build"),
                 ),
             ]));
-            let source = SolanaAccountsRpcSource::new(
-                SolanaAccountsRpcConfig {
-                    endpoint: "http://127.0.0.1:9".to_string(),
-                    timeout: 1,
-                    commitment_level: Some(CommitmentLevel::Confirmed),
-                },
-                filters,
-            );
+            let source = SolanaAccountsRpcSource::from_config(SolanaAccountsRpcConfig {
+                endpoint: "http://127.0.0.1:9".to_string(),
+                timeout: 1,
+                commitment_level: Some(CommitmentLevel::Confirmed),
+            });
             let (tx, mut rx) = mpsc::channel(1);
-            let (status_tx, status_rx) = oneshot::channel();
 
-            source
-                .connect(tx, status_tx)
-                .await
-                .expect("connect should report task failures through source status");
+            let result = source.connect(SourceContext::new(filters, tx)).await;
 
-            let status = status_rx
-                .await
-                .expect("source status should be sent exactly once");
-            let shipstern::sources::SourceExitStatus::Error(msg) = status else {
-                panic!("expected source error, got {status:?}");
+            let Err(shipstern::Error::Other(err)) = result else {
+                panic!("expected a connect error, got {result:?}");
             };
-            assert!(msg.contains("Failed to get slot for source: solana-rpc"));
+            assert!(err
+                .to_string()
+                .contains("Failed to get slot for source: solana-rpc"));
             assert!(rx.try_recv().is_err());
         });
     }
