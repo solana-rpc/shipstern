@@ -10,6 +10,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - `shipstern-core`: `TransactionPrefilter::token_accounts` and `PrefilterBuilder::transaction_token_accounts` pass Yellowstone's `token_accounts` ([rpcpool/yellowstone-grpc#762](https://github.com/rpcpool/yellowstone-grpc/pull/762)) through; merging disagreeing modes takes the wider one and drops `accounts_exclude`.
+- `shipstern-proc-macro`: accept Anchor 0.1.0 and legacy IDLs with `shipstern-codama-from-anchor` ([#337](https://github.com/solana-rpc/shipstern/pull/337), [#329](https://github.com/solana-rpc/shipstern/issues/329) by @senzenn).
 
 ### Changed
 
