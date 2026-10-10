@@ -45,7 +45,7 @@ fn main() {
         .account(Pipeline::new(TokenProgramAccParser, [Handler]))
         .instruction(Pipeline::new(TokenExtensionProgramIxParser, [Handler]))
         .instruction(Pipeline::new(TokenProgramIxParser, [Handler]))
-        .metrics(shipstern::metrics::Prometheus)
+        .metrics(prometheus::Registry::new())
         .build::<YellowstoneGrpcSource>(config)
         .run();
 }

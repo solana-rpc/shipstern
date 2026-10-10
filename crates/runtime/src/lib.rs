@@ -371,10 +371,15 @@ impl<S: SourceTrait> Runtime<S> {
 
         let mut buffer = buffer::Buffer::run_yellowstone(self.buffer, updates_rx, self.pipelines);
 
+        // Biased so the source's status beats the buffer's close: the status
+        // is sent before the last sender drops, and a source `Err` must not be
+        // read as the buffer's clean `Ok(())`.
         let stop_ty = tokio::select! {
+            biased;
+
             s = signal => StopType::Signal(s),
-            b = buffer.wait_for_stop() => StopType::Buffer(b),
             status = status_rx => StopType::SourceExit(status),
+            b = buffer.wait_for_stop() => StopType::Buffer(b),
         };
 
         match stop_ty {

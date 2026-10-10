@@ -90,9 +90,8 @@ impl SourceTrait for YellowstoneFumaroleSource {
         let mut fumarole_client = match FumaroleClient::connect(self.config.clone().into()).await {
             Ok(client) => client,
             Err(e) => {
-                let msg = format!("Failed to connect to fumarole: {e}");
-                tracing::error!(%msg, "Fumarole source connection failed");
-                return Ok(SourceExitStatus::Error(msg));
+                tracing::error!(err = %e, "Fumarole source connection failed");
+                return Err(ShipsternError::Other(Box::new(e)));
             },
         };
 
@@ -117,10 +116,7 @@ impl SourceTrait for YellowstoneFumaroleSource {
                     message = status.message(),
                     "Fumarole source subscription failed"
                 );
-                return Ok(SourceExitStatus::StreamError {
-                    code: status.code(),
-                    message: status.message().to_owned(),
-                });
+                return Err(ShipsternError::YellowstoneStatus(status));
             },
         };
 
@@ -177,15 +173,14 @@ mod tests {
             });
             let (tx, mut rx) = mpsc::channel(1);
 
-            let status = source
+            let result = source
                 .connect(SourceContext::new(Filters::new(HashMap::new()), tx))
-                .await
-                .expect("connect should report connection failure through source status");
+                .await;
 
-            let shipstern::sources::SourceExitStatus::Error(msg) = status else {
-                panic!("expected source error, got {status:?}");
+            let Err(shipstern::Error::Other(err)) = result else {
+                panic!("expected a connect error, got {result:?}");
             };
-            assert!(msg.contains("Failed to connect to fumarole"));
+            assert!(err.is::<yellowstone_fumarole_client::ConnectError>());
             assert!(rx.try_recv().is_err());
         });
     }

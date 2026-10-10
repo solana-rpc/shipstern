@@ -43,6 +43,9 @@ fn make_ping_update() -> SubscribeUpdate {
 
 const TEST_SLOT_FILTER: &str = "test::SlowSlotParser";
 static SLOW_SLOT_HANDLED: AtomicUsize = AtomicUsize::new(0);
+static ONE_BUILDER_SLOTS_HANDLED: AtomicUsize = AtomicUsize::new(0);
+/// For runtimes whose source sends no slots, so nothing reads it.
+static UNCOUNTED_SLOTS: AtomicUsize = AtomicUsize::new(0);
 
 fn make_slot_update(slot: u64) -> SubscribeUpdate {
     SubscribeUpdate {
@@ -211,8 +214,9 @@ impl Parser for SlowSlotParser {
     async fn parse(&self, value: &Self::Input) -> ParseResult<Self::Output> { Ok(value.clone()) }
 }
 
+/// Counts handled slots into its own counter, since tests run in parallel.
 #[derive(Debug, Clone, Copy)]
-struct SlowSlotHandler;
+struct SlowSlotHandler(&'static AtomicUsize);
 
 impl Handler<SlotUpdate, SlotUpdate> for SlowSlotHandler {
     async fn handle(
@@ -221,7 +225,7 @@ impl Handler<SlotUpdate, SlotUpdate> for SlowSlotHandler {
         _raw_event: &SlotUpdate,
     ) -> crate::HandlerResult<()> {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        SLOW_SLOT_HANDLED.fetch_add(1, Ordering::Relaxed);
+        self.0.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 }
@@ -280,7 +284,9 @@ impl FilterUpdateSource for MockFilterUpdateSource {}
 /// parser ID that filter updates may name.
 fn filter_update_runtime() -> Runtime<MockFilterUpdateSource> {
     Runtime::builder()
-        .slot(Pipeline::new(SlowSlotParser, [SlowSlotHandler]))
+        .slot(Pipeline::new(SlowSlotParser, [SlowSlotHandler(
+            &UNCOUNTED_SLOTS,
+        )]))
         .try_build_with(MockFilterUpdateSource, default_buffer_config())
         .unwrap()
 }
@@ -703,13 +709,13 @@ async fn test_connect_error_is_the_run_error() {
 /// One builder function serves two source types, since the builder is not
 /// tied to a source until it is built.
 fn slot_pipelines() -> crate::builder::RuntimeBuilder {
-    Runtime::builder().slot(Pipeline::new(SlowSlotParser, [SlowSlotHandler]))
+    Runtime::builder().slot(Pipeline::new(SlowSlotParser, [SlowSlotHandler(
+        &ONE_BUILDER_SLOTS_HANDLED,
+    )]))
 }
 
 #[tokio::test]
 async fn test_one_builder_runs_against_different_sources() {
-    SLOW_SLOT_HANDLED.store(0, Ordering::Relaxed);
-
     let ended = slot_pipelines()
         .try_build_with(MockStreamEndSource, default_buffer_config())
         .unwrap();
@@ -724,31 +730,20 @@ async fn test_one_builder_runs_against_different_sources() {
         .unwrap();
 
     assert!(completed.try_run_async().await.is_ok());
+    assert_eq!(ONE_BUILDER_SLOTS_HANDLED.load(Ordering::Relaxed), 2);
 }
 
 /// A source picked at runtime runs through `Box<dyn SourceTrait>`, which is
 /// what a bare `Runtime` holds.
 #[tokio::test]
 async fn test_boxed_source_picked_at_runtime() {
-    for complete in [false, true] {
-        let source: Box<dyn SourceTrait> = if complete {
-            Box::new(MockCompletedWithUpdatesSource { updates_to_send: 1 })
-        } else {
-            Box::new(MockStreamEndSource)
-        };
+    let source: Box<dyn SourceTrait> = Box::new(MockStreamEndSource);
 
-        let runtime: Runtime = Runtime::builder()
-            .try_build_with(source, default_buffer_config())
-            .unwrap();
+    let runtime: Runtime = Runtime::builder()
+        .try_build_with(source, default_buffer_config())
+        .unwrap();
 
-        let result = runtime.try_run_async().await;
-
-        if complete {
-            assert!(result.is_ok(), "got {result:?}");
-        } else {
-            assert_server_hangup(result);
-        }
-    }
+    assert_server_hangup(runtime.try_run_async().await);
 }
 
 /// Boxing a source that applies filter updates keeps its handle.
@@ -757,7 +752,9 @@ async fn test_boxed_filter_update_source_keeps_its_handle() {
     let source: Box<dyn FilterUpdateSource> = Box::new(MockFilterUpdateSource);
 
     let runtime = Runtime::builder()
-        .slot(Pipeline::new(SlowSlotParser, [SlowSlotHandler]))
+        .slot(Pipeline::new(SlowSlotParser, [SlowSlotHandler(
+            &UNCOUNTED_SLOTS,
+        )]))
         .try_build_with(source, default_buffer_config())
         .unwrap();
     let handle = runtime.handle();
@@ -808,7 +805,9 @@ async fn test_completed_source_drains_buffered_updates_before_returning() {
     SLOW_SLOT_HANDLED.store(0, Ordering::Relaxed);
 
     let runtime = Runtime::builder()
-        .slot(Pipeline::new(SlowSlotParser, [SlowSlotHandler]))
+        .slot(Pipeline::new(SlowSlotParser, [SlowSlotHandler(
+            &SLOW_SLOT_HANDLED,
+        )]))
         .try_build_with(
             MockCompletedWithUpdatesSource { updates_to_send: 3 },
             default_buffer_config(),
@@ -1268,10 +1267,16 @@ impl<const N: u64> SourceTrait for MockStopWithInFlightSource<N> {
             let _ = tx.send(Ok(make_slot_update(slot))).await;
         }
 
-        // Long enough for every handler to be parked in its sleep. The runtime
-        // holds the channel open until it has this status, so this is the stop
-        // path, not a clean close.
+        // Long enough for every handler to be parked in its sleep.
         tokio::time::sleep(Duration::from_millis(20)).await;
+
+        // Keep a sender open past the return, so the buffer never sees a clean
+        // close and only the stop path can drain the handlers.
+        let keep_open = tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            drop(keep_open);
+        });
 
         Ok(SourceExitStatus::ReceiverDropped)
     }

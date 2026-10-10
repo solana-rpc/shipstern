@@ -18,14 +18,19 @@ pub enum SourceExitStatus {
     Completed,
     /// Server closed connection unexpectedly (streaming sources).
     StreamEnded,
-    /// gRPC error.
+    /// The server ended a running stream with a gRPC status.
     StreamError {
         /// gRPC status code.
         code: tonic::Code,
         /// Server error message.
         message: String,
     },
-    /// Other errors.
+    /// A running stream stopped on a failure that is only a message.
+    ///
+    /// Use it from a stream loop that `break`s with how it ended. Anything
+    /// else, a failure to connect in particular, returns `Err` from
+    /// [`SourceTrait::connect`], which keeps the error's type. The runtime
+    /// stops with an error either way.
     Error(String),
 }
 
@@ -66,13 +71,6 @@ impl SourceContext {
             filter_updates,
         }
     }
-
-    /// Replace the filter update slot.
-    #[must_use]
-    pub fn with_filter_updates(mut self, filter_updates: watch::Receiver<Filters>) -> Self {
-        self.filter_updates = filter_updates;
-        self
-    }
 }
 
 /// Data source that streams updates to the runtime.
@@ -109,7 +107,8 @@ impl SourceContext {
 #[async_trait]
 pub trait SourceTrait: std::fmt::Debug + Send + Sync + 'static {
     /// Connect and stream updates until the stream ends, then return how it
-    /// ended. An `Err` stops the runtime with that error.
+    /// ended. A failure returns `Err`, which stops the runtime with that
+    /// error; see [`SourceExitStatus::Error`] for the one exception.
     ///
     /// # Errors
     /// Returns an error if the source cannot connect or fails mid-stream.

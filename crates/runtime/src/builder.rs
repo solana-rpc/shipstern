@@ -195,7 +195,7 @@ impl RuntimeBuilder {
     /// ```
     ///
     /// # Errors
-    /// This function returns an error if the builder is invalid.
+    /// This function returns an error if two pipelines share a parser ID.
     /// # Panics
     /// Only panics if the prometheus metrics registry is not set.
     pub fn try_build_with<S: SourceTrait>(
@@ -317,8 +317,7 @@ impl RuntimeBuilder {
     /// ```
     ///
     /// # Errors
-    /// This function returns an error if the builder or configuration are
-    /// invalid.
+    /// This function returns an error if two pipelines share a parser ID.
     pub fn try_build<S: FromConfig>(
         self,
         config: ShipsternConfig<S::Config>,

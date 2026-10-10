@@ -171,7 +171,7 @@ impl<'a> StreamBuilder<'a> {
     /// gRPC and buffer configuration.
     ///
     /// # Errors
-    /// This function returns an error if the builder is invalid.
+    /// This function returns an error if two pipelines share a parser ID.
     pub fn try_build_with<S: SourceTrait>(
         self,
         source: S,
@@ -242,8 +242,7 @@ impl<'a> StreamBuilder<'a> {
     /// section of the config. Name the source with a turbofish.
     ///
     /// # Errors
-    /// This function returns an error if the builder or configuration are
-    /// invalid.
+    /// This function returns an error if two pipelines share a parser ID.
     pub fn try_build<S: FromConfig>(
         self,
         config: StreamConfig<S::Config>,

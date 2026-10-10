@@ -677,20 +677,12 @@ impl SourceTrait for JetstreamSource {
             );
         }
 
-        let exit_status = match Self::stream_loop(config, filters, tx.clone()).await {
-            Ok(()) => SourceExitStatus::Completed,
-            Err(e) => {
-                error!(error = %e, "Jetstream streaming failed");
-                let _ = tx
-                    .send(Err(yellowstone_grpc_proto::tonic::Status::internal(
-                        e.to_string(),
-                    )))
-                    .await;
-                SourceExitStatus::Error(e.to_string())
-            },
-        };
+        if let Err(e) = Self::stream_loop(config, filters, tx).await {
+            error!(error = %e, "Jetstream streaming failed");
+            return Err(e.into());
+        }
 
-        Ok(exit_status)
+        Ok(SourceExitStatus::Completed)
     }
 }
 
@@ -782,8 +774,8 @@ impl JetstreamSource {
             None
         };
 
-        // Signals broadcast before this subscribe are lost, so callers should
-        // broadcast only after `connect()` returns.
+        // A signal broadcast before this subscribe is lost, so a shutdown sent
+        // while the source is still starting up does not stop the replay.
         let shutdown_signal = config.shutdown_signal_tx.as_ref().map(|tx| tx.subscribe());
 
         // `stats_interval_slots == 0` disables stats, which also avoids upstream's

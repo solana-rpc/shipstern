@@ -74,7 +74,8 @@ impl Default for BufferConfig {
     }
 }
 
-/// Helper type for blank configuration sections.
+/// Helper type for blank configuration sections, such as the `Config` of a
+/// [`FromConfig`](crate::sources::FromConfig) source that takes no settings.
 #[derive(
     Default,
     Debug,

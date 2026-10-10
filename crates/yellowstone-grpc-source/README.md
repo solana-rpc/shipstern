@@ -211,7 +211,7 @@ Box a `dyn FilterUpdateSource` instead to keep `Runtime::handle`.
 
 ### Best Practices
 
-1. **Exit status**: Return the `SourceExitStatus` that describes how the stream ended, so the runtime can tell a clean end from a failure. Return an `Err` when the source cannot connect at all.
+1. **Exit status**: Return an `Err` when the source fails, and the `SourceExitStatus` that describes how the stream ended otherwise. A stream loop that `break`s with its result can end on `StreamError` or `Error` instead, and the runtime stops with an error for those too.
 2. **Backpressure**: `tx.send(..).await` fails once the runtime has stopped. Treat that as a signal to return with `ReceiverDropped`, not as an error.
 3. **Filters**: Translate the whole `Filters` set into the narrowest subscription the provider supports, so the runtime discards as little as possible.
 4. **State**: Anything the source needs beyond its config, a shared client for instance, can live on the struct since the caller constructs it.

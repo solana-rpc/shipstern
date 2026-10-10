@@ -62,9 +62,9 @@ timeout = 60
 # Metrics are not configured from this file. The runtime takes a
 # `prometheus::Registry` through the builder instead:
 #
-#     Runtime::<YellowstoneGrpcSource>::builder()
+#     Runtime::builder()
 #         .metrics(prometheus::Registry::new())
-#         .build(config)
+#         .build::<YellowstoneGrpcSource>(config)
 #
 # and it serves no HTTP endpoint of its own. `examples/prometheus` gathers that
 # registry on an interval and pushes it to a Pushgateway; `docker-compose.yaml`

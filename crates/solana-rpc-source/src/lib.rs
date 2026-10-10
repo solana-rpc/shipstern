@@ -161,32 +161,32 @@ impl SourceTrait for SolanaAccountsRpcSource {
             }
         }
 
-        let mut exit_status = SourceExitStatus::Completed;
-
         // One task runs per (filter, owner) pair and the runtime treats a source
-        // `Error` as fatal, so the first failure wins: keeping later errors adds
+        // `Err` as fatal, so the first failure wins: keeping later errors adds
         // nothing, and updates already sent by sibling tasks stay in the buffer.
+        let mut first_error: Option<String> = None;
+
         while let Some(task_result) = tasks_set.join_next().await {
-            match task_result {
-                Ok(Ok(())) => {},
+            let msg = match task_result {
+                Ok(Ok(())) => continue,
                 Ok(Err(msg)) => {
                     tracing::error!(%msg, "Solana RPC source task failed");
-
-                    if matches!(exit_status, SourceExitStatus::Completed) {
-                        exit_status = SourceExitStatus::Error(msg);
-                    }
+                    msg
                 },
                 Err(e) => {
                     tracing::error!(err = %e, "Solana RPC source task panicked or was cancelled");
-
-                    if matches!(exit_status, SourceExitStatus::Completed) {
-                        exit_status = SourceExitStatus::Error(e.to_string());
-                    }
+                    e.to_string()
                 },
-            }
+            };
+
+            first_error.get_or_insert(msg);
         }
 
-        Ok(exit_status)
+        if let Some(msg) = first_error {
+            return Err(ShipsternError::Other(msg.into()));
+        }
+
+        Ok(SourceExitStatus::Completed)
     }
 }
 
@@ -222,20 +222,20 @@ mod tests {
             });
             let (tx, mut rx) = mpsc::channel(1);
 
-            let status = source
-                .connect(SourceContext::new(filters, tx))
-                .await
-                .expect("connect should report task failure through source status");
-            let shipstern::sources::SourceExitStatus::Error(msg) = status else {
-                panic!("expected source error, got {status:?}");
+            let result = source.connect(SourceContext::new(filters, tx)).await;
+
+            let Err(shipstern::Error::Other(err)) = result else {
+                panic!("expected a connect error, got {result:?}");
             };
-            assert!(msg.contains("Failed to get slot for source: solana-rpc"));
+            assert!(err
+                .to_string()
+                .contains("Failed to get slot for source: solana-rpc"));
             assert!(rx.try_recv().is_err());
         });
     }
 
     #[test]
-    fn connect_with_multiple_filters_reports_single_error_status() {
+    fn connect_with_multiple_filters_reports_one_error() {
         let runtime = tokio::runtime::Runtime::new().expect("runtime should build");
 
         runtime.block_on(async {
@@ -262,14 +262,14 @@ mod tests {
             });
             let (tx, mut rx) = mpsc::channel(1);
 
-            let status = source
-                .connect(SourceContext::new(filters, tx))
-                .await
-                .expect("connect should report task failures through source status");
-            let shipstern::sources::SourceExitStatus::Error(msg) = status else {
-                panic!("expected source error, got {status:?}");
+            let result = source.connect(SourceContext::new(filters, tx)).await;
+
+            let Err(shipstern::Error::Other(err)) = result else {
+                panic!("expected a connect error, got {result:?}");
             };
-            assert!(msg.contains("Failed to get slot for source: solana-rpc"));
+            assert!(err
+                .to_string()
+                .contains("Failed to get slot for source: solana-rpc"));
             assert!(rx.try_recv().is_err());
         });
     }
