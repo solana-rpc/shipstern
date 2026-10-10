@@ -224,6 +224,9 @@ pub struct TypeDef {
 }
 
 impl TypeDef {
+    /// Anchor omits the key when empty; a hand-written `[]` must mean the same.
+    pub fn is_generic(&self) -> bool { self.generics.as_ref().is_some_and(|g| !g.is_empty()) }
+
     pub fn is_enum(&self) -> bool {
         self.ty
             .as_ref()

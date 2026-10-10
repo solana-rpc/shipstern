@@ -29,7 +29,7 @@ pub(crate) fn pad_zero_copy(idl: &mut Idl) -> Result<(), Error> {
             .accounts
             .iter()
             .filter_map(|a| layouts.defs.get(a.name.as_str()).copied())
-            .filter(|t| t.generics.is_none())
+            .filter(|t| !t.is_generic())
             .collect();
 
         let in_bytemuck = reachable(
@@ -57,7 +57,7 @@ pub(crate) fn pad_zero_copy(idl: &mut Idl) -> Result<(), Error> {
                     .iter()
                     .filter(|t| in_bytemuck.contains(t.name.as_str())),
             )
-            .filter(|t| is_bytemuck_unsafe(t) && t.generics.is_none())
+            .filter(|t| is_bytemuck_unsafe(t) && !t.is_generic())
             .collect();
 
         if let Some(ty) = roots.iter().find(|t| layouts.struct_layout(t, 0).is_none()) {
@@ -176,7 +176,7 @@ fn is_bytemuck_unsafe(ty: &TypeDef) -> bool {
 
 /// A generic alias has no fixed layout.
 fn alias_target(ty: &TypeDef) -> Option<&Value> {
-    if ty.generics.is_some() {
+    if ty.is_generic() {
         return None;
     }
 
@@ -202,6 +202,15 @@ struct Layout {
 
 /// The IDL's types, each nested type's shape computed once: recomputing it per
 /// use is exponential in the nesting.
+/// Anchor omits `fields` on an empty struct, and the type mapping reads that as
+/// empty; the layout walker must agree, or a marker struct hides the whole account.
+fn struct_fields(ty: &TypeDef) -> Option<&[Value]> {
+    match ty.ty.as_ref()?.as_object()?.get("fields") {
+        None | Some(Value::Null) => Some(&[]),
+        Some(fields) => fields.as_array().map(Vec::as_slice),
+    }
+}
+
 struct Layouts<'a> {
     defs: HashMap<&'a str, &'a TypeDef>,
     known: RefCell<HashMap<&'a str, Option<Shape>>>,
@@ -210,7 +219,7 @@ struct Layouts<'a> {
 impl<'a> Layouts<'a> {
     /// `None` when there is nothing to insert or the layout is not fully known.
     fn padded_fields(&self, ty: &'a TypeDef) -> Option<Vec<Value>> {
-        let fields = ty.ty.as_ref()?.get("fields")?.as_array()?;
+        let fields = struct_fields(ty)?;
         let layout = self.struct_layout(ty, 0)?;
 
         if layout.tail == 0 && layout.pads.iter().all(|&pad| pad == 0) {
@@ -258,11 +267,11 @@ impl<'a> Layouts<'a> {
     }
 
     fn struct_layout(&self, ty: &'a TypeDef, depth: usize) -> Option<Layout> {
-        if depth > crate::NESTING_LIMIT || ty.generics.is_some() {
+        if depth > crate::NESTING_LIMIT || ty.is_generic() {
             return None;
         }
 
-        let fields = ty.ty.as_ref()?.get("fields")?.as_array()?;
+        let fields = struct_fields(ty)?;
 
         // `repr(Rust)` has no field-order contract, even with `packed`.
         let repr = match ty.repr.as_ref()? {
@@ -272,7 +281,17 @@ impl<'a> Layouts<'a> {
 
         let shapes = fields
             .iter()
-            .map(|field| self.field_layout(field.get("type")?, depth))
+            .map(|field| {
+                // A tuple field is a bare type. Only `repr(transparent)` gives it a
+                // layout the parser can use, as a newtype.
+                let ty = match field.get("type") {
+                    Some(ty) => ty,
+                    None if matches!(repr, Repr::Transparent) => field,
+                    None => return None,
+                };
+
+                self.field_layout(ty, depth)
+            })
             .collect::<Option<Vec<_>>>()?;
 
         if matches!(repr, Repr::Transparent) {

@@ -72,7 +72,7 @@ JS writes output for each of these that fails to compile, panics in the renderer
 
 | Input | JS 1.5.6 | Error |
 |---|---|---|
-| `zero_copy(unsafe)` account with `repr(Rust)`, no `repr`, an option, a vec, a string, a generic, or a tuple struct, at any depth | Reads it as Borsh | `UnknownLayout` |
+| `zero_copy(unsafe)` account with `repr(Rust)`, no `repr`, an option, a vec, a string, a generic, or a tuple struct that is not `repr(transparent)`, at any depth | Reads it as Borsh | `UnknownLayout` |
 | Enum at any depth of a `zero_copy` or `zero_copy(unsafe)` account | Reads it as a one-byte Borsh enum: misreads every field after Stakenet steward's `repr(u64)` enum | `UnknownLayout` |
 | Type with implicit padding in a `zero_copy(unsafe)` account that Borsh also reads (an instruction argument, an event, or a Borsh account field) | Misreads one of the two | `PaddedBorshType` |
 | Two types, instructions, accounts or events of one kind whose names camel-case alike, such as `MyType` and `my_type` | Writes both, which do not compile; deletes every copy of identical types and leaves dangling links | `NameCollision` |
@@ -125,7 +125,7 @@ JS reads a legacy IDL with separate v00 functions. This crate runs Anchor's own 
 - removes instruction-account `pda` entries, since the parser never reads PDAs and the upgrade fails on a const seed that is not a string or bytes;
 - types a constant written as `{"defined": "usize"}`, which is how Anchor 0.29 wrote `usize` constants, as `u64`;
 - names and hashes instructions with JS's snake case. The upgrade uses heck 0.3, which turns `setAB`, Anchor 0.29's name for Rust `set_a_b`, into `set_ab`;
-- hashes account and event discriminators from the name with its first letter uppercased, since Anchor hashes the Rust type name. The upgrade hashes the name as written, so the account Pyth's receiver IDL calls `priceUpdateV2` would get a discriminator that no `PriceUpdateV2` account has. JS pascal-cases the whole name, which also drops underscores, so a `Pool_State` account converted by JS matches nothing.
+- hashes account and event discriminators from the name with its first letter uppercased, since Anchor hashes the Rust type name. The upgrade hashes the name as written, so the account Pyth's receiver IDL calls `priceUpdateV2` would get a discriminator that no `PriceUpdateV2` account has. JS pascal-cases the whole name, which also drops underscores, so a `Pool_State` account converted by JS matches nothing. A snake_case name like `pool_state` cannot be a Rust type, so this crate pascal-cases that spelling only.
 
 | Input | JS 1.5.6 | This crate |
 |---|---|---|

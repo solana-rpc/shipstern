@@ -244,11 +244,11 @@ fn upgrade_legacy(mut idl: Value) -> Result<Value, Error> {
     // Anchor hashes the Rust type name. Some hand-made IDLs lowercase its first
     // letter, like Pyth's `priceUpdateV2`, and the upgrade hashes that as written.
     for account in &mut upgraded.accounts {
-        account.discriminator = discriminator("account", &upper_first(&account.name));
+        account.discriminator = discriminator("account", &rust_type_name(&account.name));
     }
 
     for event in &mut upgraded.events {
-        event.discriminator = discriminator("event", &upper_first(&event.name));
+        event.discriminator = discriminator("event", &rust_type_name(&event.name));
     }
 
     Ok(serde_json::to_value(upgraded)?)
@@ -259,6 +259,16 @@ fn discriminator(namespace: &str, name: &str) -> Vec<u8> {
 }
 
 /// Not JS's pascal case, which also drops `_`: `Pool_State` is hashed as written.
+/// Anchor hashes the Rust type name. A snake_case name cannot be one, so it is
+/// read as the hand-written form of a PascalCase type; any other spelling is kept.
+fn rust_type_name(name: &str) -> String {
+    if name.contains('_') && !name.bytes().any(|b| b.is_ascii_uppercase()) {
+        return case::pascal_case(name);
+    }
+
+    upper_first(name)
+}
+
 fn upper_first(name: &str) -> String {
     let mut chars = name.chars();
 

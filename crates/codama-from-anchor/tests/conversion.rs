@@ -193,6 +193,22 @@ fn legacy_accounts_hash_their_rust_name() {
     assert_eq!(discriminators, ["22f123639d7ef4cd", "aabd5e99fc91f0ad"]);
 }
 
+/// `pool_state` cannot be a Rust type name, so it hashes as `PoolState`.
+#[test]
+fn a_snake_case_legacy_account_hashes_its_pascal_case_name() {
+    let idl = legacy(json!({
+        "accounts": [{ "name": "pool_state", "type": { "kind": "struct", "fields": [] } }]
+    }));
+
+    let root = serde_json::to_value(root_node_from_anchor(idl).expect("converts"))
+        .expect("serialize root");
+
+    assert_eq!(
+        root["program"]["accounts"][0]["data"]["fields"][0]["defaultValue"]["data"],
+        json!("f7ede3f5d7c3de46")
+    );
+}
+
 /// Anchor 0.29 writes Rust `set_a_b` as `setAB`, which heck 0.3 reads back as `set_ab`.
 #[test]
 fn a_legacy_instruction_with_single_letter_words_hashes_its_rust_name() {
@@ -686,7 +702,7 @@ fn a_zero_copy_c_struct_gets_its_implicit_padding() {
     // A real field already named like the padding keeps its name.
     let taken = zero_copy_c(
         "T",
-        json!([{ "name": "padding_before_b", "type": "u8" }, { "name": "b", "type": "u64" }]),
+        json!([{ "name": "paddingBeforeB", "type": "u8" }, { "name": "b", "type": "u64" }]),
     );
 
     assert_eq!(
@@ -1105,4 +1121,88 @@ fn a_string_error_code_or_bare_constant_value_converts() {
 
     assert_eq!(root["program"]["errors"][0]["code"], 6000);
     assert_eq!(root["program"]["constants"][0]["value"]["number"], 5);
+}
+
+/// Anchor writes an empty struct without a `fields` key.
+#[test]
+fn a_zero_copy_marker_struct_without_fields_is_empty() {
+    let mut marker = zero_copy_c("Marker", json!([]));
+    marker["type"]
+        .as_object_mut()
+        .expect("object")
+        .remove("fields");
+
+    let types = json!([
+        zero_copy_c(
+            "Acc",
+            json!([
+                { "name": "a", "type": "u8" },
+                { "name": "m", "type": { "defined": { "name": "Marker" } } },
+                { "name": "b", "type": "u64" }
+            ])
+        ),
+        marker
+    ]);
+
+    assert_eq!(
+        field_sizes(types, ACCOUNT),
+        json!([["a", null], ["m", null], ["paddingBeforeB", 7], ["b", null]])
+    );
+}
+
+/// A `repr(transparent)` newtype has the layout of its one field.
+#[test]
+fn a_transparent_newtype_in_a_zero_copy_account_has_a_layout() {
+    let types = json!([
+        zero_copy_c("Acc", json!([
+            { "name": "a", "type": "u8" },
+            { "name": "amt", "type": { "defined": { "name": "Amount" } } }
+        ])),
+        {
+            "name": "Amount",
+            "serialization": "bytemuckunsafe",
+            "repr": { "kind": "transparent" },
+            "type": { "kind": "struct", "fields": ["u64"] }
+        }
+    ]);
+
+    assert_eq!(
+        field_sizes(types, ACCOUNT),
+        json!([["a", null], ["paddingBeforeAmt", 7], ["amt", null]])
+    );
+}
+
+/// Anchor omits `generics` when empty; a hand-written `[]` means the same.
+#[test]
+fn an_explicit_empty_generics_list_is_a_plain_type() {
+    let types = json!([
+        { "name": "Plain", "generics": [], "type": { "kind": "struct", "fields": [{ "name": "a", "type": "u8" }] } },
+        { "name": "Outer", "type": { "kind": "struct", "fields": [
+            { "name": "p", "type": { "defined": { "name": "Plain", "generics": [] } } }
+        ] } }
+    ]);
+
+    let root = convert(json!({ "types": types })).expect("converts");
+
+    assert_eq!(
+        root.pointer("/program/definedTypes/1/type/fields/0/type/kind"),
+        Some(&json!("definedTypeLinkNode"))
+    );
+}
+
+/// A typedef without a body is an empty struct for a defined type, so an
+/// account reads it the same way instead of failing on `null`.
+#[test]
+fn an_account_typedef_without_a_body_is_an_empty_struct() {
+    let root = convert(json!({
+        "types": [{ "name": "Acc" }],
+        "accounts": [{ "name": "Acc", "discriminator": [1] }]
+    }))
+    .expect("converts");
+
+    let fields = root
+        .pointer("/program/accounts/0/data/fields")
+        .and_then(Value::as_array);
+
+    assert_eq!(fields.map(Vec::len), Some(1), "only the discriminator");
 }

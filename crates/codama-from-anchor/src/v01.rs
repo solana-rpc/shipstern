@@ -523,7 +523,8 @@ fn payload(
         return Err(Error::EmptyDiscriminator);
     }
 
-    type_node(ty.ty.as_ref().unwrap_or(&Value::Null), generics)
+    // Same reading of a missing body as `defined_type_node`.
+    type_node(&ty.ty.clone().unwrap_or_else(empty_struct), generics)
 }
 
 fn account_node(

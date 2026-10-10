@@ -36,7 +36,7 @@ pub(crate) fn camel_case(input: &str) -> String {
     }
 }
 
-fn pascal_case(input: &str) -> String { title_words(input).concat() }
+pub(crate) fn pascal_case(input: &str) -> String { title_words(input).concat() }
 
 pub(crate) fn snake_case(input: &str) -> String {
     title_words(input).join("_").to_ascii_lowercase()

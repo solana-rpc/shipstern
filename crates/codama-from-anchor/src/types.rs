@@ -36,7 +36,7 @@ impl<'a> Generics<'a> {
     /// Generic types never become defined types; each use is expanded inline.
     pub(crate) fn extract(types: &'a [TypeDef]) -> (Vec<&'a TypeDef>, Self) {
         let (generic, plain): (Vec<&TypeDef>, Vec<&TypeDef>) =
-            types.iter().partition(|t| t.generics.is_some());
+            types.iter().partition(|t| t.is_generic());
 
         let defs = Defs {
             generic: generic.into_iter().map(|t| (t.name.as_str(), t)).collect(),
@@ -381,8 +381,14 @@ fn defined_type(
         .and_then(Value::as_str)
         .ok_or_else(|| unrecognized(&Value::Object(defined.clone())))?;
 
+    // Anchor omits `generics` when empty; a hand-written `[]` is a plain link too.
+    let args = defined
+        .get("generics")
+        .and_then(Value::as_array)
+        .filter(|args| !args.is_empty());
+
     // A dangling link would only fail later, as a missing type in rustc.
-    if !defined.contains_key("generics") {
+    let Some(args) = args else {
         if generics.defs.generic.contains_key(name) {
             return Err(Error::GenericArgsMissing(name.to_owned()));
         }
@@ -395,7 +401,7 @@ fn defined_type(
             name: ident(name)?,
             program: None,
         }));
-    }
+    };
 
     let generic_type = generics
         .defs
@@ -407,12 +413,6 @@ fn defined_type(
     if generic_type.is_enum() {
         return Err(Error::GenericEnum(name.to_owned()));
     }
-
-    let args = defined
-        .get("generics")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
 
     let mut scope = Generics::scope(Rc::clone(&generics.defs));
 
