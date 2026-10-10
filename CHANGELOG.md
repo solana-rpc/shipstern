@@ -13,6 +13,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `shipstern-jetstream-source`: bumped `jetstreamer-firehose` and `jetstreamer-utils` to `0.8.1`. The Rust toolchain moves from 1.93.0 to 1.93.1, which jetstreamer's `serial_test` 4 dependency needs ([#346](https://github.com/solana-rpc/shipstern/pull/346) by @senzenn).
 - `shipstern-core`: merging two prefilters that name the same comparison, one of them written with a repeat, now keeps the comparison instead of dropping it and widening ([#333](https://github.com/solana-rpc/shipstern/pull/333) by @senzenn).
 
 ### Fixed
