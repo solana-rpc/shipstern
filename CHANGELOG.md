@@ -9,11 +9,13 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `shipstern-core`: `PrefilterBuilder::account_cuckoo`, `transaction_cuckoo_accounts_include` and `block_cuckoo_accounts_include` send account sets as Yellowstone cuckoo filters; merging unions the sets. richat 13.0.2 accepts only the account variant and rejects the transaction and block fields with `InvalidArgument`, which stops the source ([#334](https://github.com/solana-rpc/shipstern/pull/334) closing [#330](https://github.com/solana-rpc/shipstern/issues/330) by @senzenn).
 - `shipstern-core`: `TransactionPrefilter::token_accounts` and `PrefilterBuilder::transaction_token_accounts` pass Yellowstone's `token_accounts` ([rpcpool/yellowstone-grpc#762](https://github.com/rpcpool/yellowstone-grpc/pull/762)) through; merging disagreeing modes takes the wider one and drops `accounts_exclude`.
 - `shipstern-proc-macro`: accept Anchor 0.1.0 and legacy IDLs with `shipstern-codama-from-anchor` ([#337](https://github.com/solana-rpc/shipstern/pull/337), [#329](https://github.com/solana-rpc/shipstern/issues/329) by @senzenn).
 
 ### Changed
 
+- **Breaking** for struct-literal construction: `AccountPrefilter` gained `cuckoo_accounts`, and `TransactionPrefilter` and `BlockPrefilter` gained `cuckoo_accounts_include` ([#334](https://github.com/solana-rpc/shipstern/pull/334) by @senzenn).
 - `shipstern-core`: merging two prefilters that name the same comparison, one of them written with a repeat, now keeps the comparison instead of dropping it and widening ([#333](https://github.com/solana-rpc/shipstern/pull/333) by @senzenn).
 - `shipstern-proc-macro`: map fields are generated as `Vec<{Base}Entry>` with `key` and `value` instead of `Vec<u8>`, and set fields as a `Vec` of their item, which proto schemas emit as `repeated` ([#342](https://github.com/solana-rpc/shipstern/pull/342) by @senzenn).
 
