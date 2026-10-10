@@ -109,8 +109,8 @@ pub fn build_fields_ir(
 }
 
 /// Materialize a Codama type whenever its protobuf form needs a named message,
-/// recursing through arrays, tuples and options. Deeper wrappers get suffixes so
-/// a name is never reused at another depth.
+/// recursing through arrays, maps, sets, tuples and options. Deeper wrappers get
+/// suffixes so a name is never reused at another depth.
 pub fn materialize_type(
     base_name: &str,
     type_node: &codama_nodes::TypeNode,
@@ -195,6 +195,24 @@ pub fn materialize_type(
             });
 
             (outer_label, FieldTypeIr::Message(wrapper_name))
+        },
+
+        // Borsh writes a map as a count then key-value pairs and a set as a count
+        // then items, so both decode as arrays of entries or items.
+        T::Map(map) => {
+            let entry = codama_nodes::StructTypeNode::new(vec![
+                codama_nodes::StructFieldTypeNode::new("key", (*map.key).clone()),
+                codama_nodes::StructFieldTypeNode::new("value", (*map.value).clone()),
+            ]);
+            let entries = codama_nodes::ArrayTypeNode::new(entry, (*map.count).clone());
+
+            materialize_type(&format!("{base_name}Entry"), &T::Array(entries), ir, kind)
+        },
+
+        T::Set(set) => {
+            let items = codama_nodes::ArrayTypeNode::new((*set.item).clone(), (*set.count).clone());
+
+            materialize_type(base_name, &T::Array(items), ir, kind)
         },
 
         T::Link(link) => {
@@ -402,10 +420,6 @@ fn map_type(t: &codama_nodes::TypeNode) -> FieldTypeIr {
 
         T::Option(o) => map_type(&o.item),
         T::Array(a) => map_type(&a.item),
-
-        // Maps have no direct proto equivalent with complex key/value types;
-        // serialize the entire map as a raw byte blob.
-        T::Map(_) => FieldTypeIr::Scalar(ScalarIr::Bytes),
 
         other => panic!("map_type not implemented for {:?}", other),
     }

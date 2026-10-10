@@ -169,3 +169,28 @@ fn bare_tuple_deserializes_exact_borsh_wire() {
 
     assert_eq!((decoded, reencoded), (expected, encoded));
 }
+
+/// SPL Token keeps the old key when it sets a `COption` to `None`, so the bytes
+/// after a `None` tag must not have to be zero.
+#[test]
+fn fixed_none_skips_leftover_padding() {
+    use borsh::BorshDeserialize;
+
+    let wire = |padding: [u8; 6]| {
+        [
+            &[0u8][..],
+            &[0u8; 25][..],
+            &[0u8][..],
+            &padding[..],
+            &[1, b'a', b'a', b'a', 2, b'b', b'b', b'b'][..],
+            &[7, 1, 8, 0, 0, 0, 0, 42][..],
+        ]
+        .concat()
+    };
+
+    let clean = inline_struct::instruction::SetMetadataArgs::try_from_slice(&wire([0; 6])).unwrap();
+    let leftover = inline_struct::instruction::SetMetadataArgs::try_from_slice(&wire([9; 6]))
+        .expect("None with leftover bytes should decode");
+
+    assert_eq!(leftover, clean);
+}

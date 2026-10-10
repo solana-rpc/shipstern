@@ -1,5 +1,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
-use codama_nodes::{CamelCaseString, DiscriminatorNode, Number, TypeNode, ValueNode};
+use codama_nodes::{
+    CamelCaseString, DiscriminatorNode, Endianness, Number, NumberFormat, TypeNode, ValueNode,
+};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
@@ -7,32 +9,110 @@ use quote::{format_ident, quote};
 /// Instructions with the same key will match the same discriminator check.
 #[derive(PartialEq, Eq, Clone)]
 pub(crate) enum DiscriminatorKey {
-    Constant { offset: usize, value: u64 },
     Field { offset: usize, bytes: Vec<u8> },
     Size { size: usize },
 }
 
 impl DiscriminatorKey {
-    ///
-    /// On-wire discriminator bytes and the offset they appear at.
-    ///
-    /// Mirrors exactly what the generated match arm compares: numeric
-    /// discriminators are checked as `*d == (value as u8)`, so they narrow to a
-    /// single byte here too.
-    ///
-    /// `None` for size-only discriminators, which have no byte prefix.
-    ///
+    /// On-wire discriminator bytes and the offset they appear at; `None` for
+    /// size-only discriminators, which have no byte prefix.
     pub(crate) fn to_bytes_offset(&self) -> Option<(Vec<u8>, usize)> {
         match self {
-            DiscriminatorKey::Constant { offset, value } => Some((vec![*value as u8], *offset)),
             DiscriminatorKey::Field { offset, bytes } => Some((bytes.clone(), *offset)),
             DiscriminatorKey::Size { .. } => None,
         }
     }
 }
 
+/// On-wire bytes of a number discriminator at its type's full width. Panics on a
+/// value it cannot encode, so the build fails instead of dropping the dispatch arm.
+pub(crate) fn number_discriminator_bytes(ty: &TypeNode, value: u64) -> Vec<u8> {
+    let TypeNode::Number(number) = ty else {
+        panic!("number discriminator {value} has a non-number type");
+    };
+
+    let width = match number.format {
+        NumberFormat::U8 | NumberFormat::I8 => 1,
+        NumberFormat::U16 | NumberFormat::I16 => 2,
+        NumberFormat::U32 | NumberFormat::I32 => 4,
+        NumberFormat::U64 | NumberFormat::I64 => 8,
+        NumberFormat::U128 | NumberFormat::I128 => 16,
+        // A compact-u16 below 0x80 is one byte.
+        NumberFormat::ShortU16 if value < 0x80 => 1,
+        format => panic!("number discriminator {value} as {format:?} is not supported"),
+    };
+
+    let signed = matches!(
+        number.format,
+        NumberFormat::I8
+            | NumberFormat::I16
+            | NumberFormat::I32
+            | NumberFormat::I64
+            | NumberFormat::I128
+    );
+    let bits = width * 8 - usize::from(signed);
+    let value = u128::from(value);
+
+    if bits < 128 && value >> bits != 0 {
+        panic!(
+            "number discriminator {value} does not fit {:?}",
+            number.format
+        );
+    }
+
+    let mut bytes = value.to_le_bytes()[..width].to_vec();
+
+    if matches!(number.endian, Endianness::Be) {
+        bytes.reverse();
+    }
+
+    bytes
+}
+
+/// Offset and bytes of a discriminator that is a byte prefix; `None` for a size
+/// discriminator or one the parser cannot match.
+fn prefix_discriminator(
+    discriminator: &DiscriminatorNode,
+    resolve_field: impl Fn(&CamelCaseString) -> Option<ResolvedFieldDiscriminator>,
+) -> Option<(usize, Vec<u8>)> {
+    match discriminator {
+        DiscriminatorNode::Constant(cn) => {
+            let bytes = match cn.constant.value.as_ref() {
+                ValueNode::Number(nn) => {
+                    let Number::UnsignedInteger(value) = nn.number else {
+                        return None;
+                    };
+
+                    number_discriminator_bytes(&cn.constant.r#type, value)
+                },
+                ValueNode::Bytes(bv) => decode_discriminator_field_bytes(bv),
+                _ => return None,
+            };
+
+            Some((crate::utils::as_index(cn.offset), bytes))
+        },
+
+        // Anchor's 8-byte sighash or a Shank number, both a byte prefix.
+        DiscriminatorNode::Field(node) => {
+            let resolved = resolve_field(&node.name)?;
+            let bytes = resolved.bytes?;
+
+            // A default that does not fill its declared width can never match on the wire.
+            match resolved.r#type {
+                TypeNode::FixedSize(fixed) if fixed.size == bytes.len() => {},
+                TypeNode::Number(_) => {},
+                _ => return None,
+            }
+
+            Some((crate::utils::as_index(node.offset), bytes))
+        },
+
+        DiscriminatorNode::Size(_) => None,
+    }
+}
+
 /// Decode discriminator bytes from a codama [`BytesValueNode`](codama_nodes::BytesValueNode).
-pub(crate) fn decode_discriminator_field_bytes(bytes: &codama_nodes::BytesValueNode) -> Vec<u8> {
+fn decode_discriminator_field_bytes(bytes: &codama_nodes::BytesValueNode) -> Vec<u8> {
     match bytes.encoding {
         codama_nodes::BytesEncoding::Base16 => {
             let padded = crate::utils::pad_hex(&bytes.data);
@@ -66,7 +146,7 @@ fn resolve_ix_field(
                 return None;
             };
 
-            Some(vec![value as u8])
+            Some(number_discriminator_bytes(&field.r#type, value))
         },
         _ => None,
     };
@@ -101,22 +181,6 @@ pub(crate) fn extract_ix_discriminator_key(
     ix: &codama_nodes::InstructionNode,
 ) -> Option<DiscriminatorKey> {
     extract_discriminator_key(&ix.discriminators, |name| resolve_ix_field(ix, name))
-}
-
-///
-/// Width of the window the match arm compares for a fixed-size discriminator
-/// field; a mismatch with the decoded bytes makes the arm unmatchable. `None`
-/// for constant-bytes and numeric discriminators, which size it themselves.
-///
-fn ix_discriminator_slice_width(ix: &codama_nodes::InstructionNode) -> Option<usize> {
-    let DiscriminatorNode::Field(node) = ix.discriminators.first()? else {
-        return None;
-    };
-
-    match resolve_ix_field(ix, &node.name)?.r#type {
-        TypeNode::FixedSize(fixed) => Some(fixed.size),
-        _ => None,
-    }
 }
 
 ///
@@ -261,62 +325,15 @@ fn extract_discriminator_key(
 ) -> Option<DiscriminatorKey> {
     let discriminator = discriminators.first()?;
 
-    match discriminator {
-        DiscriminatorNode::Constant(cn) => match cn.constant.value.as_ref() {
-            ValueNode::Number(nn) => {
-                let Number::UnsignedInteger(value) = nn.number else {
-                    return None;
-                };
-
-                Some(DiscriminatorKey::Constant {
-                    offset: crate::utils::as_index(cn.offset),
-                    value,
-                })
-            },
-
-            ValueNode::Bytes(bv) => {
-                let bytes = decode_discriminator_field_bytes(bv);
-
-                Some(DiscriminatorKey::Field {
-                    offset: crate::utils::as_index(cn.offset),
-                    bytes,
-                })
-            },
-
-            _ => None,
-        },
-        DiscriminatorNode::Field(node) => {
-            let resolved = resolve_field(&node.name)?;
-
-            match &resolved.r#type {
-                // Anchor-style: fixed-size bytes discriminator (e.g. 8-byte sighash)
-                TypeNode::FixedSize(_) => {
-                    let bytes = resolved.bytes?;
-
-                    Some(DiscriminatorKey::Field {
-                        offset: crate::utils::as_index(node.offset),
-                        bytes,
-                    })
-                },
-
-                // Shank-style: single number discriminator (e.g. u8 index)
-                TypeNode::Number(_) => {
-                    let bytes = resolved.bytes?;
-                    let value = bytes.first().copied()? as u64;
-
-                    Some(DiscriminatorKey::Constant {
-                        offset: crate::utils::as_index(node.offset),
-                        value,
-                    })
-                },
-
-                _ => None,
-            }
-        },
-        DiscriminatorNode::Size(sn) => Some(DiscriminatorKey::Size {
+    if let DiscriminatorNode::Size(sn) = discriminator {
+        return Some(DiscriminatorKey::Size {
             size: crate::utils::as_index(sn.size),
-        }),
+        });
     }
+
+    let (offset, bytes) = prefix_discriminator(discriminator, resolve_field)?;
+
+    Some(DiscriminatorKey::Field { offset, bytes })
 }
 
 /// Information extracted from a discriminator that's needed by both the match arm and helper fn.
@@ -337,176 +354,55 @@ fn extract_discriminator_info(
 ) -> Option<DiscriminatorInfo> {
     let discriminator = discriminators.first()?;
 
-    match discriminator {
-        // Constant discriminator at offset
-        DiscriminatorNode::Constant(cn) => {
-            let offset_at = crate::utils::as_index(cn.offset);
-            let offset = crate::utils::unsuffixed(offset_at as u64);
+    // Discriminator by total size only
+    if let DiscriminatorNode::Size(sn) = discriminator {
+        let size = crate::utils::unsuffixed(sn.size);
 
-            match cn.constant.value.as_ref() {
-                // 1-byte number discriminator
-                ValueNode::Number(nn) => {
-                    let Number::UnsignedInteger(value) = nn.number else {
-                        return None;
-                    };
+        let args_expr = if has_args {
+            Some(quote! {
+                {
+                    let mut slice: &[u8] = data;
 
-                    let args_start = crate::utils::unsuffixed((offset_at + 1) as u64);
+                    <#mod_ident::#args_ident as ::borsh::BorshDeserialize>::deserialize_reader(&mut slice)
+                        .map_err(|e| ParseError::Other(e.into()))?
+                }
+            })
+        } else {
+            None
+        };
 
-                    let args_expr = if has_args {
-                        Some(quote! {
-                            {
-                                let mut slice: &[u8] = data.get(#args_start..).ok_or(ParseError::from("Missing args bytes"))?;
+        let check = quote! {
+            data.len() == #size
+        };
 
-                                <#mod_ident::#args_ident as ::borsh::BorshDeserialize>::deserialize_reader(&mut slice)
-                                    .map_err(|e| ParseError::Other(e.into()))?
-                            }
-                        })
-                    } else {
-                        None
-                    };
-
-                    let check = quote! {
-                        if let Some(d) = data.get(#offset) {
-                            *d == (#value as u8)
-                        } else {
-                            false
-                        }
-                    };
-
-                    Some(DiscriminatorInfo { args_expr, check })
-                },
-
-                // Multi-byte constant discriminator (e.g. anchor event sighash)
-                ValueNode::Bytes(bv) => {
-                    let discriminator_bytes = decode_discriminator_field_bytes(bv);
-                    let size = discriminator_bytes.len();
-                    let end = crate::utils::unsuffixed((offset_at + size) as u64);
-
-                    let args_expr = if has_args {
-                        Some(quote! {
-                            {
-                                let mut slice: &[u8] = data.get(#end..).ok_or(ParseError::from("Missing args bytes"))?;
-
-                                <#mod_ident::#args_ident as ::borsh::BorshDeserialize>::deserialize_reader(&mut slice)
-                                    .map_err(|e| ParseError::Other(e.into()))?
-                            }
-                        })
-                    } else {
-                        None
-                    };
-
-                    let check = quote! {
-                        if let Some(slice) = data.get(#offset..#end) {
-                            slice == &[#(#discriminator_bytes),*]
-                        } else {
-                            false
-                        }
-                    };
-
-                    Some(DiscriminatorInfo { args_expr, check })
-                },
-
-                _ => None,
-            }
-        },
-
-        // Field-based discriminator (Anchor 8-byte sighash or Shank u8 index)
-        DiscriminatorNode::Field(node) => {
-            let offset_at = crate::utils::as_index(node.offset);
-            let offset = crate::utils::unsuffixed(offset_at as u64);
-            let resolved = resolve_field(&node.name)?;
-
-            match &resolved.r#type {
-                // Anchor-style: fixed-size bytes discriminator
-                TypeNode::FixedSize(fixed_size_node) => {
-                    let size = fixed_size_node.size;
-                    let end = crate::utils::unsuffixed((offset_at + size) as u64);
-
-                    let discriminator_bytes = resolved.bytes?;
-
-                    let args_expr = if has_args {
-                        Some(quote! {
-                            {
-                                let mut slice: &[u8] = data.get(#end..).ok_or(ParseError::from("Missing args bytes"))?;
-
-                                <#mod_ident::#args_ident as ::borsh::BorshDeserialize>::deserialize_reader(&mut slice)
-                                    .map_err(|e| ParseError::Other(e.into()))?
-                            }
-                        })
-                    } else {
-                        None
-                    };
-
-                    let check = quote! {
-                        if let Some(slice) = data.get(#offset..#end) {
-                            slice == &[#(#discriminator_bytes),*]
-                        } else {
-                            false
-                        }
-                    };
-
-                    Some(DiscriminatorInfo { args_expr, check })
-                },
-
-                // Shank-style: single number discriminator (e.g. u8 index)
-                TypeNode::Number(_) => {
-                    let bytes = resolved.bytes?;
-                    let value = bytes.first().copied()? as u64;
-
-                    let args_start = crate::utils::unsuffixed((offset_at + 1) as u64);
-
-                    let args_expr = if has_args {
-                        Some(quote! {
-                            {
-                                let mut slice: &[u8] = data.get(#args_start..).ok_or(ParseError::from("Missing args bytes"))?;
-
-                                <#mod_ident::#args_ident as ::borsh::BorshDeserialize>::deserialize_reader(&mut slice)
-                                    .map_err(|e| ParseError::Other(e.into()))?
-                            }
-                        })
-                    } else {
-                        None
-                    };
-
-                    let check = quote! {
-                        if let Some(d) = data.get(#offset) {
-                            *d == (#value as u8)
-                        } else {
-                            false
-                        }
-                    };
-
-                    Some(DiscriminatorInfo { args_expr, check })
-                },
-
-                _ => None,
-            }
-        },
-
-        // Discriminator by total size only
-        DiscriminatorNode::Size(sn) => {
-            let size = crate::utils::unsuffixed(sn.size);
-
-            let args_expr = if has_args {
-                Some(quote! {
-                    {
-                        let mut slice: &[u8] = data;
-
-                        <#mod_ident::#args_ident as ::borsh::BorshDeserialize>::deserialize_reader(&mut slice)
-                            .map_err(|e| ParseError::Other(e.into()))?
-                    }
-                })
-            } else {
-                None
-            };
-
-            let check = quote! {
-                data.len() == #size
-            };
-
-            Some(DiscriminatorInfo { args_expr, check })
-        },
+        return Some(DiscriminatorInfo { args_expr, check });
     }
+
+    let (offset_at, discriminator_bytes) = prefix_discriminator(discriminator, resolve_field)?;
+
+    let offset = crate::utils::unsuffixed(offset_at as u64);
+    let end = crate::utils::unsuffixed((offset_at + discriminator_bytes.len()) as u64);
+
+    let args_expr = has_args.then(|| {
+        quote! {
+            {
+                let mut slice: &[u8] = data.get(#end..).ok_or(ParseError::from("Missing args bytes"))?;
+
+                <#mod_ident::#args_ident as ::borsh::BorshDeserialize>::deserialize_reader(&mut slice)
+                    .map_err(|e| ParseError::Other(e.into()))?
+            }
+        }
+    });
+
+    let check = quote! {
+        if let Some(slice) = data.get(#offset..#end) {
+            slice == &[#(#discriminator_bytes),*]
+        } else {
+            false
+        }
+    };
+
+    Some(DiscriminatorInfo { args_expr, check })
 }
 
 ///
@@ -617,10 +513,14 @@ fn single_instruction_helper_fn(
 ///
 /// Example output:
 /// ```rust, ignore
-/// if let Some(d) = data.get(0) {
-///     if *d == (9 as u8) {
-///         return parse_swap_base_in(accounts, data);
+/// if {
+///     if let Some(slice) = data.get(0..1) {
+///         slice == &[9]
+///     } else {
+///         false
 ///     }
+/// } {
+///     return parse_swap_base_in(accounts, data);
 /// }
 /// ```
 ///
@@ -678,16 +578,29 @@ pub(crate) fn collision_group_match_arm(
         by_count.entry(ix.accounts.len()).or_default().push(ix);
     }
 
+    let ambiguous_error = |names: &[String]| {
+        let msg = format!(
+            "Ambiguous instruction: variants [{}] share the same discriminator and account count. \
+             Use CustomInstructionParser to disambiguate.",
+            names.join(", ")
+        );
+
+        quote! {
+            return Err(ParseError::from(#msg));
+        }
+    };
+
     let mut inner_arms = Vec::new();
     let mut ambiguous: Vec<String> = Vec::new();
 
     // Iterate from highest to lowest account count.
     for (&count, ixs) in by_count.iter().rev() {
+        let count = crate::utils::unsuffixed(count as u64);
+
         if ixs.len() == 1 {
             let ix_name_snake = crate::utils::to_snake_case(&ixs[0].name);
 
             let fn_ident = format_ident!("parse_{}", ix_name_snake);
-            let count = crate::utils::unsuffixed(count as u64);
 
             inner_arms.push(quote! {
                 if accounts.len() >= #count {
@@ -695,23 +608,23 @@ pub(crate) fn collision_group_match_arm(
                 }
             });
         } else {
-            for ix in ixs {
-                ambiguous.push(ix.name.to_string());
-            }
+            let names: Vec<String> = ixs.iter().map(|ix| ix.name.to_string()).collect();
+            let error = ambiguous_error(&names);
+
+            // Return here, or a lower-count member would parse these accounts as itself.
+            inner_arms.push(quote! {
+                if accounts.len() >= #count {
+                    #error
+                }
+            });
+
+            ambiguous.extend(names);
         }
     }
 
+    // Only reached below the group's lowest account count.
     let fallback = if !ambiguous.is_empty() {
-        let names = ambiguous.join(", ");
-
-        let msg = format!(
-            "Ambiguous instruction: variants [{names}] share the same discriminator and account \
-             count. Use CustomInstructionParser to disambiguate."
-        );
-
-        quote! {
-            return Err(ParseError::from(#msg));
-        }
+        ambiguous_error(&ambiguous)
     } else {
         quote! {}
     };
@@ -766,13 +679,6 @@ pub fn instruction_parser(
             let (bytes, offset) = extract_ix_discriminator_key(ix)?.to_bytes_offset()?;
 
             if bytes.is_empty() {
-                return None;
-            }
-
-            // Mirror the account-side guard: when the declared field width and the
-            // decoded default bytes disagree the generated arm can never match, so
-            // expose no constant for a discriminator the parser cannot honor.
-            if ix_discriminator_slice_width(ix).is_some_and(|width| width != bytes.len()) {
                 return None;
             }
 
