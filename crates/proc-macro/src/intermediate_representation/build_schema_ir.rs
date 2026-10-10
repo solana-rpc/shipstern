@@ -132,16 +132,43 @@ fn linked_event_payloads(idl: &RootNode, events: &[EventNode]) -> Vec<DefinedTyp
         .map(|defined_type| &*defined_type.r#type)
         .chain(account_fields)
         .chain(arguments)
-        .chain(events.iter().map(|event| &*event.data))
         .for_each(|root| collect_links(root, &mut links));
 
-    for defined_type in &program.defined_types {
-        links.remove(&crate::utils::to_pascal_case(&defined_type.name));
+    let defined: HashSet<String> = program
+        .defined_types
+        .iter()
+        .map(|defined_type| crate::utils::to_pascal_case(&defined_type.name))
+        .collect();
+
+    let is_linked = |links: &HashSet<String>, event: &EventNode| {
+        let name = crate::utils::to_pascal_case(&event.name);
+
+        links.contains(&name) && !defined.contains(&name)
+    };
+
+    // Without `program-events` no event is emitted, so only links inside a linked payload count.
+    let mut scanned = HashSet::new();
+
+    loop {
+        let pending: Vec<&EventNode> = events
+            .iter()
+            .filter(|event| cfg!(feature = "program-events") || is_linked(&links, event))
+            .filter(|event| !scanned.contains(event.name.as_str()))
+            .collect();
+
+        if pending.is_empty() {
+            break;
+        }
+
+        for event in pending {
+            scanned.insert(event.name.as_str());
+            collect_links(&event.data, &mut links);
+        }
     }
 
     events
         .iter()
-        .filter(|event| links.contains(&crate::utils::to_pascal_case(&event.name)))
+        .filter(|event| is_linked(&links, event))
         .filter_map(|event| {
             // Skip rather than panic: this also runs without `program-events`.
             let payload =
@@ -232,6 +259,7 @@ mod tests {
                 ),
                 InstructionArgumentNode::new("set", SetTypeNode::fixed(link("inSet"), 1)),
                 InstructionArgumentNode::new("count", link("notStruct")),
+                InstructionArgumentNode::new("outer", link("outer")),
             ],
             ..InstructionNode::default()
         };
@@ -258,6 +286,42 @@ mod tests {
             .map(|defined_type| defined_type.name.to_string())
             .collect();
 
-        assert_eq!(names, ["inMap", "inSet", "inWrapper"]);
+        assert_eq!(names, ["inMap", "inSet", "inWrapper", "outer"]);
+    }
+
+    /// Without `program-events`, a payload that only an unlinked event holds is not emitted.
+    #[cfg(not(feature = "program-events"))]
+    #[test]
+    fn a_payload_held_only_by_an_unlinked_event_is_not_emitted() {
+        let link = DefinedTypeLinkNode::new;
+        let holds = |name: &'static str| {
+            StructTypeNode::new(vec![StructFieldTypeNode::new("inner", link(name))])
+        };
+        let payload =
+            || StructTypeNode::new(vec![StructFieldTypeNode::new("x", NumberTypeNode::le(U64))]);
+
+        let commit = InstructionNode {
+            name: "commit".into(),
+            arguments: vec![InstructionArgumentNode::new("a", link("a"))],
+            ..InstructionNode::default()
+        };
+
+        let events = vec![
+            EventNode::new("a", holds("b")),
+            EventNode::new("b", payload()),
+            EventNode::new("unlinked", holds("onlyInUnlinked")),
+            EventNode::new("onlyInUnlinked", payload()),
+        ];
+
+        let idl = RootNode::new(
+            ProgramNode::new("p", "11111111111111111111111111111111").add_instruction(commit),
+        );
+
+        let names: Vec<_> = linked_event_payloads(&idl, &events)
+            .into_iter()
+            .map(|defined_type| defined_type.name.to_string())
+            .collect();
+
+        assert_eq!(names, ["a", "b"]);
     }
 }

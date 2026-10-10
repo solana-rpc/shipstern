@@ -29,11 +29,13 @@ The macro generates type-safe account and instruction parsers from an Anchor or 
 
 ## Events and self-CPI events
 
-Event parsing is gated behind the `program-events` feature. Without it the macro emits no event types, whatever the IDL declares, except that a payload another type links to is still emitted as an ordinary type:
+Event parsing is gated behind the `program-events` feature. Without it the macro emits no event types, whatever the IDL declares:
 
 ```toml
 shipstern-proc-macro = { version = "0.11.0", features = ["program-events"] }
 ```
+
+A payload that another type links to is still emitted as an ordinary type.
 
 Enabling it changes `InstructionParser::Output` from `Instructions` to `ProgramEventOutput`, which carries the decoded instruction alongside any events found on inner instructions. Because that is a public type, the feature propagates through Cargo's feature unification to every crate sharing the dependency.
 

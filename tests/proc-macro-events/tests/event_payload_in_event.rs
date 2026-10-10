@@ -24,4 +24,5 @@ fn an_event_field_typed_as_another_event_decodes_its_payload() {
     assert!(
         event_payload_in_event::PROTOBUF_SCHEMA.contains("message OuterArgs {\n  Inner inner = 1;")
     );
+    assert!(event_payload_in_event::PROTOBUF_SCHEMA.contains("message EvtInner {"));
 }
