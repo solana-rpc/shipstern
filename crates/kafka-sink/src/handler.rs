@@ -65,10 +65,11 @@ impl shipstern::Handler<TransactionUpdate, TransactionUpdate> for BufferingHandl
         _raw: &TransactionUpdate,
     ) -> HandlerResult<()> {
         let slot = update.slot;
+        let bank_id = update.bank_id;
 
         let Some(ref tx_info) = update.transaction else {
             // Still count this as parsed so the gate count matches.
-            self.cancelable_send(self.handle.send_transaction_parsed(slot).await);
+            self.cancelable_send(self.handle.send_transaction_parsed(slot, bank_id).await);
 
             return Ok(());
         };
@@ -79,18 +80,18 @@ impl shipstern::Handler<TransactionUpdate, TransactionUpdate> for BufferingHandl
         if tx_info.meta.as_ref().and_then(|m| m.err.as_ref()).is_some() {
             self.cancelable_send(
                 self.handle
-                    .send_parse_stats(slot, ParseStatsKind::TransactionStatusFailed)
+                    .send_parse_stats(slot, bank_id, ParseStatsKind::TransactionStatusFailed)
                     .await,
             );
 
-            self.cancelable_send(self.handle.send_transaction_parsed(slot).await);
+            self.cancelable_send(self.handle.send_transaction_parsed(slot, bank_id).await);
 
             return Ok(());
         }
 
         self.cancelable_send(
             self.handle
-                .send_parse_stats(slot, ParseStatsKind::TransactionStatusSucceeded)
+                .send_parse_stats(slot, bank_id, ParseStatsKind::TransactionStatusSucceeded)
                 .await,
         );
 
@@ -99,7 +100,7 @@ impl shipstern::Handler<TransactionUpdate, TransactionUpdate> for BufferingHandl
             Err(e) => {
                 tracing::warn!(?e, slot, tx_index, "Failed to parse instructions");
 
-                self.cancelable_send(self.handle.send_transaction_parsed(slot).await);
+                self.cancelable_send(self.handle.send_transaction_parsed(slot, bank_id).await);
 
                 return Ok(());
             },
@@ -117,7 +118,12 @@ impl shipstern::Handler<TransactionUpdate, TransactionUpdate> for BufferingHandl
 
                     let send_result = self
                         .handle
-                        .send_instruction_parsed(slot, sort_key(tx_index, &flat_index), record)
+                        .send_instruction_parsed(
+                            slot,
+                            bank_id,
+                            sort_key(tx_index, &flat_index),
+                            record,
+                        )
                         .await;
 
                     if let Err(e) = send_result {
@@ -135,7 +141,9 @@ impl shipstern::Handler<TransactionUpdate, TransactionUpdate> for BufferingHandl
                             ParseStatsKind::InstructionFiltered
                         };
 
-                        self.cancelable_send(self.handle.send_parse_stats(slot, kind).await);
+                        self.cancelable_send(
+                            self.handle.send_parse_stats(slot, bank_id, kind).await,
+                        );
                     }
                 } else {
                     let kind = if had_error {
@@ -144,13 +152,13 @@ impl shipstern::Handler<TransactionUpdate, TransactionUpdate> for BufferingHandl
                         ParseStatsKind::InstructionFiltered
                     };
 
-                    self.cancelable_send(self.handle.send_parse_stats(slot, kind).await);
+                    self.cancelable_send(self.handle.send_parse_stats(slot, bank_id, kind).await);
                 }
             }
         }
 
         // Signal this transaction is fully parsed.
-        self.cancelable_send(self.handle.send_transaction_parsed(slot).await);
+        self.cancelable_send(self.handle.send_transaction_parsed(slot, bank_id).await);
 
         Ok(())
     }
@@ -159,6 +167,11 @@ impl shipstern::Handler<TransactionUpdate, TransactionUpdate> for BufferingHandl
 impl shipstern::Handler<AccountUpdate, AccountUpdate> for BufferingHandler {
     async fn handle(&self, update: &AccountUpdate, _raw: &AccountUpdate) -> HandlerResult<()> {
         let slot = update.slot;
+        // Only startup accounts lack a bank; CoordinatorSource rejects any other account without one.
+        let Some(bank_id) = update.bank_id else {
+            tracing::debug!(slot, "Account update without bank_id skipped");
+            return Ok(());
+        };
 
         let (record, had_error) = self.parsers.parse_account(slot, update).await;
         if let Some(record) = record {
@@ -178,7 +191,7 @@ impl shipstern::Handler<AccountUpdate, AccountUpdate> for BufferingHandler {
 
                     self.cancelable_send(
                         self.handle
-                            .send_parse_stats(slot, ParseStatsKind::AccountError)
+                            .send_parse_stats(slot, bank_id, ParseStatsKind::AccountError)
                             .await,
                     );
 
@@ -190,7 +203,10 @@ impl shipstern::Handler<AccountUpdate, AccountUpdate> for BufferingHandler {
 
             let key = AccountRecordSortKey::new(write_version, pubkey);
 
-            let send_result = self.handle.send_account_parsed(slot, key, record).await;
+            let send_result = self
+                .handle
+                .send_account_parsed(slot, bank_id, key, record)
+                .await;
 
             if let Err(e) = send_result {
                 tracing::error!(slot, "Failed to send account parsed record");
@@ -204,7 +220,7 @@ impl shipstern::Handler<AccountUpdate, AccountUpdate> for BufferingHandler {
                 ParseStatsKind::AccountFiltered
             };
 
-            self.cancelable_send(self.handle.send_parse_stats(slot, kind).await);
+            self.cancelable_send(self.handle.send_parse_stats(slot, bank_id, kind).await);
         }
         // No send_transaction_parsed — accounts don't affect the TX gate.
         Ok(())

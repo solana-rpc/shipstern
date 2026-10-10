@@ -109,10 +109,13 @@ jetstreamer-firehose = { git = "https://github.com/anza-xyz/jetstreamer", branch
 jetstreamer-utils = { git = "https://github.com/anza-xyz/jetstreamer", branch = "main" }
 warp = "0.3"
 
-yellowstone-block-machine = { version = "0.4.0" }
-yellowstone-fumarole-client = "0.4.0+solana.3"
-yellowstone-grpc-client = { version = ">=13.1, <13.3" }
-yellowstone-grpc-proto = { version = "12.6", default-features = false }
+# Prerelease pin: move to 0.11.0 when it ships. It is the first release on proto 14.
+yellowstone-block-machine = { version = "=0.11.0-rc2" }
+yellowstone-fumarole-client = "0.9.0"
+yellowstone-grpc-client = { version = "15.0.0" }
+# Patch updates only: a new proto minor adds fields, which breaks struct literals here (0.8.0
+# broke on 12.7).
+yellowstone-grpc-proto = { version = "~14.0.1", default-features = false }
 rdkafka = { version = "0.36", features = ["cmake-build", "ssl", "zstd"] }
 reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
 

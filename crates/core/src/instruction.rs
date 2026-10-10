@@ -302,7 +302,9 @@ impl InstructionUpdate {
     /// Returns an error if the transaction update received is in an unbuildable
     /// form.
     pub fn build_from_txn(txn: &TransactionUpdate) -> Result<Vec<Self>, ParseError> {
-        let TransactionUpdate { transaction, slot } = txn.clone();
+        let TransactionUpdate {
+            transaction, slot, ..
+        } = txn.clone();
         let SubscribeUpdateTransactionInfo {
             signature,
             is_vote,
@@ -862,6 +864,7 @@ mod tests {
     fn transaction_with_missing_inner_stack_heights() -> TransactionUpdate {
         TransactionUpdate {
             slot: 1,
+            bank_id: 0,
             transaction: Some(SubscribeUpdateTransactionInfo {
                 signature: vec![9; 64],
                 is_vote: false,
@@ -915,6 +918,7 @@ mod tests {
     fn transaction_with_mixed_inner_stack_heights() -> TransactionUpdate {
         TransactionUpdate {
             slot: 1,
+            bank_id: 0,
             transaction: Some(SubscribeUpdateTransactionInfo {
                 signature: vec![9; 64],
                 is_vote: false,
@@ -991,6 +995,7 @@ mod tests {
     fn transaction_with_nested_inner_instructions() -> TransactionUpdate {
         TransactionUpdate {
             slot: 1,
+            bank_id: 0,
             transaction: Some(SubscribeUpdateTransactionInfo {
                 signature: vec![9; 64],
                 is_vote: false,
@@ -1127,6 +1132,7 @@ mod tests {
     fn transaction_v1_with_inline_budget() -> TransactionUpdate {
         TransactionUpdate {
             slot: 1,
+            bank_id: 0,
             transaction: Some(SubscribeUpdateTransactionInfo {
                 signature: vec![9; 64],
                 is_vote: false,

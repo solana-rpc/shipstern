@@ -80,6 +80,7 @@ fn make_slot_update(slot: u64) -> SubscribeUpdate {
             parent: Some(slot.saturating_sub(1)),
             status: SlotStatus::SlotProcessed as i32,
             dead_error: None,
+            bank_id: None,
         })),
         created_at: None,
     }

@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, num::NonZero};
 use async_trait::async_trait;
 use bytesize::ByteSize;
 use clap::ValueEnum;
+use futures_util::StreamExt;
 use shipstern::{
     sources::{SourceExitStatus, SourceTrait},
     CommitmentLevel, Error as ShipsternError,
@@ -10,7 +11,7 @@ use shipstern::{
 use shipstern_core::Filters;
 use tokio::sync::{mpsc::Sender, oneshot};
 use yellowstone_fumarole_client::{
-    DragonsmouthAdapterSession, FumaroleClient, FumaroleSubscribeConfig, DEFAULT_PARA_DATA_STREAMS,
+    stream::FumaroleEvent, FumaroleClient, FumaroleSubscribeConfig, DEFAULT_PARA_DATA_STREAMS,
 };
 pub use yellowstone_grpc_proto::tonic::codec::CompressionEncoding;
 use yellowstone_grpc_proto::{
@@ -59,6 +60,8 @@ pub struct FumaroleConfig {
     pub accept_compression: Option<ShipsternCompressionEncoding>,
 }
 
+// fumarole-client 0.9 has no Default, so the struct literal must set the window fields it ignores.
+#[expect(deprecated)]
 impl From<FumaroleConfig> for yellowstone_fumarole_client::config::FumaroleConfig {
     fn from(config: FumaroleConfig) -> Self {
         yellowstone_fumarole_client::config::FumaroleConfig {
@@ -70,9 +73,20 @@ impl From<FumaroleConfig> for yellowstone_fumarole_client::config::FumaroleConfi
             request_compression: config.accept_compression.map(Into::into),
             initial_connection_window_size: ByteSize::mb(100),
             initial_stream_window_size: ByteSize::mib(9),
-            enable_http2_adaptive_window: true,
         }
     }
+}
+
+/// Keep the gRPC code of a stream error, so an auth failure does not read as an internal one.
+fn status_of(error: &(dyn std::error::Error + 'static)) -> Status {
+    let mut source = Some(error);
+    while let Some(err) = source {
+        if let Some(status) = err.downcast_ref::<Status>() {
+            return status.clone();
+        }
+        source = err.source();
+    }
+    Status::internal(error.to_string())
 }
 
 #[async_trait]
@@ -110,8 +124,8 @@ impl SourceTrait for YellowstoneFumaroleSource {
             subscribe_request.commitment = Some(commitment_level as i32);
         }
 
-        let dragonsmouth_session = match fumarole_client
-            .dragonsmouth_subscribe_with_config(
+        let mut subscription = match fumarole_client
+            .subscribe_with_config(
                 subscriber_name,
                 subscribe_request,
                 fumarole_subscribe_config,
@@ -133,30 +147,27 @@ impl SourceTrait for YellowstoneFumaroleSource {
             },
         };
 
-        let DragonsmouthAdapterSession {
-            sink: _,
-            mut source,
-            mut fumarole_handle,
-        } = dragonsmouth_session;
-
         let exit_status = loop {
-            tokio::select! {
-                result = &mut fumarole_handle => {
-                    tracing::info!("Fumarole handle closed: {:?}", result);
+            match subscription.next().await {
+                Some(Ok(FumaroleEvent::Data { update, .. })) => {
+                    if tx.send(Ok(update)).await.is_err() {
+                        tracing::info!("Receiver dropped, stopping source");
+                        break SourceExitStatus::ReceiverDropped;
+                    }
+                },
+                Some(Ok(FumaroleEvent::SlotEnded { .. })) => {},
+                Some(Err(error)) => {
+                    let status = status_of(&error);
+                    let _ = tx.send(Err(status.clone())).await;
+                    break SourceExitStatus::StreamError {
+                        code: status.code(),
+                        message: status.message().to_string(),
+                    };
+                },
+                None => {
+                    tracing::info!("Source returned None, exiting");
                     break SourceExitStatus::StreamEnded;
-                }
-                maybe_update = source.recv() => match maybe_update {
-                    Some(update) => {
-                        if tx.send(update).await.is_err() {
-                            tracing::info!("Receiver dropped, stopping source");
-                            break SourceExitStatus::ReceiverDropped;
-                        }
-                    }
-                    None => {
-                        tracing::info!("Source returned None, exiting");
-                        break SourceExitStatus::StreamEnded;
-                    }
-                }
+                },
             }
         };
 

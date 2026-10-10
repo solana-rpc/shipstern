@@ -14,6 +14,9 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Breaking** `shipstern-block-coordinator`: records are kept per bank (`slot`, `bank_id`), and only the bank that reaches confirmed is flushed, because a slot can have more than one bank. `CoordinatorEvent`, `CoordinatorMessage`, `CoordinatorInput` and the `CoordinatorHandle` senders take a `bank_id`; `CoordinatorEvent::BankDiscarded` and two `CoordinatorError` variants are new, `CoordinatorEvent::SlotDiscarded` carries `bank_ids`, and `DiscardReason::Untracked` is removed. `CoordinatorSource` stops with an error when the server sends no bank IDs, and it does not reconnect (closing [#344](https://github.com/solana-rpc/shipstern/issues/344) by @senzenn).
+- `shipstern-block-coordinator`: a bank whose entries or transaction count do not match its BlockMeta is discarded as incomplete, and a parent slot that never freezes is discarded 64 slots after its child froze. `shipstern-kafka-sink` skips account updates that carry no `bank_id` (by @senzenn).
+- **Breaking** all crates: moved to `yellowstone-grpc-proto` 14.0.1, so `TransactionUpdate` and `AccountUpdate` carry a `bank_id`, and to `yellowstone-grpc-client` 15.0.0, `yellowstone-fumarole-client` 0.9.0 and `yellowstone-block-machine` 0.11.0-rc2. `shipstern-yellowstone-grpc-source` reconnects only a processed stream with no `from_slot` and no `RuntimeHandle`, a reconnect can deliver updates of a cut-off block again, and `reconnect_slot_retention` is removed (by @senzenn).
 - `shipstern-core`: merging two prefilters that name the same comparison, one of them written with a repeat, now keeps the comparison instead of dropping it and widening ([#333](https://github.com/solana-rpc/shipstern/pull/333) by @senzenn).
 
 ### Fixed

@@ -95,11 +95,9 @@ impl FilterState {
 ///   A key dropped by [`Filters::remove`] can be merged back.
 /// - `Ok(())` means the source has the set, not that the server applied it.
 ///   Handlers see the old set until the queued backlog drains.
-/// - Only the newest set is sent. A set rejected between connections is retried
-///   once the stream recovers, or dropped with a warning if auto-reconnect is off.
-/// - A refusal arrives on the stream. A terminal code ends the run; a
-///   recoverable one, like `ResourceExhausted`, resubscribes with the same set
-///   and can keep looping.
+/// - Only the newest set is sent. A set the sink rejects is dropped with a warning.
+/// - A stream that can take filter updates does not reconnect, so a refusal on the
+///   stream or a lost connection ends the run.
 #[derive(Debug, Clone)]
 pub struct RuntimeHandle {
     state: Arc<FilterState>,

@@ -23,7 +23,6 @@ solana-hash = { workspace = true }
 solana-commitment-config = { workspace = true }
 tokio = { workspace = true, features = ["sync", "macros", "rt"] }
 tracing = { workspace = true }
-bs58 = { workspace = true }
 async-trait = { workspace = true }
 futures-util = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -32,4 +31,5 @@ prost = { workspace = true }
 smallvec = { workspace = true }
 
 [dev-dependencies]
+bs58 = { workspace = true }
 tokio = { workspace = true, features = ["sync", "macros", "rt", "test-util"] }
