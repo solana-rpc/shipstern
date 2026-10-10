@@ -48,8 +48,8 @@ fn undo_unported_passes(js: &mut Value) {
         }
     }
 
-    // Only the defaults the pass invents. An `address` default is named after its account,
-    // so it stays; the pass names a legacy `systemProgram` default `splSystem`.
+    // Only the defaults this crate does not port; every `publicKeyValueNode` stays,
+    // so a dropped rule that a fixture uses still fails.
     if let Some(instructions) = js
         .pointer_mut("/program/instructions")
         .and_then(Value::as_array_mut)
@@ -63,15 +63,10 @@ fn undo_unported_passes(js: &mut Value) {
                 .pointer("/defaultValue/kind")
                 .and_then(Value::as_str);
 
-            let renamed_address = kind == Some("publicKeyValueNode")
-                && account.pointer("/defaultValue/identifier") != account.get("name");
-
-            if (renamed_address
-                || matches!(
-                    kind,
-                    Some("payerValueNode" | "identityValueNode" | "programIdValueNode")
-                ))
-                && let Some(account) = account.as_object_mut()
+            if matches!(
+                kind,
+                Some("payerValueNode" | "identityValueNode" | "programIdValueNode")
+            ) && let Some(account) = account.as_object_mut()
             {
                 account.remove("defaultValue");
             }
