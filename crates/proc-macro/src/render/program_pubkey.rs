@@ -5,7 +5,7 @@ pub fn program_pubkey(pubkey: &str) -> TokenStream {
     let decoded = match bs58::decode(pubkey).into_vec() {
         Ok(bytes) => bytes,
         Err(_) => {
-            return quote! { compile_error!(concat!("Invalid base58 pubkey: ", #pubkey)); };
+            return quote! { compile_error!(concat!("Invalid base58 pubkey: ", #pubkey)) };
         },
     };
 
@@ -18,7 +18,7 @@ pub fn program_pubkey(pubkey: &str) -> TokenStream {
                 stringify!(#len),
                 " bytes for pubkey: ",
                 #pubkey
-            ));
+            ))
         };
     }
 

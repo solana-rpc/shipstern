@@ -25,6 +25,24 @@ fn expand_pretty(idl: &Path) -> String {
     prettyplease::unparse(&file)
 }
 
+/// An IDL written to a temp file that is removed even when the test panics.
+struct TempIdl(std::path::PathBuf);
+
+impl TempIdl {
+    fn new(name: &str, json: &str) -> Self {
+        let path =
+            std::env::temp_dir().join(format!("shipstern-{name}-{}.json", std::process::id()));
+
+        std::fs::write(&path, json).expect("write IDL");
+
+        Self(path)
+    }
+}
+
+impl Drop for TempIdl {
+    fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+}
+
 fn expand_verifiable_anchor(name: &str) -> String {
     let source = fixtures_dir().join(format!("{name}.anchor.json"));
 
@@ -44,18 +62,12 @@ fn expand_verifiable_anchor(name: &str) -> String {
 
     packed["repr"] = serde_json::json!({ "kind": "c" });
 
-    let path = std::env::temp_dir().join(format!(
-        "shipstern-anchor-parity-{}.json",
-        std::process::id()
-    ));
+    let idl = TempIdl::new(
+        "anchor-parity",
+        &serde_json::to_string(&idl).expect("serialize IDL"),
+    );
 
-    std::fs::write(&path, serde_json::to_vec(&idl).expect("serialize IDL"))
-        .expect("write temporary IDL");
-
-    let expanded = expand_pretty(&path);
-    let _ = std::fs::remove_file(path);
-
-    expanded
+    expand_pretty(&idl.0)
 }
 
 fn first_divergence(expected: &str, actual: &str) -> String {
@@ -149,20 +161,12 @@ fn an_unverifiable_anchor_layout_fails_to_compile() {
 
 #[test]
 fn an_unsupported_anchor_idl_fails_to_compile_with_the_convert_hint() {
-    let path = std::env::temp_dir().join(format!(
-        "shipstern-unknown-spec-{}.json",
-        std::process::id()
-    ));
-
-    std::fs::write(
-        &path,
+    let idl = TempIdl::new(
+        "unknown-spec",
         r#"{"address":"x","metadata":{"name":"t","version":"1","spec":"0.0.0"},"instructions":[]}"#,
-    )
-    .expect("write IDL");
+    );
 
-    let expanded = tokens(&path).to_string();
-
-    let _ = std::fs::remove_file(&path);
+    let expanded = tokens(&idl.0).to_string();
 
     assert!(
         expanded.contains("compile_error"),
@@ -171,5 +175,23 @@ fn an_unsupported_anchor_idl_fails_to_compile_with_the_convert_hint() {
     assert!(
         expanded.contains("codama convert"),
         "convert hint missing: {expanded}"
+    );
+}
+
+/// A fixed account address that does not decode must fail the build, not be
+/// skipped or replaced by a wrong key.
+#[test]
+fn an_undecodable_fixed_account_address_fails_to_compile() {
+    let idl = TempIdl::new(
+        "bad-address",
+        r#"{"address":"11111111111111111111111111111111","metadata":{"name":"t","version":"1","spec":"0.1.0"},
+            "instructions":[{"name":"go","discriminator":[1],"accounts":[{"name":"program","address":"not-a-key"}]}]}"#,
+    );
+
+    let expanded = expand_pretty(&idl.0);
+
+    assert!(
+        expanded.contains("Invalid base58 pubkey"),
+        "no decode error: {expanded}"
     );
 }

@@ -94,7 +94,7 @@ changing it will not affect the generated parser.
 | `program.publicKey` | `PROGRAM_ID` |
 | `program.instructions[].discriminators` | the instruction dispatch key |
 | `program.instructions[].arguments` | the `*Args` struct |
-| `program.instructions[].accounts` | the `*Accounts` struct |
+| `program.instructions[].accounts` | the `*Accounts` struct; a required account's `publicKeyValueNode` `defaultValue` is used when the instruction leaves that account off |
 | `program.accounts[]` | account types and `AccountParser` |
 | `program.definedTypes[]` | shared types, referenced through `definedTypeLinkNode` |
 | `events[]` | event types, **only** with the `program-events` feature |
