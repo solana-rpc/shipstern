@@ -13,7 +13,6 @@ use shipstern_core::{
     instruction::InstructionUpdate, AccountPrefilter, Filters, ParseResult, Parser, Prefilter,
     Pubkey, SlotUpdate,
 };
-use tokio::sync::{mpsc::Sender, oneshot, watch};
 use yellowstone_grpc_proto::{
     geyser::{subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate, SubscribeUpdateSlot},
     tonic,
@@ -22,40 +21,13 @@ use yellowstone_grpc_proto::{
 use crate::{
     config::BufferConfig,
     instruction::InstructionPipeline,
-    sources::{FilterUpdateSource, SourceExitStatus, SourceTrait},
+    sources::{FilterUpdateSource, SourceContext, SourceExitStatus, SourceTrait},
     Error, FilterUpdateError, Handler, HandlerResult, Pipeline, Runtime,
 };
 
 async fn wait_for_runtime_ready() { tokio::time::sleep(Duration::from_millis(50)).await; }
 
 async fn hold_channel_open_briefly() { tokio::time::sleep(Duration::from_millis(10)).await; }
-
-fn signal_stream_ended(status_tx: oneshot::Sender<SourceExitStatus>) {
-    let _ = status_tx.send(SourceExitStatus::StreamEnded);
-}
-
-fn signal_stream_error(
-    status_tx: oneshot::Sender<SourceExitStatus>,
-    code: tonic::Code,
-    message: &str,
-) {
-    let _ = status_tx.send(SourceExitStatus::StreamError {
-        code,
-        message: message.to_string(),
-    });
-}
-
-fn signal_error(status_tx: oneshot::Sender<SourceExitStatus>, message: &str) {
-    let _ = status_tx.send(SourceExitStatus::Error(message.to_string()));
-}
-
-fn signal_receiver_dropped(status_tx: oneshot::Sender<SourceExitStatus>) {
-    let _ = status_tx.send(SourceExitStatus::ReceiverDropped);
-}
-
-fn signal_completed(status_tx: oneshot::Sender<SourceExitStatus>) {
-    let _ = status_tx.send(SourceExitStatus::Completed);
-}
 
 fn make_ping_update() -> SubscribeUpdate {
     SubscribeUpdate {
@@ -116,96 +88,18 @@ fn assert_other_error(result: Result<(), Box<Error>>) {
     assert!(matches!(*result.unwrap_err(), Error::Other(_)));
 }
 
-fn create_status_channel() -> (
-    oneshot::Sender<SourceExitStatus>,
-    oneshot::Receiver<SourceExitStatus>,
-) {
-    oneshot::channel()
-}
-
-#[allow(clippy::type_complexity)]
-fn create_update_channel() -> (
-    Sender<Result<SubscribeUpdate, tonic::Status>>,
-    tokio::sync::mpsc::Receiver<Result<SubscribeUpdate, tonic::Status>>,
-) {
-    tokio::sync::mpsc::channel(1)
-}
-
-fn drop_receiver<T>(rx: T) { drop(rx); }
-
-async fn send_update_expecting_failure(tx: &Sender<Result<SubscribeUpdate, tonic::Status>>) {
-    let result = tx.send(Ok(make_ping_update())).await;
-    assert!(result.is_err(), "Send should fail when receiver dropped");
-}
-
-fn assert_receiver_dropped(status: &SourceExitStatus) {
-    assert!(matches!(status, SourceExitStatus::ReceiverDropped));
-}
-
-fn assert_stream_ended(status: &SourceExitStatus) {
-    assert!(
-        matches!(status, SourceExitStatus::StreamEnded),
-        "Expected StreamEnded, got {status:?}"
-    );
-}
-
-fn assert_completed(status: &SourceExitStatus) {
-    assert!(
-        matches!(status, SourceExitStatus::Completed),
-        "Expected Completed, got {status:?}"
-    );
-}
-
-fn assert_stream_error_details(
-    status: &SourceExitStatus,
-    expected_code: tonic::Code,
-    expected_msg: &str,
-) {
-    match status {
-        SourceExitStatus::StreamError { code, message } => {
-            assert_eq!(*code, expected_code);
-            assert_eq!(message, expected_msg);
-        },
-        _ => panic!("Expected StreamError, got {status:?}"),
-    }
-}
-
-fn assert_stream_error_code(status: &SourceExitStatus, expected_code: tonic::Code) {
-    match status {
-        SourceExitStatus::StreamError { code, .. } => {
-            assert_eq!(*code, expected_code);
-        },
-        _ => panic!("Expected StreamError, got {status:?}"),
-    }
-}
-
-fn assert_error_message(status: &SourceExitStatus, expected: &str) {
-    match status {
-        SourceExitStatus::Error(msg) => assert_eq!(msg, expected),
-        _ => panic!("Expected Error, got {status:?}"),
-    }
-}
-
-fn assert_send_fails<T, E>(result: &Result<T, E>) {
-    assert!(result.is_err());
-}
-
 #[derive(Debug)]
 struct MockStreamEndSource;
 
 #[async_trait]
 impl SourceTrait for MockStreamEndSource {
-    async fn connect(
-        &self,
-        _filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), Error> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext { tx, .. } = ctx;
+
         wait_for_runtime_ready().await;
-        signal_stream_ended(status_tx);
-        hold_channel_open_briefly().await;
         drop(tx);
-        Ok(())
+
+        Ok(SourceExitStatus::StreamEnded)
     }
 }
 
@@ -214,19 +108,19 @@ struct MockStreamErrorSource;
 
 #[async_trait]
 impl SourceTrait for MockStreamErrorSource {
-    async fn connect(
-        &self,
-        _filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        _status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), Error> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext { tx, .. } = ctx;
+
         wait_for_runtime_ready().await;
+
+        // The buffer handles a stream error sent on the channel, so it ends the
+        // run before this source returns.
         let _ = tx
             .send(Err(tonic::Status::unavailable("server unavailable")))
             .await;
-        // Buffer handles stream errors via tx channel - no need for oneshot
         hold_channel_open_briefly().await;
-        Ok(())
+
+        Ok(SourceExitStatus::StreamEnded)
     }
 }
 
@@ -235,21 +129,14 @@ struct MockSourceExitStreamErrorSource;
 
 #[async_trait]
 impl SourceTrait for MockSourceExitStreamErrorSource {
-    async fn connect(
-        &self,
-        _filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), Error> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
         wait_for_runtime_ready().await;
-        signal_stream_error(
-            status_tx,
-            tonic::Code::InvalidArgument,
-            "failed to get replay position for slot 42",
-        );
-        hold_channel_open_briefly().await;
-        drop(tx);
-        Ok(())
+        drop(ctx);
+
+        Ok(SourceExitStatus::StreamError {
+            code: tonic::Code::InvalidArgument,
+            message: "failed to get replay position for slot 42".to_owned(),
+        })
     }
 }
 
@@ -258,17 +145,11 @@ struct MockErrorSource;
 
 #[async_trait]
 impl SourceTrait for MockErrorSource {
-    async fn connect(
-        &self,
-        _filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), Error> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
         wait_for_runtime_ready().await;
-        signal_error(status_tx, "something went wrong");
-        hold_channel_open_briefly().await;
-        drop(tx);
-        Ok(())
+        drop(ctx);
+
+        Ok(SourceExitStatus::Error("something went wrong".to_owned()))
     }
 }
 
@@ -279,25 +160,18 @@ struct MockStreamEndWithUpdatesSource {
 
 #[async_trait]
 impl SourceTrait for MockStreamEndWithUpdatesSource {
-    async fn connect(
-        &self,
-        _filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), Error> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext { tx, .. } = ctx;
+
         wait_for_runtime_ready().await;
 
         for _ in 0..self.updates_to_send {
             if tx.send(Ok(make_ping_update())).await.is_err() {
-                signal_receiver_dropped(status_tx);
-                return Ok(());
+                return Ok(SourceExitStatus::ReceiverDropped);
             }
         }
 
-        signal_stream_ended(status_tx);
-        hold_channel_open_briefly().await;
-        drop(tx);
-        Ok(())
+        Ok(SourceExitStatus::StreamEnded)
     }
 }
 
@@ -308,24 +182,18 @@ struct MockCompletedWithUpdatesSource {
 
 #[async_trait]
 impl SourceTrait for MockCompletedWithUpdatesSource {
-    async fn connect(
-        &self,
-        _filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), Error> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext { tx, .. } = ctx;
+
         wait_for_runtime_ready().await;
 
         for slot in 0..self.updates_to_send {
             if tx.send(Ok(make_slot_update(slot))).await.is_err() {
-                signal_receiver_dropped(status_tx);
-                return Ok(());
+                return Ok(SourceExitStatus::ReceiverDropped);
             }
         }
 
-        signal_completed(status_tx);
-        drop(tx);
-        Ok(())
+        Ok(SourceExitStatus::Completed)
     }
 }
 
@@ -363,7 +231,7 @@ impl Handler<SlotUpdate, SlotUpdate> for SlowSlotHandler {
 /// its own owner pubkey and asserts on that marker alone.
 static RECEIVED_FILTERS: Mutex<Vec<Filters>> = Mutex::new(Vec::new());
 
-/// Sets the runtime handed to `connect_with_filter_updates`, which is the
+/// Sets the runtime handed to `connect`, which is the
 /// initial subscribe. Separate from `RECEIVED_FILTERS` so a test can tell the first
 /// request apart from the updates that follow it, under the same
 /// mark-and-filter convention.
@@ -374,29 +242,17 @@ struct MockFilterUpdateSource;
 
 #[async_trait]
 impl SourceTrait for MockFilterUpdateSource {
-    async fn connect(
-        &self,
-        _filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), Error> {
-        wait_for_runtime_ready().await;
-        signal_stream_ended(status_tx);
-        hold_channel_open_briefly().await;
-        drop(tx);
-        Ok(())
-    }
-
     /// Records the set the runtime passed in, which is the initial subscribe,
     /// then every set published until the last handle is dropped, so a test
     /// controls when the run finishes by dropping its handle.
-    async fn connect_with_filter_updates(
-        &self,
-        filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-        mut filter_updates_rx: watch::Receiver<Filters>,
-    ) -> Result<(), Error> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext {
+            filters,
+            tx,
+            mut filter_updates,
+            ..
+        } = ctx;
+
         INITIAL_FILTERS
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -404,18 +260,17 @@ impl SourceTrait for MockFilterUpdateSource {
 
         wait_for_runtime_ready().await;
 
-        while filter_updates_rx.changed().await.is_ok() {
-            let filters = filter_updates_rx.borrow_and_update().clone();
+        while filter_updates.changed().await.is_ok() {
+            let filters = filter_updates.borrow_and_update().clone();
             RECEIVED_FILTERS
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(filters);
         }
 
-        signal_stream_ended(status_tx);
-        hold_channel_open_briefly().await;
         drop(tx);
-        Ok(())
+
+        Ok(SourceExitStatus::StreamEnded)
     }
 }
 
@@ -628,7 +483,7 @@ impl Handler<(), InstructionUpdate> for MarkerIxHandler {
 }
 
 fn instruction_filter_update_runtime() -> Runtime<MockFilterUpdateSource> {
-    Runtime::<MockFilterUpdateSource>::builder()
+    Runtime::builder()
         .instruction(Pipeline::new(MarkerIxParser, [MarkerIxHandler]))
         .try_build_with(MockFilterUpdateSource, default_buffer_config())
         .unwrap()
@@ -820,6 +675,122 @@ async fn test_error_status_returns_error() {
     assert_other_error(runtime.try_run_async().await);
 }
 
+/// Fails before streaming anything, the way a source does when it cannot
+/// connect.
+#[derive(Debug)]
+struct MockConnectFailsSource;
+
+#[async_trait]
+impl SourceTrait for MockConnectFailsSource {
+    async fn connect(&self, _ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        Err(Error::ConfigError)
+    }
+}
+
+/// An error returned from `connect` is the error the run ends with, rather
+/// than a generic hangup.
+#[tokio::test]
+async fn test_connect_error_is_the_run_error() {
+    let runtime = Runtime::builder()
+        .try_build_with(MockConnectFailsSource, default_buffer_config())
+        .unwrap();
+
+    let err = runtime.try_run_async().await.unwrap_err();
+
+    assert!(matches!(*err, Error::ConfigError), "got {err:?}");
+}
+
+/// One builder function serves two source types, since the builder is not
+/// tied to a source until it is built.
+fn slot_pipelines() -> crate::builder::RuntimeBuilder {
+    Runtime::builder().slot(Pipeline::new(SlowSlotParser, [SlowSlotHandler]))
+}
+
+#[tokio::test]
+async fn test_one_builder_runs_against_different_sources() {
+    SLOW_SLOT_HANDLED.store(0, Ordering::Relaxed);
+
+    let ended = slot_pipelines()
+        .try_build_with(MockStreamEndSource, default_buffer_config())
+        .unwrap();
+
+    assert_server_hangup(ended.try_run_async().await);
+
+    let completed = slot_pipelines()
+        .try_build_with(
+            MockCompletedWithUpdatesSource { updates_to_send: 2 },
+            default_buffer_config(),
+        )
+        .unwrap();
+
+    assert!(completed.try_run_async().await.is_ok());
+}
+
+/// A source picked at runtime runs through `Box<dyn SourceTrait>`, which is
+/// what a bare `Runtime` holds.
+#[tokio::test]
+async fn test_boxed_source_picked_at_runtime() {
+    for complete in [false, true] {
+        let source: Box<dyn SourceTrait> = if complete {
+            Box::new(MockCompletedWithUpdatesSource { updates_to_send: 1 })
+        } else {
+            Box::new(MockStreamEndSource)
+        };
+
+        let runtime: Runtime = Runtime::builder()
+            .try_build_with(source, default_buffer_config())
+            .unwrap();
+
+        let result = runtime.try_run_async().await;
+
+        if complete {
+            assert!(result.is_ok(), "got {result:?}");
+        } else {
+            assert_server_hangup(result);
+        }
+    }
+}
+
+/// Boxing a source that applies filter updates keeps its handle.
+#[tokio::test]
+async fn test_boxed_filter_update_source_keeps_its_handle() {
+    let source: Box<dyn FilterUpdateSource> = Box::new(MockFilterUpdateSource);
+
+    let runtime = Runtime::builder()
+        .slot(Pipeline::new(SlowSlotParser, [SlowSlotHandler]))
+        .try_build_with(source, default_buffer_config())
+        .unwrap();
+    let handle = runtime.handle();
+
+    let (result, ()) = tokio::join!(runtime.try_run_async(), async {
+        wait_for_runtime_ready().await;
+
+        handle
+            .update_filters(|filters| filters.merge(TEST_SLOT_FILTER, owned_by(8)))
+            .unwrap();
+
+        drop(handle);
+    });
+
+    assert_server_hangup(result);
+
+    let (marked, recorded) = recorded_marker(&RECEIVED_FILTERS, 8);
+
+    assert!(
+        marked,
+        "boxed source never saw the update, recorded {recorded}"
+    );
+}
+
+/// A context built for driving a source directly has no updates to wait on.
+#[tokio::test]
+async fn test_standalone_context_has_a_closed_update_slot() {
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let mut ctx = SourceContext::new(Filters::new(HashMap::new()), tx);
+
+    assert!(ctx.filter_updates.changed().await.is_err());
+}
+
 #[tokio::test]
 async fn test_stream_end_after_updates_returns_error() {
     let runtime = Runtime::builder()
@@ -852,102 +823,6 @@ async fn test_completed_source_drains_buffered_updates_before_returning() {
     );
 }
 
-#[tokio::test]
-async fn test_source_exit_status_receiver_dropped() {
-    let (tx, rx) = create_update_channel();
-    let (status_tx, status_rx) = create_status_channel();
-
-    drop_receiver(rx);
-    send_update_expecting_failure(&tx).await;
-    signal_receiver_dropped(status_tx);
-
-    assert_receiver_dropped(&status_rx.await.unwrap());
-}
-
-#[tokio::test]
-async fn test_source_exit_status_stream_ended() {
-    let (status_tx, status_rx) = create_status_channel();
-
-    signal_stream_ended(status_tx);
-
-    assert_stream_ended(&status_rx.await.unwrap());
-}
-
-#[tokio::test]
-async fn test_source_exit_status_completed() {
-    let (status_tx, status_rx) = create_status_channel();
-
-    signal_completed(status_tx);
-
-    assert_completed(&status_rx.await.unwrap());
-}
-
-#[tokio::test]
-async fn test_source_exit_status_stream_error_preserves_details() {
-    let (status_tx, status_rx) = create_status_channel();
-
-    signal_stream_error(status_tx, tonic::Code::PermissionDenied, "auth expired");
-
-    assert_stream_error_details(
-        &status_rx.await.unwrap(),
-        tonic::Code::PermissionDenied,
-        "auth expired",
-    );
-}
-
-#[tokio::test]
-async fn test_source_exit_status_error_preserves_message() {
-    let (status_tx, status_rx) = create_status_channel();
-
-    signal_error(status_tx, "connection timeout");
-
-    assert_error_message(&status_rx.await.unwrap(), "connection timeout");
-}
-
-#[tokio::test]
-async fn test_grpc_unavailable_error() {
-    let (status_tx, status_rx) = create_status_channel();
-
-    signal_stream_error(status_tx, tonic::Code::Unavailable, "service unavailable");
-
-    assert_stream_error_code(&status_rx.await.unwrap(), tonic::Code::Unavailable);
-}
-
-#[tokio::test]
-async fn test_grpc_unauthenticated_error() {
-    let (status_tx, status_rx) = create_status_channel();
-
-    signal_stream_error(status_tx, tonic::Code::Unauthenticated, "invalid token");
-
-    assert_stream_error_details(
-        &status_rx.await.unwrap(),
-        tonic::Code::Unauthenticated,
-        "invalid token",
-    );
-}
-
-#[tokio::test]
-async fn test_grpc_resource_exhausted_error() {
-    let (status_tx, status_rx) = create_status_channel();
-
-    signal_stream_error(
-        status_tx,
-        tonic::Code::ResourceExhausted,
-        "rate limit exceeded",
-    );
-
-    assert_stream_error_code(&status_rx.await.unwrap(), tonic::Code::ResourceExhausted);
-}
-
-#[tokio::test]
-async fn test_status_channel_dropped_before_send() {
-    let (status_tx, status_rx) = create_status_channel();
-
-    drop_receiver(status_rx);
-
-    assert_send_fails(&status_tx.send(SourceExitStatus::StreamEnded));
-}
-
 // Buffer pool edge cases. Each test uses its own atomic counter so they stay
 // correct under parallel `cargo test`.
 
@@ -963,22 +838,18 @@ struct MockBurstSource<const N: u64>;
 
 #[async_trait]
 impl<const N: u64> SourceTrait for MockBurstSource<N> {
-    async fn connect(
-        &self,
-        _filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), Error> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext { tx, .. } = ctx;
+
         wait_for_runtime_ready().await;
+
         for slot in 0..N {
             if tx.send(Ok(make_slot_update(slot))).await.is_err() {
-                signal_receiver_dropped(status_tx);
-                return Ok(());
+                return Ok(SourceExitStatus::ReceiverDropped);
             }
         }
-        signal_completed(status_tx);
-        drop(tx);
-        Ok(())
+
+        Ok(SourceExitStatus::Completed)
     }
 }
 
@@ -1199,17 +1070,14 @@ struct MockAbortAfterSource<const PRE: u64, const POST: u64>;
 
 #[async_trait]
 impl<const PRE: u64, const POST: u64> SourceTrait for MockAbortAfterSource<PRE, POST> {
-    async fn connect(
-        &self,
-        _filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        _status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), Error> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext { tx, .. } = ctx;
+
         wait_for_runtime_ready().await;
 
         for slot in 0..PRE {
             if tx.send(Ok(make_slot_update(slot))).await.is_err() {
-                return Ok(());
+                return Ok(SourceExitStatus::ReceiverDropped);
             }
         }
 
@@ -1219,7 +1087,7 @@ impl<const PRE: u64, const POST: u64> SourceTrait for MockAbortAfterSource<PRE, 
             .await
             .is_err()
         {
-            return Ok(());
+            return Ok(SourceExitStatus::ReceiverDropped);
         }
 
         // Never read: the producer already broke on the error above.
@@ -1230,11 +1098,11 @@ impl<const PRE: u64, const POST: u64> SourceTrait for MockAbortAfterSource<PRE, 
         }
 
         // Keep the source alive briefly so the error surfaces via the buffer's
-        // `wait_for_stop` rather than a status-channel-closed race. The source
+        // `wait_for_stop` rather than this source's exit status. The source
         // task is detached, so this does not delay the shutdown return.
         tokio::time::sleep(Duration::from_millis(300)).await;
 
-        Ok(())
+        Ok(SourceExitStatus::StreamEnded)
     }
 }
 
@@ -1287,12 +1155,9 @@ struct MockStopUnderBackpressureSource;
 
 #[async_trait]
 impl SourceTrait for MockStopUnderBackpressureSource {
-    async fn connect(
-        &self,
-        _filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), Error> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext { tx, .. } = ctx;
+
         wait_for_runtime_ready().await;
 
         // Occupies the single permit for far longer than the shutdown budget.
@@ -1302,9 +1167,8 @@ impl SourceTrait for MockStopUnderBackpressureSource {
 
         // Give the producer time to dequeue update 1 and park, then force stop.
         tokio::time::sleep(Duration::from_millis(300)).await;
-        signal_receiver_dropped(status_tx);
-        drop(tx);
-        Ok(())
+
+        Ok(SourceExitStatus::ReceiverDropped)
     }
 }
 
@@ -1397,24 +1261,19 @@ struct MockStopWithInFlightSource<const N: u64>;
 
 #[async_trait]
 impl<const N: u64> SourceTrait for MockStopWithInFlightSource<N> {
-    async fn connect(
-        &self,
-        _filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), Error> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext { tx, .. } = ctx;
+
         for slot in 0..N {
             let _ = tx.send(Ok(make_slot_update(slot))).await;
         }
 
-        // Long enough for every handler to be parked in its sleep.
+        // Long enough for every handler to be parked in its sleep. The runtime
+        // holds the channel open until it has this status, so this is the stop
+        // path, not a clean close.
         tokio::time::sleep(Duration::from_millis(20)).await;
-        signal_receiver_dropped(status_tx);
 
-        // Keeps the channel open, so this is the stop path, not a clean close.
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        drop(tx);
-        Ok(())
+        Ok(SourceExitStatus::ReceiverDropped)
     }
 }
 

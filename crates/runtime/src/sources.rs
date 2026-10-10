@@ -1,11 +1,12 @@
 //! Sources for Shipstern.
 //!
-//! A `SourceTrait` is a trait that defines the behavior for data sources that can be used to connect to it and
-//! send updates to a channel. This trait is implemented by various modules, including the `yellowstone_grpc` module.
+//! A source streams [`SubscribeUpdate`]s into the runtime. Implement
+//! [`SourceTrait`] for a custom one, [`FromConfig`] to build it from a config
+//! document, and [`FilterUpdateSource`] if it can change a live subscription.
 
 use async_trait::async_trait;
 use shipstern_core::Filters;
-use tokio::sync::{mpsc::Sender, oneshot, watch};
+use tokio::sync::{mpsc::Sender, watch};
 use yellowstone_grpc_proto::{geyser::SubscribeUpdate, tonic};
 
 /// How a source exited.
@@ -28,11 +29,57 @@ pub enum SourceExitStatus {
     Error(String),
 }
 
+/// Everything the runtime hands a source when it connects.
+///
+/// New fields can be added without breaking sources, so destructure it with a
+/// trailing `..`:
+///
+/// ```rust, ignore
+/// let SourceContext { filters, tx, .. } = ctx;
+/// ```
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct SourceContext {
+    /// The filter set to subscribe with, derived from the registered pipelines
+    /// and any update published before the runtime started.
+    pub filters: Filters,
+    /// Where to send updates. A failed send means the runtime has stopped, so
+    /// return [`SourceExitStatus::ReceiverDropped`].
+    pub tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
+    /// Each filter set published through a
+    /// [`RuntimeHandle`](crate::RuntimeHandle). The slot holds only the newest
+    /// set and closes once the last handle is dropped. Only a
+    /// [`FilterUpdateSource`] has handles, so other sources can ignore it.
+    pub filter_updates: watch::Receiver<Filters>,
+}
+
+impl SourceContext {
+    /// A context with no filter updates, for driving a source directly, in a
+    /// test for instance. The update slot starts closed.
+    #[must_use]
+    pub fn new(filters: Filters, tx: Sender<Result<SubscribeUpdate, tonic::Status>>) -> Self {
+        let (_, filter_updates) = watch::channel(filters.clone());
+
+        Self {
+            filters,
+            tx,
+            filter_updates,
+        }
+    }
+
+    /// Replace the filter update slot.
+    #[must_use]
+    pub fn with_filter_updates(mut self, filter_updates: watch::Receiver<Filters>) -> Self {
+        self.filter_updates = filter_updates;
+        self
+    }
+}
+
 /// Data source that streams updates to the runtime.
 ///
 /// A source is a value the runtime is handed, so it can carry whatever state
-/// it needs: a config, a shared client, a fixture. The filter set is computed
-/// from the registered pipelines and arrives at [`Self::connect`].
+/// it needs: a config, a shared client, a fixture. Everything the runtime
+/// provides arrives in the [`SourceContext`] passed to [`Self::connect`].
 ///
 /// ```rust, ignore
 /// #[derive(Debug)]
@@ -40,15 +87,11 @@ pub enum SourceExitStatus {
 ///
 /// #[async_trait]
 /// impl SourceTrait for MySource {
-///     async fn connect(
-///         &self,
-///         filters: Filters,
-///         tx: Sender<Result<SubscribeUpdate, Status>>,
-///         status_tx: oneshot::Sender<SourceExitStatus>,
-///     ) -> Result<(), shipstern::Error> {
-///         // stream updates into `tx`, then report how the stream ended
-///         let _ = status_tx.send(SourceExitStatus::Completed);
-///         Ok(())
+///     async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, shipstern::Error> {
+///         let SourceContext { filters, tx, .. } = ctx;
+///
+///         // stream updates matching `filters` into `tx`, then say how it ended
+///         Ok(SourceExitStatus::Completed)
 ///     }
 /// }
 ///
@@ -60,34 +103,23 @@ pub enum SourceExitStatus {
 /// Implement [`FromConfig`] as well to build the runtime from a
 /// [`ShipsternConfig`](crate::config::ShipsternConfig) document with
 /// [`RuntimeBuilder::try_build`](crate::builder::RuntimeBuilder::try_build).
+///
+/// The trait is object safe, so `Box<dyn SourceTrait>` is a source too, for
+/// picking one at startup.
 #[async_trait]
 pub trait SourceTrait: std::fmt::Debug + Send + Sync + 'static {
-    /// Connect and stream updates matching `filters`. Send exit status via
-    /// `status_tx` before returning.
-    async fn connect(
-        &self,
-        filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), crate::Error>;
-
-    /// Connect and stream updates, applying each filter set published on
-    /// `filter_updates_rx` to the live subscription. The slot holds only the
-    /// newest set.
+    /// Connect and stream updates until the stream ends, then return how it
+    /// ended. An `Err` stops the runtime with that error.
     ///
-    /// The default ignores the receiver and calls [`Self::connect`]. Override it
-    /// together with implementing [`FilterUpdateSource`].
-    ///
-    async fn connect_with_filter_updates(
-        &self,
-        filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-        filter_updates_rx: watch::Receiver<Filters>,
-    ) -> Result<(), crate::Error> {
-        drop(filter_updates_rx);
+    /// # Errors
+    /// Returns an error if the source cannot connect or fails mid-stream.
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, crate::Error>;
+}
 
-        self.connect(filters, tx, status_tx).await
+#[async_trait]
+impl<S: SourceTrait + ?Sized> SourceTrait for Box<S> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, crate::Error> {
+        (**self).connect(ctx).await
     }
 }
 
@@ -119,11 +151,14 @@ pub trait FromConfig: SourceTrait {
 /// A source that applies filter updates to its live subscription, which unlocks
 /// [`Runtime::handle`](crate::Runtime::handle).
 ///
-/// You must also override [`SourceTrait::connect_with_filter_updates`]: its
-/// default discards the receiver, so every update returns `Ok(())` and reaches
-/// nothing.
+/// Implementing it promises that [`SourceTrait::connect`] reads
+/// [`SourceContext::filter_updates`] and sends each set to the server. Nothing
+/// else ties the two together, so a source that implements this and ignores
+/// the slot accepts every update and applies none.
 ///
 /// ```rust, ignore
 /// impl FilterUpdateSource for YellowstoneGrpcSource {}
 /// ```
 pub trait FilterUpdateSource: SourceTrait {}
+
+impl<S: FilterUpdateSource + ?Sized> FilterUpdateSource for Box<S> {}

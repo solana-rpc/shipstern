@@ -4,15 +4,15 @@ use async_trait::async_trait;
 use clap::ValueEnum;
 use futures_util::{SinkExt, StreamExt};
 use shipstern::{
-    sources::{FilterUpdateSource, FromConfig, SourceExitStatus, SourceTrait},
+    sources::{FilterUpdateSource, FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     CommitmentLevel, Error as ShipsternError,
 };
 use shipstern_core::{AccountsDataSlice, Filters, PrefilterError};
-use tokio::sync::{mpsc::Sender, oneshot, watch};
+use tokio::sync::watch;
 use yellowstone_grpc_client::{Backoff, GeyserGrpcClient, ReconnectConfig};
 use yellowstone_grpc_proto::{
-    geyser::{SubscribeRequest, SubscribeUpdate},
-    tonic::{codec::CompressionEncoding, transport::ClientTlsConfig, Status},
+    geyser::SubscribeRequest,
+    tonic::{codec::CompressionEncoding, transport::ClientTlsConfig},
 };
 
 #[derive(Default, Copy, Debug, serde::Deserialize, Clone, ValueEnum)]
@@ -302,50 +302,20 @@ where
 
 #[async_trait]
 impl SourceTrait for YellowstoneGrpcSource {
-    async fn connect(
-        &self,
-        filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), ShipsternError> {
-        self.run(filters, tx, status_tx, None).await
-    }
-
-    async fn connect_with_filter_updates(
-        &self,
-        filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-        filter_updates_rx: watch::Receiver<Filters>,
-    ) -> Result<(), ShipsternError> {
-        self.run(filters, tx, status_tx, Some(filter_updates_rx))
-            .await
-    }
-}
-
-impl FilterUpdateSource for YellowstoneGrpcSource {}
-
-impl FromConfig for YellowstoneGrpcSource {
-    type Config = YellowstoneGrpcConfig;
-
-    fn from_config(config: Self::Config) -> Self { Self { config } }
-}
-
-impl YellowstoneGrpcSource {
     /// Open the subscription and pump updates until the stream ends, sending
-    /// each filter set published on `filter_updates_rx` to the server so it
-    /// replaces the live subscription.
+    /// each filter set published on the context's update slot to the server so
+    /// it replaces the live subscription.
     ///
-    /// `filter_updates_rx` is `None` when the caller never asked for updates,
-    /// which is what `connect` passes.
-    ///
-    async fn run(
-        &self,
-        filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-        mut filter_updates_rx: Option<watch::Receiver<Filters>>,
-    ) -> Result<(), ShipsternError> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, ShipsternError> {
+        let SourceContext {
+            filters,
+            tx,
+            filter_updates,
+            ..
+        } = ctx;
+
+        let mut filter_updates_rx = Some(filter_updates);
+
         let config = self.config.clone();
         let timeout = Duration::from_secs(config.timeout);
 
@@ -496,10 +466,16 @@ impl YellowstoneGrpcSource {
             tracing::warn!("Connection ended with a filter update still unsent");
         }
 
-        let _ = status_tx.send(exit_status);
-
-        Ok(())
+        Ok(exit_status)
     }
+}
+
+impl FilterUpdateSource for YellowstoneGrpcSource {}
+
+impl FromConfig for YellowstoneGrpcSource {
+    type Config = YellowstoneGrpcConfig;
+
+    fn from_config(config: Self::Config) -> Self { Self { config } }
 }
 
 #[cfg(test)]

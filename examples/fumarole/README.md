@@ -77,7 +77,7 @@ cargo run -p shipstern-example-fumarole -- --config ./Shipstern.toml
 The entrypoint is `examples/fumarole/src/main.rs`:
 
 - Reads a TOML config file from `--config`.
-- Builds a Shipstern runtime using `Runtime::<YellowstoneFumaroleSource>`.
+- Builds a Shipstern runtime with `Runtime::builder()` and `.build::<YellowstoneFumaroleSource>(config)`.
 - Registers:
   - an instruction pipeline using `shipstern_spl_token_parser::InstructionParser`
   - an account pipeline using `shipstern_spl_token_parser::AccountParser`

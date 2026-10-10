@@ -238,9 +238,9 @@ async fn run(config: JetstreamSourceConfig) -> Result<()> {
     let pipeline = Pipeline::new(InstructionParser, [TokenInstructionLogger]);
     info!("Created pipeline with ID: {}", pipeline.id());
 
-    let runtime = Runtime::<JetstreamSource>::builder()
+    let runtime = Runtime::builder()
         .instruction(pipeline)
-        .build(shipstern_config);
+        .build::<JetstreamSource>(shipstern_config);
 
     let start_time = Instant::now();
 

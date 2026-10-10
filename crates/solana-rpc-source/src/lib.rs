@@ -2,10 +2,9 @@ use std::{str::FromStr, time::Duration};
 
 use async_trait::async_trait;
 use shipstern::{
-    sources::{FromConfig, SourceExitStatus, SourceTrait},
+    sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     CommitmentLevel, Error as ShipsternError,
 };
-use shipstern_core::Filters;
 use solana_account_decoder_client_types::UiAccountEncoding;
 use solana_client::{
     nonblocking::rpc_client::RpcClient,
@@ -13,16 +12,10 @@ use solana_client::{
 };
 use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
-use tokio::{
-    sync::{mpsc::Sender, oneshot},
-    task::JoinSet,
-};
-use yellowstone_grpc_proto::{
-    geyser::{
-        subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateAccount,
-        SubscribeUpdateAccountInfo,
-    },
-    tonic::Status,
+use tokio::task::JoinSet;
+use yellowstone_grpc_proto::geyser::{
+    subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateAccount,
+    SubscribeUpdateAccountInfo,
 };
 
 /// A `Source` implementation for the Solana Accounts RPC API.
@@ -46,10 +39,6 @@ pub struct SolanaAccountsRpcConfig {
 }
 
 impl SolanaAccountsRpcSource {
-    /// Create a new `SolanaAccountsRpcSource`.
-    #[must_use]
-    pub fn new(config: SolanaAccountsRpcConfig) -> Self { Self { config } }
-
     fn get_commitment_config(&self) -> CommitmentConfig {
         match self.config.commitment_level {
             Some(CommitmentLevel::Finalized) => CommitmentConfig::finalized(),
@@ -62,19 +51,14 @@ impl SolanaAccountsRpcSource {
 impl FromConfig for SolanaAccountsRpcSource {
     type Config = SolanaAccountsRpcConfig;
 
-    fn from_config(config: Self::Config) -> Self { Self::new(config) }
+    fn from_config(config: Self::Config) -> Self { Self { config } }
 }
 
 #[async_trait]
 impl SourceTrait for SolanaAccountsRpcSource {
     #[allow(deprecated)] // get_program_accounts_with_config is deprecated but replacement not yet stable
-    async fn connect(
-        &self,
-        filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), ShipsternError> {
-        let filters = &filters;
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, ShipsternError> {
+        let SourceContext { filters, tx, .. } = ctx;
         let config = &self.config;
 
         let mut tasks_set = JoinSet::new();
@@ -202,8 +186,7 @@ impl SourceTrait for SolanaAccountsRpcSource {
             }
         }
 
-        let _ = status_tx.send(exit_status);
-        Ok(())
+        Ok(exit_status)
     }
 }
 
@@ -211,9 +194,12 @@ impl SourceTrait for SolanaAccountsRpcSource {
 mod tests {
     use std::collections::HashMap;
 
-    use shipstern::{sources::SourceTrait, CommitmentLevel};
+    use shipstern::{
+        sources::{FromConfig, SourceContext, SourceTrait},
+        CommitmentLevel,
+    };
     use shipstern_core::{Filters, Prefilter};
-    use tokio::sync::{mpsc, oneshot};
+    use tokio::sync::mpsc;
 
     use super::{SolanaAccountsRpcConfig, SolanaAccountsRpcSource};
 
@@ -229,20 +215,17 @@ mod tests {
                     .build()
                     .expect("account owner filter should build"),
             )]));
-            let source = SolanaAccountsRpcSource::new(SolanaAccountsRpcConfig {
+            let source = SolanaAccountsRpcSource::from_config(SolanaAccountsRpcConfig {
                 endpoint: "http://127.0.0.1:9".to_string(),
                 timeout: 1,
                 commitment_level: Some(CommitmentLevel::Confirmed),
             });
             let (tx, mut rx) = mpsc::channel(1);
-            let (status_tx, status_rx) = oneshot::channel();
 
-            source
-                .connect(filters, tx, status_tx)
+            let status = source
+                .connect(SourceContext::new(filters, tx))
                 .await
                 .expect("connect should report task failure through source status");
-
-            let status = status_rx.await.expect("source status should be sent");
             let shipstern::sources::SourceExitStatus::Error(msg) = status else {
                 panic!("expected source error, got {status:?}");
             };
@@ -272,22 +255,17 @@ mod tests {
                         .expect("account owner filter should build"),
                 ),
             ]));
-            let source = SolanaAccountsRpcSource::new(SolanaAccountsRpcConfig {
+            let source = SolanaAccountsRpcSource::from_config(SolanaAccountsRpcConfig {
                 endpoint: "http://127.0.0.1:9".to_string(),
                 timeout: 1,
                 commitment_level: Some(CommitmentLevel::Confirmed),
             });
             let (tx, mut rx) = mpsc::channel(1);
-            let (status_tx, status_rx) = oneshot::channel();
 
-            source
-                .connect(filters, tx, status_tx)
+            let status = source
+                .connect(SourceContext::new(filters, tx))
                 .await
                 .expect("connect should report task failures through source status");
-
-            let status = status_rx
-                .await
-                .expect("source status should be sent exactly once");
             let shipstern::sources::SourceExitStatus::Error(msg) = status else {
                 panic!("expected source error, got {status:?}");
             };

@@ -7,11 +7,11 @@ use async_trait::async_trait;
 use futures_util::FutureExt;
 use jetstreamer_firehose::firehose::{firehose, BlockData, EntryData, OnErrorFn, TransactionData};
 use shipstern::{
-    sources::{FromConfig, SourceExitStatus, SourceTrait},
+    sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     Error as ShipsternError,
 };
 use shipstern_core::Filters;
-use tokio::sync::{broadcast, mpsc, mpsc::Sender, oneshot};
+use tokio::sync::{broadcast, mpsc, mpsc::Sender};
 use tracing::{debug, error, info};
 use yellowstone_grpc_proto::{
     geyser::{
@@ -656,12 +656,8 @@ impl FromConfig for JetstreamSource {
 
 #[async_trait]
 impl SourceTrait for JetstreamSource {
-    async fn connect(
-        &self,
-        filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, yellowstone_grpc_proto::tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), ShipsternError> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, ShipsternError> {
+        let SourceContext { filters, tx, .. } = ctx;
         let config = self.config.clone();
 
         // jetstreamer-firehose reads configuration exclusively through env vars.
@@ -681,23 +677,20 @@ impl SourceTrait for JetstreamSource {
             );
         }
 
-        tokio::spawn(async move {
-            let exit_status = match Self::stream_loop(config, filters, tx.clone()).await {
-                Ok(()) => SourceExitStatus::Completed,
-                Err(e) => {
-                    error!(error = %e, "Jetstream streaming failed");
-                    let _ = tx
-                        .send(Err(yellowstone_grpc_proto::tonic::Status::internal(
-                            e.to_string(),
-                        )))
-                        .await;
-                    SourceExitStatus::Error(e.to_string())
-                },
-            };
-            let _ = status_tx.send(exit_status);
-        });
+        let exit_status = match Self::stream_loop(config, filters, tx.clone()).await {
+            Ok(()) => SourceExitStatus::Completed,
+            Err(e) => {
+                error!(error = %e, "Jetstream streaming failed");
+                let _ = tx
+                    .send(Err(yellowstone_grpc_proto::tonic::Status::internal(
+                        e.to_string(),
+                    )))
+                    .await;
+                SourceExitStatus::Error(e.to_string())
+            },
+        };
 
-        Ok(())
+        Ok(exit_status)
     }
 }
 

@@ -87,9 +87,9 @@ fn main() {
     let config = std::fs::read_to_string(config).expect("Error reading config file");
     let config = toml::from_str(&config).expect("Error parsing config");
 
-    Runtime::<YellowstoneGrpcSource>::builder()
+    Runtime::builder()
         .account(Pipeline::new(AccountParser, [Logger]))
         .instruction(Pipeline::new(InstructionParser, [Logger]))
-        .build(config)
+        .build::<YellowstoneGrpcSource>(config)
         .run();
 }

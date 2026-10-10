@@ -4,19 +4,14 @@ use async_trait::async_trait;
 use bytesize::ByteSize;
 use clap::ValueEnum;
 use shipstern::{
-    sources::{FromConfig, SourceExitStatus, SourceTrait},
+    sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     CommitmentLevel, Error as ShipsternError,
 };
-use shipstern_core::Filters;
-use tokio::sync::{mpsc::Sender, oneshot};
 use yellowstone_fumarole_client::{
     DragonsmouthAdapterSession, FumaroleClient, FumaroleSubscribeConfig, DEFAULT_PARA_DATA_STREAMS,
 };
+use yellowstone_grpc_proto::geyser::SubscribeRequest;
 pub use yellowstone_grpc_proto::tonic::codec::CompressionEncoding;
-use yellowstone_grpc_proto::{
-    geyser::{SubscribeRequest, SubscribeUpdate},
-    tonic::Status,
-};
 
 /// A `Source` implementation for the Yellowstone gRPC API.
 #[derive(Debug)]
@@ -82,12 +77,9 @@ impl FromConfig for YellowstoneFumaroleSource {
 
 #[async_trait]
 impl SourceTrait for YellowstoneFumaroleSource {
-    async fn connect(
-        &self,
-        filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), ShipsternError> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, ShipsternError> {
+        let SourceContext { filters, tx, .. } = ctx;
+
         let subscriber_name = self.config.subscriber_name.clone();
 
         let fumarole_subscribe_config = FumaroleSubscribeConfig {
@@ -100,8 +92,7 @@ impl SourceTrait for YellowstoneFumaroleSource {
             Err(e) => {
                 let msg = format!("Failed to connect to fumarole: {e}");
                 tracing::error!(%msg, "Fumarole source connection failed");
-                let _ = status_tx.send(SourceExitStatus::Error(msg));
-                return Ok(());
+                return Ok(SourceExitStatus::Error(msg));
             },
         };
 
@@ -126,11 +117,10 @@ impl SourceTrait for YellowstoneFumaroleSource {
                     message = status.message(),
                     "Fumarole source subscription failed"
                 );
-                let _ = status_tx.send(SourceExitStatus::StreamError {
+                return Ok(SourceExitStatus::StreamError {
                     code: status.code(),
                     message: status.message().to_owned(),
                 });
-                return Ok(());
             },
         };
 
@@ -161,8 +151,7 @@ impl SourceTrait for YellowstoneFumaroleSource {
             }
         };
 
-        let _ = status_tx.send(exit_status);
-        Ok(())
+        Ok(exit_status)
     }
 }
 
@@ -170,9 +159,9 @@ impl SourceTrait for YellowstoneFumaroleSource {
 mod tests {
     use std::collections::HashMap;
 
-    use shipstern::sources::{FromConfig, SourceTrait};
+    use shipstern::sources::{FromConfig, SourceContext, SourceTrait};
     use shipstern_core::Filters;
-    use tokio::sync::{mpsc, oneshot};
+    use tokio::sync::mpsc;
 
     use super::{FumaroleConfig, YellowstoneFumaroleSource};
 
@@ -187,14 +176,12 @@ mod tests {
                 ..FumaroleConfig::default()
             });
             let (tx, mut rx) = mpsc::channel(1);
-            let (status_tx, status_rx) = oneshot::channel();
 
-            source
-                .connect(Filters::new(HashMap::new()), tx, status_tx)
+            let status = source
+                .connect(SourceContext::new(Filters::new(HashMap::new()), tx))
                 .await
                 .expect("connect should report connection failure through source status");
 
-            let status = status_rx.await.expect("source status should be sent");
             let shipstern::sources::SourceExitStatus::Error(msg) = status else {
                 panic!("expected source error, got {status:?}");
             };

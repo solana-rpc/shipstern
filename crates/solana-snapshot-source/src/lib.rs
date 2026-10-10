@@ -8,7 +8,7 @@ use agave_snapshots::snapshot_config::{SnapshotConfig, SnapshotUsage};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use shipstern::{
-    sources::{FromConfig, SourceExitStatus, SourceTrait},
+    sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     Error as ShipsternError,
 };
 use shipstern_core::{Filters, Pubkey};
@@ -21,13 +21,10 @@ use solana_genesis_utils::open_genesis_config;
 use solana_ledger::{bank_forks_utils, blockstore_processor::ProcessOptions};
 use solana_pubkey::Pubkey as SolanaPubkey;
 use solana_runtime::bank::Bank;
-use tokio::sync::{mpsc, oneshot};
-use yellowstone_grpc_proto::{
-    geyser::{
-        subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate, SubscribeUpdateAccount,
-        SubscribeUpdateAccountInfo, SubscribeUpdateSlot,
-    },
-    tonic::Status,
+use tokio::sync::mpsc;
+use yellowstone_grpc_proto::geyser::{
+    subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate, SubscribeUpdateAccount,
+    SubscribeUpdateAccountInfo, SubscribeUpdateSlot,
 };
 
 const MAX_GENESIS_ARCHIVE_UNPACKED_SIZE: u64 = 10485760;
@@ -170,12 +167,9 @@ impl FromConfig for SolanaSnapshotSource {
 
 #[async_trait]
 impl SourceTrait for SolanaSnapshotSource {
-    async fn connect(
-        &self,
-        filters: Filters,
-        tx: tokio::sync::mpsc::Sender<Result<SubscribeUpdate, Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), ShipsternError> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, ShipsternError> {
+        let SourceContext { filters, tx, .. } = ctx;
+
         let filter_owner_key_lookup = FilterOwnerKeyLookup::new(&filters);
         let solana_snapshot = SolanaSnapshot::load_ledger(self.config.ledger_path.clone())?;
         let snapshot_slot = solana_snapshot.slot;
@@ -305,10 +299,9 @@ impl SourceTrait for SolanaSnapshotSource {
             .and_then(std::convert::identity);
 
         if let Err(error) = scan_result {
-            let message = format!("{error:?}");
             drop(sync_tx);
             let _ = sender_handle.await;
-            let _ = status_tx.send(SourceExitStatus::Error(message));
+
             return Err(error);
         }
 
@@ -321,8 +314,7 @@ impl SourceTrait for SolanaSnapshotSource {
         drop(sync_tx);
         let _ = sender_handle.await;
 
-        let _ = status_tx.send(SourceExitStatus::Completed);
-        Ok(())
+        Ok(SourceExitStatus::Completed)
     }
 }
 enum Event {

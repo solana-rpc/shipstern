@@ -55,7 +55,7 @@ pub enum BuilderError {
 /// [`stream::Server`](crate::stream::Server) types.
 #[derive(Debug)]
 #[must_use = "Consider calling .build() on this builder"]
-pub struct Builder<K: BuilderKind, S: SourceTrait> {
+pub struct Builder<K: BuilderKind> {
     /// The error result of the builder.    
     pub err: Result<(), K::Error>,
     /// The account pipelines.
@@ -75,11 +75,9 @@ pub struct Builder<K: BuilderKind, S: SourceTrait> {
     pub metrics_registry: prometheus::Registry,
     /// The extra builder kind.
     pub extra: K,
-    /// The source trait.
-    pub _source: std::marker::PhantomData<S>,
 }
 
-impl<K: BuilderKind, S: SourceTrait> Default for Builder<K, S> {
+impl<K: BuilderKind> Default for Builder<K> {
     fn default() -> Self {
         Self {
             err: Ok(()),
@@ -90,14 +88,13 @@ impl<K: BuilderKind, S: SourceTrait> Default for Builder<K, S> {
             block: vec![],
             slot: vec![],
             extra: K::default(),
-            _source: std::marker::PhantomData,
             #[cfg(feature = "prometheus")]
             metrics_registry: prometheus::Registry::new(),
         }
     }
 }
 
-impl<K: BuilderKind, S: SourceTrait> Builder<K, S> {
+impl<K: BuilderKind> Builder<K> {
     /// Mutate the builder in place.
     #[inline]
     pub fn mutate(self, mutate: impl FnOnce(&mut Self)) -> Self {
@@ -118,7 +115,7 @@ impl<K: BuilderKind, S: SourceTrait> Builder<K, S> {
 
     #[cfg(feature = "prometheus")]
     /// Sets the metrics registry for the runtime.
-    pub fn metrics(self, metrics_registry: prometheus::Registry) -> Builder<K, S> {
+    pub fn metrics(self, metrics_registry: prometheus::Registry) -> Self {
         self.mutate(|s| s.metrics_registry = metrics_registry)
     }
 }
@@ -127,13 +124,16 @@ impl<K: BuilderKind, S: SourceTrait> Builder<K, S> {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RuntimeKind;
 /// A builder for the [`Runtime`] type.
-pub type RuntimeBuilder<S> = Builder<RuntimeKind, S>;
+///
+/// It is not tied to a source until it is built, so one set of pipelines can
+/// be built against whichever source a deployment needs.
+pub type RuntimeBuilder = Builder<RuntimeKind>;
 
 impl BuilderKind for RuntimeKind {
     type Error = BuilderError;
 }
 
-impl<S: SourceTrait> RuntimeBuilder<S> {
+impl RuntimeBuilder {
     /// Add a new account pipeline to the builder.
     pub fn account<A: DynPipeline<AccountUpdate> + Send + Sync + 'static>(
         self,
@@ -187,7 +187,7 @@ impl<S: SourceTrait> RuntimeBuilder<S> {
     /// config section cannot express.
     ///
     /// ```rust, ignore
-    /// let ShipsternConfig { source, buffer } = toml::from_str(&text)?;
+    /// let ShipsternConfig::<YellowstoneGrpcConfig> { source, buffer } = toml::from_str(&text)?;
     ///
     /// Runtime::builder()
     ///     .account(Pipeline::new(AccountParser, [Logger]))
@@ -198,7 +198,7 @@ impl<S: SourceTrait> RuntimeBuilder<S> {
     /// This function returns an error if the builder is invalid.
     /// # Panics
     /// Only panics if the prometheus metrics registry is not set.
-    pub fn try_build_with(
+    pub fn try_build_with<S: SourceTrait>(
         self,
         source: S,
         buffer: BufferConfig,
@@ -212,7 +212,6 @@ impl<S: SourceTrait> RuntimeBuilder<S> {
             block,
             slot,
             extra: RuntimeKind,
-            _source,
             #[cfg(feature = "prometheus")]
             metrics_registry,
         } = self;
@@ -297,42 +296,43 @@ impl<S: SourceTrait> RuntimeBuilder<S> {
     /// process if an error occurs.
     #[inline]
     #[must_use]
-    pub fn build_with(self, source: S, buffer: BufferConfig) -> Runtime<S> {
+    pub fn build_with<S: SourceTrait>(self, source: S, buffer: BufferConfig) -> Runtime<S> {
         util::handle_fatal_msg(
             self.try_build_with(source, buffer),
             "Error building Shipstern runtime",
         )
     }
-}
 
-impl<S: FromConfig> RuntimeBuilder<S> {
-    /// Attempt to build a new [`Runtime`] instance from the current builder
-    /// state and the provided configuration, constructing the source from its
-    /// section of the config.
+    /// Attempt to build a new [`Runtime`] from the current builder state and a
+    /// config document, constructing the source from its section. Name the
+    /// source with a turbofish, since its config type alone does not say
+    /// which source it belongs to.
     ///
     /// ```rust, ignore
-    /// let config: ShipsternConfig<YellowstoneGrpcConfig> = toml::from_str(&text)?;
+    /// let config = toml::from_str(&text)?;
     ///
-    /// Runtime::<YellowstoneGrpcSource>::builder()
+    /// Runtime::builder()
     ///     .account(Pipeline::new(AccountParser, [Logger]))
-    ///     .try_build(config)?;
+    ///     .try_build::<YellowstoneGrpcSource>(config)?;
     /// ```
     ///
     /// # Errors
     /// This function returns an error if the builder or configuration are
     /// invalid.
-    pub fn try_build(self, config: ShipsternConfig<S::Config>) -> Result<Runtime<S>, BuilderError> {
+    pub fn try_build<S: FromConfig>(
+        self,
+        config: ShipsternConfig<S::Config>,
+    ) -> Result<Runtime<S>, BuilderError> {
         let ShipsternConfig { source, buffer } = config;
 
         self.try_build_with(S::from_config(source), buffer)
     }
 
-    /// Build a new [`Runtime`] instance from the current builder state and the
-    /// provided configuration, terminating the current process if an error
-    /// occurs.
+    /// Build a new [`Runtime`] from the current builder state and a config
+    /// document, terminating the current process if an error occurs.
     #[inline]
     #[must_use]
-    pub fn build(self, config: ShipsternConfig<S::Config>) -> Runtime<S> {
+    pub fn build<S: FromConfig>(self, config: ShipsternConfig<S::Config>) -> Runtime<S> {
         util::handle_fatal_msg(self.try_build(config), "Error building Shipstern runtime")
     }
 }

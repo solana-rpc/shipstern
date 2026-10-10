@@ -38,18 +38,15 @@ pub enum BuilderError {
 #[derive(Debug, Default)]
 pub struct StreamKind<'a>(Vec<&'a [u8]>, Channels<HashMap<String, Receiver>>);
 /// A builder for the [`Server`] type.
-pub struct StreamBuilder<'a, S: SourceTrait>(Builder<StreamKind<'a>, S>);
+#[derive(Default)]
+pub struct StreamBuilder<'a>(Builder<StreamKind<'a>>);
 
 impl BuilderKind for StreamKind<'_> {
     type Error = BuilderError;
 }
 
-impl<S: SourceTrait> Default for StreamBuilder<'_, S> {
-    fn default() -> Self { Self(Builder::default()) }
-}
-
-impl<'a, S: SourceTrait> StreamBuilder<'a, S> {
-    pub fn new(builder: Builder<StreamKind<'a>, S>) -> Self { Self(builder) }
+impl<'a> StreamBuilder<'a> {
+    pub fn new(builder: Builder<StreamKind<'a>>) -> Self { Self(builder) }
 }
 
 fn wrap_parser<P: Debug + Parser + Send + Sync + 'static>(
@@ -63,11 +60,11 @@ where
     Box::new(Pipeline::new(parser, [GrpcHandler(tx)]))
 }
 
-impl<'a, S: SourceTrait> StreamBuilder<'a, S> {
+impl<'a> StreamBuilder<'a> {
     fn insert<
         P: Debug + ProgramParser + Send + Sync + 'static,
         F: for<'b> FnOnce(
-            &'b mut Builder<StreamKind<'a>, S>,
+            &'b mut Builder<StreamKind<'a>>,
         ) -> &'b mut Vec<BoxPipeline<'static, P::Input>>,
     >(
         self,
@@ -175,7 +172,7 @@ impl<'a, S: SourceTrait> StreamBuilder<'a, S> {
     ///
     /// # Errors
     /// This function returns an error if the builder is invalid.
-    pub fn try_build_with(
+    pub fn try_build_with<S: SourceTrait>(
         self,
         source: S,
         grpc_cfg: GrpcConfig,
@@ -190,7 +187,6 @@ impl<'a, S: SourceTrait> StreamBuilder<'a, S> {
             block,
             extra: StreamKind(desc_sets, channels),
             slot,
-            _source,
             #[cfg(feature = "prometheus")]
             metrics_registry,
             ..
@@ -211,7 +207,6 @@ impl<'a, S: SourceTrait> StreamBuilder<'a, S> {
             block,
             extra: RuntimeKind,
             slot,
-            _source,
             #[cfg(feature = "prometheus")]
             metrics_registry,
             ..Default::default()
@@ -230,7 +225,7 @@ impl<'a, S: SourceTrait> StreamBuilder<'a, S> {
     /// Build a new [`Server`] around `source`, terminating the current process
     /// if an error occurs.
     #[inline]
-    pub fn build_with(
+    pub fn build_with<S: SourceTrait>(
         self,
         source: S,
         grpc_cfg: GrpcConfig,
@@ -241,17 +236,18 @@ impl<'a, S: SourceTrait> StreamBuilder<'a, S> {
             "Error building Shipstern stream server",
         )
     }
-}
 
-impl<'a, S: FromConfig> StreamBuilder<'a, S> {
     /// Attempt to build a new [`Server`] instance from the current builder
     /// state and the provided configuration, constructing the source from its
-    /// section of the config.
+    /// section of the config. Name the source with a turbofish.
     ///
     /// # Errors
     /// This function returns an error if the builder or configuration are
     /// invalid.
-    pub fn try_build(self, config: StreamConfig<S::Config>) -> Result<Server<'a, S>, BuilderError> {
+    pub fn try_build<S: FromConfig>(
+        self,
+        config: StreamConfig<S::Config>,
+    ) -> Result<Server<'a, S>, BuilderError> {
         let StreamConfig {
             grpc,
             runtime: ShipsternConfig { source, buffer },
@@ -264,7 +260,7 @@ impl<'a, S: FromConfig> StreamBuilder<'a, S> {
     /// provided configuration, terminating the current process if an error
     /// occurs.
     #[inline]
-    pub fn build(self, config: StreamConfig<S::Config>) -> Server<'a, S> {
+    pub fn build<S: FromConfig>(self, config: StreamConfig<S::Config>) -> Server<'a, S> {
         util::handle_fatal_msg(
             self.try_build(config),
             "Error building Shipstern stream server",

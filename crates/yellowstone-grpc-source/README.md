@@ -38,9 +38,9 @@ filters. Nothing on the handle awaits, so it works the same from async code
 and from a plain thread beside a blocking `run()`:
 
 ```rust
-let runtime = Runtime::<YellowstoneGrpcSource>::builder()
+let runtime = Runtime::builder()
     .account(Pipeline::new(TokenProgramAccParser, [Handler]))
-    .try_build(config)?;
+    .try_build::<YellowstoneGrpcSource>(config)?;
 
 let handle = runtime.handle();
 tokio::spawn(runtime.run_async());
@@ -121,15 +121,13 @@ infrastructure that does not forward them.
 ## Creating a Custom Source
 
 A source is a value the runtime is handed. Implement `SourceTrait` with one
-method, `connect`, which receives the filter set derived from the registered
-pipelines and streams updates until the stream ends:
+method, `connect`. It receives a `SourceContext` carrying the filter set
+derived from the registered pipelines and the channel to send updates on,
+streams until the stream ends, and returns how it ended:
 
 ```rust
 use async_trait::async_trait;
-use shipstern::sources::{SourceExitStatus, SourceTrait};
-use shipstern_core::Filters;
-use tokio::sync::{mpsc::Sender, oneshot};
-use yellowstone_grpc_proto::{geyser::SubscribeUpdate, tonic::Status};
+use shipstern::sources::{SourceContext, SourceExitStatus, SourceTrait};
 
 #[derive(Debug)]
 struct MySource {
@@ -138,21 +136,20 @@ struct MySource {
 
 #[async_trait]
 impl SourceTrait for MySource {
-    async fn connect(
-        &self,
-        filters: Filters,
-        tx: Sender<Result<SubscribeUpdate, Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), shipstern::Error> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, shipstern::Error> {
+        let SourceContext { filters, tx, .. } = ctx;
+
         // Open the stream for `filters` and forward each update into `tx`.
-        // When it ends, say how, then return.
-        let _ = status_tx.send(SourceExitStatus::Completed);
-        Ok(())
+        Ok(SourceExitStatus::Completed)
     }
 }
 ```
 
-Hand an instance to the builder with `try_build_with`:
+The context is `#[non_exhaustive]`, so destructure it with a trailing `..`.
+New fields can then be added without breaking your source.
+
+Hand an instance to the builder with `try_build_with`. The builder is not
+tied to a source until then, so the source type is inferred:
 
 ```rust
 Runtime::builder()
@@ -165,7 +162,8 @@ Runtime::builder()
 ### Building from a config document
 
 Implement `FromConfig` as well and the runtime can construct the source from
-its section of a `ShipsternConfig`, which is what `try_build` does. This is
+its section of a `ShipsternConfig`, which is what `try_build::<MySource>` does.
+The turbofish names the source, since a config type alone does not. This is
 how every source in this repository is wired up so a TOML file or CLI flags
 can select it:
 
@@ -180,22 +178,40 @@ impl FromConfig for MySource {
 
 let config: ShipsternConfig<MyConfig> = toml::from_str(&text)?;
 
-Runtime::<MySource>::builder()
+Runtime::builder()
     .account(Pipeline::new(TokenProgramAccParser, [Handler]))
-    .try_build(config)?
+    .try_build::<MySource>(config)?
     .run();
 ```
 
 ### Applying filter updates
 
-Implement `FilterUpdateSource` and override `connect_with_filter_updates` to
-apply each set published on the receiver to the live subscription, as the
-gRPC source does. That is what makes `Runtime::handle` available to callers.
-Sources that cannot change a subscription mid-stream leave both alone.
+Implement `FilterUpdateSource` and read `ctx.filter_updates` in `connect`,
+applying each set published there to the live subscription, as the gRPC source
+does. That is what makes `Runtime::handle` available to callers. Sources that
+cannot change a subscription mid-stream ignore the slot and skip the trait.
+
+### Picking a source at startup
+
+`Box<dyn SourceTrait>` is a source too, and it is what a bare `Runtime` holds,
+so one binary can choose between sources from its config and build once:
+
+```rust
+let source: Box<dyn SourceTrait> = match config.kind {
+    Kind::Live => Box::new(YellowstoneGrpcSource::from_config(config.grpc)),
+    Kind::Backfill => Box::new(JetstreamSource::from_config(config.jetstream)),
+};
+
+let runtime: Runtime = Runtime::builder()
+    .account(Pipeline::new(TokenProgramAccParser, [Handler]))
+    .try_build_with(source, config.buffer)?;
+```
+
+Box a `dyn FilterUpdateSource` instead to keep `Runtime::handle`.
 
 ### Best Practices
 
-1. **Exit status**: Always send a `SourceExitStatus` before returning so the runtime can tell a clean end from a failure.
+1. **Exit status**: Return the `SourceExitStatus` that describes how the stream ended, so the runtime can tell a clean end from a failure. Return an `Err` when the source cannot connect at all.
 2. **Backpressure**: `tx.send(..).await` fails once the runtime has stopped. Treat that as a signal to return with `ReceiverDropped`, not as an error.
 3. **Filters**: Translate the whole `Filters` set into the narrowest subscription the provider supports, so the runtime discards as little as possible.
 4. **State**: Anything the source needs beyond its config, a shared client for instance, can live on the struct since the caller constructs it.

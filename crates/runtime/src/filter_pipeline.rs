@@ -43,7 +43,6 @@ impl<P: Parser, H> FilterPipeline<P, H> {
     /// ```rust, ignore
     ///
     ///    shipstern::Runtime::builder()
-    ///        .source(YellowstoneGrpcSource::new())
     ///        .account(Pipeline::new(RaydiumAmmV4AccParser, [Logger]))
     ///        .instruction(FilterPipeline::new(RaydiumAmmV4IxParser, [RaydiumAmmV4IxLogger], Prefilter::builder()
     ///            .transaction_accounts_include([
@@ -54,7 +53,7 @@ impl<P: Parser, H> FilterPipeline<P, H> {
     ///                KeyBytes::<32>::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap()
     ///            ]),
     ///        ))
-    ///        .build(config)
+    ///        .build::<YellowstoneGrpcSource>(config)
     ///        .run();
     /// ```
     ///

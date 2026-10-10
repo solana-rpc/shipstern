@@ -19,15 +19,13 @@ use std::{
 
 use async_trait::async_trait;
 use shipstern_core::{ParseResult, Parser, Prefilter, SlotUpdate};
-use tokio::sync::{mpsc::Sender, oneshot};
-use yellowstone_grpc_proto::{
-    geyser::{subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate, SubscribeUpdateSlot},
-    tonic,
+use yellowstone_grpc_proto::geyser::{
+    subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate, SubscribeUpdateSlot,
 };
 
 use crate::{
     config::BufferConfig,
-    sources::{SourceExitStatus, SourceTrait},
+    sources::{SourceContext, SourceExitStatus, SourceTrait},
     Error, Handler, Pipeline, Runtime,
 };
 
@@ -77,22 +75,16 @@ struct FloodSource<const N: u64>;
 
 #[async_trait]
 impl<const N: u64> SourceTrait for FloodSource<N> {
-    async fn connect(
-        &self,
-        _filters: shipstern_core::Filters,
-        tx: Sender<Result<SubscribeUpdate, tonic::Status>>,
-        status_tx: oneshot::Sender<SourceExitStatus>,
-    ) -> Result<(), Error> {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext { tx, .. } = ctx;
+
         for slot in 0..N {
             if tx.send(Ok(make_slot_update(slot))).await.is_err() {
-                let _ = status_tx.send(SourceExitStatus::ReceiverDropped);
-                return Ok(());
+                return Ok(SourceExitStatus::ReceiverDropped);
             }
         }
 
-        let _ = status_tx.send(SourceExitStatus::Completed);
-        drop(tx);
-        Ok(())
+        Ok(SourceExitStatus::Completed)
     }
 }
 
