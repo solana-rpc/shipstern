@@ -1,0 +1,210 @@
+{
+  "kind": "rootNode",
+  "standard": "codama",
+  "version": "1.9.2",
+  "program": {
+    "kind": "programNode",
+    "name": "eventPayloadLinks",
+    "publicKey": "Dex1111111111111111111111111111111111111111",
+    "version": "0.1.0",
+    "origin": "anchor",
+    "instructions": [
+      {
+        "kind": "instructionNode",
+        "name": "commit",
+        "optionalAccountStrategy": "programId",
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "fixedSizeTypeNode",
+              "size": 8,
+              "type": {
+                "kind": "bytesTypeNode"
+              }
+            },
+            "defaultValue": {
+              "kind": "bytesValueNode",
+              "data": "0102030405060708",
+              "encoding": "base16"
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "authority",
+            "type": {
+              "kind": "definedTypeLinkNode",
+              "name": "vrfAuthority"
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "marketEvent",
+            "type": {
+              "kind": "definedTypeLinkNode",
+              "name": "marketEvent"
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      }
+    ],
+    "definedTypes": [
+      {
+        "kind": "definedTypeNode",
+        "name": "marketEvent",
+        "type": {
+          "kind": "enumTypeNode",
+          "variants": [
+            {
+              "kind": "enumTupleVariantTypeNode",
+              "name": "header",
+              "tuple": {
+                "kind": "tupleTypeNode",
+                "items": [
+                  {
+                    "kind": "definedTypeLinkNode",
+                    "name": "marketEventHeader"
+                  }
+                ]
+              }
+            }
+          ],
+          "size": {
+            "kind": "numberTypeNode",
+            "format": "u8",
+            "endian": "le"
+          }
+        }
+      }
+    ],
+    "events": [
+      {
+        "kind": "eventNode",
+        "name": "vrfAuthority",
+        "data": {
+          "kind": "hiddenPrefixTypeNode",
+          "type": {
+            "kind": "structTypeNode",
+            "fields": [
+              {
+                "kind": "structFieldTypeNode",
+                "name": "x",
+                "type": {
+                  "kind": "numberTypeNode",
+                  "format": "u64",
+                  "endian": "le"
+                }
+              }
+            ]
+          },
+          "prefix": [
+            {
+              "kind": "constantValueNode",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 8,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              },
+              "value": {
+                "kind": "bytesValueNode",
+                "data": "0909090909090909",
+                "encoding": "base16"
+              }
+            }
+          ]
+        },
+        "discriminators": [
+          {
+            "kind": "constantDiscriminatorNode",
+            "offset": 0,
+            "constant": {
+              "kind": "constantValueNode",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 8,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              },
+              "value": {
+                "kind": "bytesValueNode",
+                "data": "0909090909090909",
+                "encoding": "base16"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "kind": "eventNode",
+        "name": "marketEventHeader",
+        "data": {
+          "kind": "hiddenPrefixTypeNode",
+          "type": {
+            "kind": "structTypeNode",
+            "fields": [
+              {
+                "kind": "structFieldTypeNode",
+                "name": "slot",
+                "type": {
+                  "kind": "numberTypeNode",
+                  "format": "u64",
+                  "endian": "le"
+                }
+              }
+            ]
+          },
+          "prefix": [
+            {
+              "kind": "constantValueNode",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 8,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              },
+              "value": {
+                "kind": "bytesValueNode",
+                "data": "0808080808080808",
+                "encoding": "base16"
+              }
+            }
+          ]
+        },
+        "discriminators": [
+          {
+            "kind": "constantDiscriminatorNode",
+            "offset": 0,
+            "constant": {
+              "kind": "constantValueNode",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 8,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              },
+              "value": {
+                "kind": "bytesValueNode",
+                "data": "0808080808080808",
+                "encoding": "base16"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

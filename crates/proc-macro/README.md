@@ -29,7 +29,7 @@ The macro generates type-safe account and instruction parsers from an Anchor or 
 
 ## Events and self-CPI events
 
-Event parsing is gated behind the `program-events` feature. Without it the macro emits no event types, whatever the IDL declares:
+Event parsing is gated behind the `program-events` feature. Without it the macro emits no event types, whatever the IDL declares, except that a payload another type links to is still emitted as an ordinary type:
 
 ```toml
 shipstern-proc-macro = { version = "0.11.0", features = ["program-events"] }

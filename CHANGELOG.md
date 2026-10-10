@@ -21,6 +21,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `shipstern-proc-macro`: a type that links to an event's payload now compiles and decodes, and an event that holds another event's payload is no longer skipped. The payload is emitted as a defined type, and the proto `Evt` rename applies only to event wrappers ([#343](https://github.com/solana-rpc/shipstern/pull/343) closing [#335](https://github.com/solana-rpc/shipstern/issues/335) and [#336](https://github.com/solana-rpc/shipstern/issues/336) by @senzenn).
 - `shipstern-core`: `Prefilter::builder().account_filters(..)` drops repeated comparisons before checking the limit of four, so a config that repeats one is no longer refused ([#333](https://github.com/solana-rpc/shipstern/pull/333) closing [#331](https://github.com/solana-rpc/shipstern/issues/331) by @senzenn).
 - `shipstern-proc-macro`: generated parsers read number discriminators at their declared width, skip the bytes after a fixed option's `None` tag, return the ambiguity error for an account count that two same-discriminator instructions share, keep instruction proto messages named like a type (renamed `Ix{Name}`), and derive serde on the account wrapper ([#342](https://github.com/solana-rpc/shipstern/pull/342) by @senzenn).
 

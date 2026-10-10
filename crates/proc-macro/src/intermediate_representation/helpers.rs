@@ -450,14 +450,22 @@ pub fn unwrap_nested_struct(
 ///
 /// Event data is a TypeNode that may be wrapped in a HiddenPrefix (for the discriminator bytes).
 pub fn unwrap_event_struct(node: &codama_nodes::TypeNode) -> &codama_nodes::StructTypeNode {
+    event_struct(node)
+        .unwrap_or_else(|other| panic!("Unsupported EventNode.data wrapper: {:?}", other))
+}
+
+/// The struct inside an event's data wrappers, or the node found in its place.
+pub fn event_struct(
+    node: &codama_nodes::TypeNode,
+) -> Result<&codama_nodes::StructTypeNode, &codama_nodes::TypeNode> {
     use codama_nodes::TypeNode as T;
 
     match node {
-        T::Struct(s) => s,
-        T::HiddenPrefix(w) => unwrap_event_struct(&w.r#type),
-        T::HiddenSuffix(w) => unwrap_event_struct(&w.r#type),
-        T::FixedSize(w) => unwrap_event_struct(&w.r#type),
-        T::SizePrefix(w) => unwrap_event_struct(&w.r#type),
-        other => panic!("Unsupported EventNode.data wrapper: {:?}", other),
+        T::Struct(s) => Ok(s),
+        T::HiddenPrefix(w) => event_struct(&w.r#type),
+        T::HiddenSuffix(w) => event_struct(&w.r#type),
+        T::FixedSize(w) => event_struct(&w.r#type),
+        T::SizePrefix(w) => event_struct(&w.r#type),
+        other => Err(other),
     }
 }

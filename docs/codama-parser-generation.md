@@ -97,7 +97,7 @@ changing it will not affect the generated parser.
 | `program.instructions[].accounts` | the `*Accounts` struct |
 | `program.accounts[]` | account types and `AccountParser` |
 | `program.definedTypes[]` | shared types, referenced through `definedTypeLinkNode` |
-| `events[]` | event types, **only** with the `program-events` feature |
+| `events[]` | event types, **only** with the `program-events` feature; a payload another type links to is emitted as a defined type |
 
 Ignored: `pdas` and `docs` are not read at all. `errors` is only normalised on load, where a
 string `"code": "6000"` is coerced to a number; it is never rendered into the parser.
@@ -126,7 +126,8 @@ the discriminator and the account count, supply a `CustomInstructionParser`; see
 ## The `program-events` feature
 
 Event parsing is feature-gated. Without `program-events`, the macro emits no event types
-and no self-CPI handling at all, however the IDL declares its events.
+and no self-CPI handling at all, however the IDL declares its events. A payload that another
+type links to is still emitted as an ordinary type.
 
 Enabling it also **changes the parser's output type**: `InstructionParser::Output` becomes
 `ProgramEventOutput`, which carries the decoded instruction alongside any events found on
