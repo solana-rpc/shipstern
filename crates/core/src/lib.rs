@@ -208,6 +208,23 @@ fn merge_opt<T, F: FnOnce(&mut T, T)>(lhs: &mut Option<T>, rhs: Option<T>, f: F)
 pub struct CuckooAccounts(Vec<Pubkey>);
 
 impl CuckooAccounts {
+    /// Number of distinct keys in the set.
+    #[must_use]
+    pub fn len(&self) -> usize { self.0.len() }
+
+    /// Whether the set has no keys.
+    #[must_use]
+    pub fn is_empty(&self) -> bool { self.0.is_empty() }
+
+    /// The keys in sorted order.
+    pub fn iter(&self) -> impl Iterator<Item = &Pubkey> { self.0.iter() }
+
+    /// The server can match a key outside the set, so a parser checks its own set.
+    #[must_use]
+    pub fn contains(&self, key: &Pubkey) -> bool {
+        self.0.binary_search_by(|k| k.0.cmp(&key.0)).is_ok()
+    }
+
     fn merge(&mut self, other: CuckooAccounts) {
         self.0.extend(other.0);
         self.normalize();
@@ -226,16 +243,23 @@ impl CuckooAccounts {
             yellowstone_grpc_proto::cuckoo::CuckooFilter::<[u8; 32]>::with_capacity(capacity)
                 .ok()?;
 
+        // The kick loop only moves fingerprints between buckets, so no key is lost
+        // until an insert fails.
+        let mut evicted = false;
+
         for key in &self.0 {
-            let _ = filter.insert(&key.0);
+            evicted |= filter.insert(&key.0).is_err();
         }
 
-        let missed = self
-            .0
-            .iter()
-            .filter(|key| !filter.contains(&key.0))
-            .copied()
-            .collect();
+        let missed = if evicted {
+            self.0
+                .iter()
+                .filter(|key| !filter.contains(&key.0))
+                .copied()
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         Some(((&filter).into(), missed))
     }
@@ -248,15 +272,15 @@ impl CuckooAccounts {
         // Rebuild once at 2x to keep missed keys out of the list: a server without
         // cuckoo support ignores the filter and would match only the listed keys.
         let len = self.0.len();
-        let built = self
-            .build(len)
-            .filter(|(_, missed)| missed.is_empty())
-            .or_else(|| self.build(len.saturating_mul(2)));
 
-        built.map_or_else(
-            || (None, self.0.clone()),
-            |(filter, missed)| (Some(filter), missed),
-        )
+        if let Some((filter, missed)) = self.build(len).filter(|(_, missed)| missed.is_empty()) {
+            return (Some(filter), missed);
+        }
+
+        match self.build(len.saturating_mul(2)) {
+            Some((filter, missed)) => (Some(filter), missed),
+            None => (None, self.0.clone()),
+        }
     }
 }
 
@@ -275,9 +299,10 @@ fn wire_keys(
 ) -> (Vec<String>, Option<CuckooFilter>) {
     let (filter, missed) = cuckoo.to_filter();
 
+    // The server counts the raw list against `account_max`, so list a key once.
     let list = keys
         .iter()
-        .chain(&missed)
+        .chain(missed.iter().filter(|key| !keys.contains(*key)))
         .map(ToString::to_string)
         .collect();
     (list, filter)
@@ -2141,7 +2166,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_cuckoo_accounts_contains_its_keys_only() {
+        let key = |b: u8| Pubkey::new([b; 32]);
+        let accounts: CuckooAccounts = [key(9), key(3), key(3)].into_iter().collect();
+
+        assert_eq!(accounts.len(), 2);
+        assert!(accounts.contains(&key(3)) && accounts.contains(&key(9)));
+        assert!(!accounts.contains(&key(4)));
+    }
+
     // Building this set at `with_capacity(243)` evicts keys; the 2x rebuild holds them all.
+    // 243 depends on upstream's LOAD_FACTOR 0.95, MAX_KICKS 500 and default SipHash
+    // seed (yellowstone-grpc-proto 12.7.0); a change there moves the overflow point.
     #[test]
     fn test_cuckoo_accounts_track_the_keys_a_build_drops() {
         let accounts: CuckooAccounts = (0..243u16)
