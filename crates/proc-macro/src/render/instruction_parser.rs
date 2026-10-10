@@ -440,7 +440,6 @@ fn single_instruction_helper_fn(
 
     let info = extract_ix_discriminator_info(instruction, &args_ident, has_args, &ix_mod)?;
 
-    // Rendered once per account, so an invalid address reports one compile error.
     let fixed_keys: Vec<Option<TokenStream>> = instruction
         .accounts
         .iter()
@@ -509,27 +508,46 @@ fn single_instruction_helper_fn(
         })
         .collect::<Vec<_>>();
 
-    // A program that dropped an account the IDL still lists shifts later ones a slot early.
-    // Refuse a fill when a carried fixed slot differs or a carried account holds a fill address.
+    // A program that dropped an IDL account shifts later ones a slot early. Refuse a fill if a
+    // fixed slot differs, another slot holds a fill address, or an earlier optional is missing.
     let shifted_guard = fixed_keys
         .iter()
         .rposition(Option::is_some)
         .map(|last_fixed| {
+            let optional_before = instruction
+                .accounts
+                .iter()
+                .take(last_fixed)
+                .enumerate()
+                .filter(|(_, account)| account.is_optional.unwrap_or(false))
+                .map(|(idx, _)| crate::utils::unsuffixed(idx as u64));
+
             let last_fixed = crate::utils::unsuffixed(last_fixed as u64);
 
             quote! {
                 if accounts.len() <= #last_fixed {
                     let fixed: &[(usize, ::shipstern_core::Pubkey)] = &[#(#fixed_accounts),*];
+                    let optional: &[usize] = &[#(#optional_before),*];
 
-                    let shifted = fixed.iter().any(|(at, key)| match accounts.get(*at) {
-                        Some(carried) => carried != key,
-                        None => accounts.contains(key),
-                    });
+                    let shifted = optional.iter().any(|at| *at >= accounts.len())
+                        || fixed.iter().any(|(at, key)| match accounts.get(*at) {
+                            Some(carried) => carried != key,
+                            None => accounts.iter().enumerate().any(|(idx, carried)| {
+                                carried == key
+                                    && !fixed.iter().any(|(fixed_at, _)| *fixed_at == idx)
+                            }),
+                        });
 
                     if shifted {
+                        // The same index the field reads report when nothing is filled.
+                        let mut missing = accounts.len();
+
+                        while optional.contains(&missing) {
+                            missing += 1;
+                        }
+
                         return Err(ParseError::from(format!(
-                            "Account does not exist at index {}",
-                            accounts.len()
+                            "Account does not exist at index {missing}"
                         )));
                     }
                 }

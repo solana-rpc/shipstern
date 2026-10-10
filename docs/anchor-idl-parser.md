@@ -97,7 +97,8 @@ in this repository shows the shape of such a test, with hand-built instruction b
   Codama-converted parser behaves the same.
 - **A filled account is an IDL default, not transaction data.** The parser does not
   fill a list that looks shifted: a carried account in a fixed-address slot differs
-  from that address, or a carried account already holds an address the fill would add.
+  from that address, a carried account in another slot already holds an address the
+  fill would add, or an optional account before the filled ones is missing.
   The `tokenProgram` name rule fills the legacy Token program, also for programs that
   accept Token-2022.
 - **The Codama output is not identical to `codama convert`.** Account sizes, PDAs in
