@@ -40,6 +40,10 @@ impl Parser for InstructionParser {
     }
 
     async fn parse(&self, ix_update: &InstructionUpdate) -> ParseResult<Self::Output> {
+        if !ix_update.program.equals_ref(spl_token_2022::ID) {
+            return Err(ParseError::Filtered);
+        }
+
         InstructionParser::parse_impl(ix_update).map_err(|e| ParseError::Other(e.into()))
     }
 }
@@ -389,9 +393,13 @@ impl InstructionParser {
 mod tests {
     use std::ops::Mul;
 
+    use shipstern_core::instruction::Path;
     use shipstern_mock::tx_fixture;
 
-    use super::{InstructionParser, Parser, TokenExtensionProgram};
+    use super::{
+        InstructionParser, InstructionUpdate, ParseError, Parser, ProgramParser,
+        TokenExtensionProgram,
+    };
 
     #[tokio::test]
     async fn test_mint_to_checked_ix_parsing() {
@@ -421,5 +429,23 @@ mod tests {
 
         assert_eq!(args.decimals, 9);
         assert_eq!(args.amount, 100.mul(10u64.pow(args.decimals)));
+    }
+
+    /// Every parser gets every instruction, so an SPL Token transfer must come back Filtered.
+    #[tokio::test]
+    async fn spl_token_instruction_is_filtered() {
+        let ix = InstructionUpdate {
+            program: shipstern_spl_token_parser::InstructionParser.program_id(),
+            accounts: vec![shipstern_core::Pubkey::new([1; 32]); 3],
+            data: [&[3][..], &1_000u64.to_le_bytes()].concat(),
+            shared: Default::default(),
+            inner: vec![],
+            path: Path::new_single(0),
+            log_range: 0..0,
+        };
+
+        let res = InstructionParser.parse(&ix).await;
+
+        assert!(matches!(res, Err(ParseError::Filtered)), "{res:?}");
     }
 }

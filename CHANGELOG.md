@@ -25,6 +25,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `shipstern-spl-token-extensions-parser`: the instruction parser no longer decodes instructions of other programs, such as SPL Token, as Token-2022 output ([#351](https://github.com/solana-rpc/shipstern/pull/351) for [#281](https://github.com/solana-rpc/shipstern/issues/281) by @senzenn).
 - `shipstern-proc-macro`: with `program-events`, an event that a program emits both as a self-CPI and as a `Program data:` log line is returned once, not twice ([#350](https://github.com/solana-rpc/shipstern/pull/350) by @senzenn).
 - `shipstern-proc-macro`: a type that links to an event's payload now compiles and decodes, and an event that holds another event's payload is no longer skipped. The payload is emitted as a defined type. With `program-events`, only fields inside event wrappers take `Evt` names, and a linked event's own message is now named `Evt{Name}` ([#343](https://github.com/solana-rpc/shipstern/pull/343) closing [#335](https://github.com/solana-rpc/shipstern/issues/335) and [#336](https://github.com/solana-rpc/shipstern/issues/336) by @senzenn).
 - `shipstern-core`: `Prefilter::builder().account_filters(..)` drops repeated comparisons before checking the limit of four, so a config that repeats one is no longer refused ([#333](https://github.com/solana-rpc/shipstern/pull/333) closing [#331](https://github.com/solana-rpc/shipstern/issues/331) by @senzenn).
