@@ -910,8 +910,21 @@ pub fn instruction_parser(
                         }
                     }
 
-                    // 3. Scan logs for "Program data:" events.
-                    program_events.extend(resolve_events_from_logs(ix_update.log_messages()));
+                    // 3. Scan logs for "Program data:" events. A program can emit one event
+                    // both ways, so a log event that repeats a self-CPI event is skipped.
+                    let mut matched = vec![false; program_events.len()];
+
+                    for event in resolve_events_from_logs(ix_update.log_messages()) {
+                        let repeat = program_events
+                            .iter()
+                            .zip(matched.iter_mut())
+                            .find(|(cpi, matched)| !**matched && **cpi == event);
+
+                        match repeat {
+                            Some((_, matched)) => *matched = true,
+                            None => program_events.push(event),
+                        }
+                    }
 
                     if instruction.is_none() && program_events.is_empty() {
                         return Err(ParseError::Filtered);
