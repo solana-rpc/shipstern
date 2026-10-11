@@ -126,9 +126,9 @@ To use it, add the following dependencies to your `Cargo.toml`:
 ```toml
 [dependencies]
 borsh = { version = "^1.0.0", features = ["derive"] }
-shipstern-core = { version = "0.11.0" }
-shipstern-parser = { version = "0.11.0" }
-shipstern-proc-macro = { version = "0.11.0" }
+shipstern-core = { version = "0.12.0" }
+shipstern-parser = { version = "0.12.0" }
+shipstern-proc-macro = { version = "0.12.0" }
 ```
 
 The generated code imports `shipstern_core` and derives `BorshDeserialize` / `BorshSerialize`, so both `shipstern-core` and the Borsh `derive` feature are required.
@@ -136,7 +136,7 @@ The generated code imports `shipstern_core` and derives `BorshDeserialize` / `Bo
 To parse events, including self-CPI events, enable the `program-events` feature. Note that it also changes `InstructionParser::Output` from `Instructions` to `ProgramEventOutput`:
 
 ```toml
-shipstern-proc-macro = { version = "0.11.0", features = ["program-events"] }
+shipstern-proc-macro = { version = "0.12.0", features = ["program-events"] }
 ```
 
 The macro converts an Anchor IDL at compile time. A legacy Anchor IDL needs the program id in `metadata.address`. Codama JSON also works. See [Parse an Anchor Program Without the Codama CLI](./docs/anchor-idl-parser.md) and [Generate a Shipstern Parser from an Anchor or Codama IDL](./docs/codama-parser-generation.md).

@@ -9,9 +9,9 @@ Add this crate to your `Cargo.toml` (usually as a `proc-macro` dependency):
 ```toml
 [dependencies]
 borsh = { version = "^1.0.0", features = ["derive"] }
-shipstern-core = { version = "0.11.0" }
-shipstern-parser = { version = "0.11.0" }
-shipstern-proc-macro = { version = "0.11.0" }
+shipstern-core = { version = "0.12.0" }
+shipstern-parser = { version = "0.12.0" }
+shipstern-proc-macro = { version = "0.12.0" }
 ```
 
 `shipstern-core` is required: the generated code imports it directly.
@@ -32,7 +32,7 @@ The macro generates type-safe account and instruction parsers from an Anchor or 
 Event parsing is gated behind the `program-events` feature. Without it the macro emits no event types, whatever the IDL declares:
 
 ```toml
-shipstern-proc-macro = { version = "0.11.0", features = ["program-events"] }
+shipstern-proc-macro = { version = "0.12.0", features = ["program-events"] }
 ```
 
 A payload that another type links to is still emitted as an ordinary type.
