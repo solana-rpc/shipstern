@@ -921,6 +921,7 @@ mod tests {
     fn account_with_owner(owner: Pubkey) -> AccountUpdate {
         AccountUpdate {
             slot: 100,
+            bank_id: Some(0),
             is_startup: false,
             account: Some(AccountUpdateInfo {
                 txn_signature: None,

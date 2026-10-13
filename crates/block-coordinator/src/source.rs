@@ -85,8 +85,10 @@ trait CoordinatorSubscription {
 
 impl CoordinatorSubscription for SubscribeRequest {
     fn with_coordinator_subscriptions(mut self) -> Self {
-        self.entry
-            .insert("coordinator".to_string(), SubscribeRequestFilterEntry {});
+        self.entry.insert(
+            "coordinator".to_string(),
+            SubscribeRequestFilterEntry::default(),
+        );
         self.blocks_meta.insert(
             "coordinator".to_string(),
             SubscribeRequestFilterBlocksMeta {},
@@ -110,11 +112,15 @@ impl CoordinatorSubscription for SubscribeRequest {
     }
 }
 
+///
 /// Shipstern source that taps the geyser stream for the coordinator.
 ///
 /// On each `SubscribeUpdate`:
 /// 1. Forward the raw event to the coordinator (clone for BlockSM-relevant events)
 /// 2. Forward Account/Transaction events to the Shipstern Runtime (move, no clone)
+///
+/// The source does not reconnect, so a stream loss ends it.
+///
 #[derive(Debug)]
 pub struct CoordinatorSource {
     config: CoordinatorSourceConfig,
@@ -153,7 +159,7 @@ impl SourceTrait for CoordinatorSource {
             .unwrap_or("CoordinatorSource");
         let timeout = Duration::from_secs(config.timeout);
 
-        let mut builder = GeyserGrpcClient::build_from_shared(config.endpoint.clone())?
+        let builder = GeyserGrpcClient::build_from_shared(config.endpoint.clone())?
             .x_token(config.x_token.clone())?
             .max_decoding_message_size(config.max_decoding_message_size.unwrap_or(usize::MAX))
             .accept_compressed(config.accept_compression.unwrap_or_default().into())
@@ -161,9 +167,11 @@ impl SourceTrait for CoordinatorSource {
             .timeout(timeout)
             .tls_config(ClientTlsConfig::new().with_native_roots())?;
 
-        if let Some(reconnect_config) = config.reconnect_config() {
-            tracing::info!(source_label, ?reconnect_config, "Auto-reconnect enabled");
-            builder = builder.set_reconnect_config(reconnect_config);
+        if config.auto_reconnect {
+            tracing::info!(
+                source_label,
+                "Coordinator source does not reconnect; it stops on stream loss"
+            );
         }
 
         let mut client = builder.connect().await?;

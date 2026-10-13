@@ -1,6 +1,6 @@
 //! Replay tests using captured geyser fixture data.
 //!
-//! Uses `tests/fixtures/sample.bin` (captured 05-feb-2026).
+//! Uses `tests/fixtures/sample.bin` (captured 09-oct-2026, with bank IDs).
 //!
 //! ```bash
 //! cargo test -p shipstern-block-coordinator

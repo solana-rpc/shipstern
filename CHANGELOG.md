@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking** all crates: moved to `yellowstone-grpc-proto` ~14.0.1, `yellowstone-grpc-client` 15.0.0, `yellowstone-fumarole-client` 0.9.0 and `yellowstone-block-machine` 0.11.0. Bank-scoped updates carry a `bank_id` ([#PRA](https://github.com/solana-rpc/shipstern/pull/PRA) by @senzenn).
+- **Breaking** `shipstern-yellowstone-grpc-source`: only a processed stream with no `from_slot` and no `RuntimeHandle` reconnects, and a reconnect can repeat the cut-off block. Reconnect needs a Geyser proto 14 server that stores slots, so set `auto-reconnect = false` for any other server. The `reconnect-slot-retention` option is removed. A config file that sets it is ignored, and the CLI flag is rejected ([#PRA](https://github.com/solana-rpc/shipstern/pull/PRA) by @senzenn).
+- **Breaking** `shipstern-block-coordinator`: a block whose entries or transaction count do not match its BlockMeta is discarded as incomplete, a malformed BlockMeta or Entry is skipped, and a bank ID in two slots stops the coordinator with `CoordinatorError::BankInTwoSlots`. A parent that never freezes is discarded when a block more than 64 slots past it freezes. A slot reported forked still flushes when it confirms. `DiscardReason::Untracked` is removed. `CoordinatorSource` does not reconnect, and it ignores `auto-reconnect` and `reconnect-max-retries` ([#PRA](https://github.com/solana-rpc/shipstern/pull/PRA) by @senzenn).
+- `shipstern-yellowstone-fumarole-source`: a Fumarole service version that fumarole-client 0.9 does not support ends the run with an error, not a panic ([#PRA](https://github.com/solana-rpc/shipstern/pull/PRA) by @senzenn).
+
 ## [0.12.0] - 2026-10-11
 
 ### Added

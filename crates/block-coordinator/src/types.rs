@@ -18,7 +18,6 @@ pub struct BlockMetadata {
 pub enum DiscardReason {
     Dead,
     Forked,
-    Untracked,
     Incomplete,
 }
 
@@ -27,7 +26,6 @@ impl fmt::Display for DiscardReason {
         let label = match self {
             Self::Dead => "dead",
             Self::Forked => "forked",
-            Self::Untracked => "untracked",
             Self::Incomplete => "incomplete",
         };
         f.write_str(label)
@@ -37,6 +35,11 @@ impl fmt::Display for DiscardReason {
 /// Coordinator invariants and unrecoverable errors.
 #[derive(Debug)]
 pub enum CoordinatorError {
+    BankInTwoSlots {
+        bank_id: u64,
+        slot: Slot,
+        other_slot: Slot,
+    },
     TwoGateInvariantViolation {
         slot: Slot,
         last_flushed: Option<Slot>,
@@ -55,6 +58,11 @@ pub enum CoordinatorError {
 impl fmt::Display for CoordinatorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::BankInTwoSlots {
+                bank_id,
+                slot,
+                other_slot,
+            } => write!(f, "Bank {bank_id} is in slot {slot} and slot {other_slot}"),
             Self::TwoGateInvariantViolation { slot, last_flushed } => write!(
                 f,
                 "Two-gate invariant violated: slot {slot} <= last_flushed {last_flushed:?}"

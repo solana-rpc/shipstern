@@ -9,7 +9,7 @@
 //! │                                                                             │
 //! │  STATE:                                                                     │
 //! │    buffer: BTreeMap<Slot, SlotBuffer>     // pending slots                  │
-//! │    discarded_slots: BTreeSet<Slot>        // dead/forked/untracked          │
+//! │    discarded_slots: BTreeSet<Slot>        // dead/forked/incomplete         │
 //! │    last_flushed_slot: Option<Slot>        // for gap detection              │
 //! │                                                                             │
 //! │  SLOT BUFFER:                                                               │
@@ -120,13 +120,13 @@
 //! ├─────────────────────────────────────────────────────────────────────────────┤
 //! │                                                                             │
 //! │  1. DEAD SLOT                          [dead_slot_discarded]                │
-//! │     SlotLifecycle::Dead ──► ForksDetected ──► discard_slot()                │
+//! │     SlotLifecycle::Dead ──► DeadSlotDetected ──► discard_slot()             │
 //! │                                                                             │
 //! │  2. FORKED SLOT                        [sibling_fork_via_finalized]         │
-//! │     Sibling finalized ──► ForksDetected ──► discard_slot()                  │
+//! │     Sibling finalized ──► ForksDetected ──► skip the slot until it confirms │
 //! │                                                                             │
-//! │  3. UNTRACKED SLOT                     [untracked_slot_discarded]           │
-//! │     BlockSummary rejected by BlockSM ──► discard_slot()                     │
+//! │  3. INCOMPLETE BLOCK                   [incomplete_block_discarded]         │
+//! │     BlockMeta with missing entries ──► discard_slot()                       │
 //! │                                                                             │
 //! │  discard_slot() actions:                                                    │
 //! │    • Add to discarded_slots set                                             │
@@ -134,40 +134,9 @@
 //! │    • both drain_* functions called in run() after event                     │
 //! │                                                                             │
 //! └─────────────────────────────────────────────────────────────────────────────┘
-//!
-//! ┌─────────────────────────────────────────────────────────────────────────────┐
-//! │                           TEST COVERAGE MATRIX                              │
-//! ├─────────────────────────────────────────────────────────────────────────────┤
-//! │                                                                             │
-//! │  READINESS SYSTEM:                                                          │
-//! │    ✓ two_gate_flush_end_to_end      instruction gate + account gate required │
-//! │    ✓ empty_slot_flushes             tx_parse_complete satisfied with 0 tx   │
-//! │    ✓ incomplete_slot_blocks_subsequent  tx_parse_complete not satisfied      │
-//! │    ✓ account_gate_blocks_flush_until_account_count_received  Account gate blocks flush │
-//! │                                                                             │
-//! │  SEQUENTIAL ORDERING:                                                       │
-//! │    ✓ sequential_flush_order         Earlier slot blocks later ones          │
-//! │    ✓ gap_in_sequence_blocks_flush   Missing parent blocks child             │
-//! │                                                                             │
-//! │  DISCARD HANDLING:                                                          │
-//! │    ✓ dead_slot_discarded            Dead slot removed, no output            │
-//! │    ✓ dead_slot_discards_descendants Killing ancestor discards whole chain  │
-//! │    ✓ dead_slot_unblocks_next        Dead sibling unblocks subsequent slot   │
-//! │    ✓ untracked_slot_discarded       Rejected BlockSummary causes discard    │
-//! │    ✓ discarded_slot_ignores_parsed  Messages for discarded slot dropped     │
-//! │                                                                             │
-//! │  FORK HANDLING:                                                             │
-//! │    ✓ sibling_fork_via_finalized     Finalizing one sibling forks other      │
-//! │                                                                             │
-//! │  EDGE CASES:                                                                │
-//! │    ✓ parsed_before_lifecycle_buffered  Early messages preserved             │
-//! │    ✓ double_confirmation_is_idempotent Confirming twice is safe             │
-//! │                                                                             │
-//! │  LATE POST-FLUSH MESSAGES:                                                  │
-//! │    ✓ late_message_for_flushed_slot_is_dropped  Drops stale parsed events    │
-//! │                                                                             │
-//! └─────────────────────────────────────────────────────────────────────────────┘
 //! ```
+//!
+//! The test list with what each test checks is in `tests/README.md`.
 //!
 //! ## Fork Detection Details
 //!
@@ -256,14 +225,17 @@ impl TestHarness {
         SlotBuilder::new(self.input_tx.clone(), self.parsed_tx.clone(), slot)
     }
 
-    async fn send_orphan_block_summary(&self, slot: u64, parent: u64) {
-        let blockhash = Hash::new_unique();
-        self.input_tx
-            .send(CoordinatorInput::GeyserUpdate(Box::new(
-                make_block_meta_update(slot, parent, 1, &blockhash),
-            )))
-            .await
-            .unwrap();
+    /// Create a bank and freeze it with no entries, so the coordinator discards it.
+    async fn send_incomplete_bank(&self, slot: u64, parent: u64) {
+        for update in [
+            make_slot_update(slot, parent, SlotStatus::SlotCreatedBank),
+            make_block_meta_update(slot, parent, 0, &Hash::new_unique()),
+        ] {
+            self.input_tx
+                .send(CoordinatorInput::GeyserUpdate(Box::new(update)))
+                .await
+                .unwrap();
+        }
     }
 
     async fn expect_flush(&mut self, slot: u64) -> FlushAssertion {
@@ -316,6 +288,7 @@ fn make_slot_update(slot: u64, parent: u64, status: SlotStatus) -> SubscribeUpda
             parent: Some(parent),
             status: status.into(),
             dead_error: None,
+            bank_id: Some(slot),
         })),
     }
 }
@@ -331,6 +304,7 @@ fn make_entry_update(slot: u64, index: u64, tx_count: u64) -> SubscribeUpdate {
             hash: Hash::new_unique().to_bytes().to_vec(),
             executed_transaction_count: tx_count,
             starting_transaction_index: 0,
+            bank_id: slot,
         })),
     }
 }
@@ -358,6 +332,7 @@ fn make_block_meta_update(
             parent_blockhash: bs58::encode(Hash::default().as_ref()).into_string(),
             executed_transaction_count: tx_count,
             entries_count: 1,
+            bank_id: slot,
         })),
     }
 }
@@ -722,7 +697,7 @@ async fn dead_slot_discarded() {
 }
 
 #[tokio::test]
-async fn dead_slot_unblocks_next() {
+async fn dead_slot_spares_sibling() {
     let mut harness = TestHarness::spawn();
 
     // Parent slot — confirmed and flushed first.
@@ -744,35 +719,11 @@ async fn dead_slot_unblocks_next() {
         .parsed()
         .await;
 
-    waiting.confirm().await;
-    harness.expect_no_flush().await;
-
+    // Confirming 102 first would make the block machine skip sibling 101 by itself.
     blocker.kill().await;
+    waiting.confirm().await;
 
     harness.expect_flush(102).await.records(&["survives"]);
-}
-
-#[tokio::test]
-async fn dead_slot_discards_descendants() {
-    let mut harness = TestHarness::spawn();
-
-    // Chain: 100 → 101 → 102. Killing 100 should discard 101 and 102 too.
-    let ancestor = harness.slot(100).parent(99).record("root").parsed().await;
-    let child = harness.slot(101).parent(100).record("child").parsed().await;
-    let grandchild = harness
-        .slot(102)
-        .parent(101)
-        .record("grandchild")
-        .parsed()
-        .await;
-
-    child.confirm().await;
-    grandchild.confirm().await;
-
-    // Both descendants are ready, but killing the ancestor should discard the whole chain.
-    ancestor.kill().await;
-
-    harness.expect_no_flush().await;
 }
 
 #[tokio::test]
@@ -786,19 +737,31 @@ async fn empty_slot_flushes() {
 }
 
 #[tokio::test]
-async fn untracked_slot_discarded() {
+async fn incomplete_block_discarded() {
     let mut harness = TestHarness::spawn();
 
-    harness.send_orphan_block_summary(100, 99).await;
-    harness.expect_no_flush().await;
+    // Flush one slot first, so slot 101 cannot skip the parent check as the first flush.
+    let first = harness.slot(99).parent(98).empty().await;
+    first.confirm().await;
+    harness.expect_flush(99).await.empty();
 
-    send_record_to_slot(&harness.parsed_tx, 100, "ignored-untracked").await;
+    harness.send_incomplete_bank(100, 99).await;
+    send_record_to_slot(&harness.parsed_tx, 100, "ignored-incomplete").await;
+    harness
+        .input_tx
+        .send(CoordinatorInput::GeyserUpdate(Box::new(make_slot_update(
+            100,
+            99,
+            SlotStatus::SlotConfirmed,
+        ))))
+        .await
+        .unwrap();
     harness.expect_no_flush().await;
 
     let next = harness.slot(101).parent(100).empty().await;
     next.confirm().await;
 
-    harness.expect_flush(101).await;
+    harness.expect_flush(101).await.empty();
 }
 
 #[tokio::test]
@@ -831,16 +794,17 @@ async fn sibling_fork_via_finalized() {
         .record("winner")
         .parsed()
         .await;
-    let loser = harness.slot(102).parent(100).record("loser").parsed().await;
+    let _loser = harness.slot(102).parent(100).record("loser").parsed().await;
 
     winner.confirm().await;
     harness.expect_flush(100).await;
     harness.expect_flush(101).await.records(&["winner"]);
 
+    // The forked sibling keeps its records but must not block a later slot on the winner.
     winner.finalize().await;
-    loser.confirm().await;
-
-    harness.expect_no_flush().await;
+    let next = harness.slot(103).parent(101).empty().await;
+    next.confirm().await;
+    harness.expect_flush(103).await;
 }
 
 // =============================================================================
@@ -1141,106 +1105,140 @@ async fn duplicate_confirm_does_not_change_frozen_count() {
     acct.records(&["acct1", "acct2"]);
 }
 
-// =============================================================================
-// DLQ / Incomplete Slot Tests
-// =============================================================================
-
-/// When the block machine DLQ's a slot as Incomplete (out-of-order BlockMeta
-/// for a parent with no entries), the coordinator must discard it so that
-/// subsequent children can still flush.
 #[tokio::test]
-async fn dlq_incomplete_slot_unblocks_subsequent_flush() {
-    let (input_tx, input_rx) = mpsc::channel::<CoordinatorInput>(256);
-    let (parsed_tx, parsed_rx) = mpsc::channel::<CoordinatorMessage<String>>(256);
-    let (output_tx, mut output_rx) = mpsc::channel(64);
+async fn malformed_block_meta_or_entry_is_skipped() {
+    let mut harness = TestHarness::spawn();
+    let mut bad_hash_meta = make_block_meta_update(50, 49, 0, &Hash::new_unique());
+    let mut bad_hash_entry = make_entry_update(50, 0, 0);
+    if let Some(UpdateOneof::BlockMeta(meta)) = bad_hash_meta.update_oneof.as_mut() {
+        meta.blockhash = bs58::encode([1u8; 31]).into_string();
+    }
+    if let Some(UpdateOneof::Entry(entry)) = bad_hash_entry.update_oneof.as_mut() {
+        entry.hash = vec![1; 31];
+    }
+    // A complete block whose parent is its own slot would block every later slot.
+    let self_parent_meta = make_block_meta_update(50, 50, 0, &Hash::new_unique());
+    for update in [
+        bad_hash_entry,
+        bad_hash_meta,
+        make_entry_update(50, 0, 0),
+        self_parent_meta,
+    ] {
+        harness
+            .input_tx
+            .send(CoordinatorInput::GeyserUpdate(Box::new(update)))
+            .await
+            .unwrap();
+    }
 
-    tokio::spawn(BlockMachineCoordinator::run(
+    let slot = harness.slot(51).parent(50).empty().await;
+    slot.confirm().await;
+    harness.expect_flush(51).await;
+}
+
+#[tokio::test]
+async fn bank_in_two_slots_stops_coordinator() {
+    let (input_tx, input_rx) = mpsc::channel(8);
+    let (_parsed_tx, parsed_rx) = mpsc::channel(8);
+    let coordinator = tokio::spawn(BlockMachineCoordinator::<String>::run(
         input_rx,
         parsed_rx,
-        Some(output_tx),
+        None,
         None,
         AccountCommitAt::Confirmed,
         true,
     ));
 
-    // --- Step 1: Parent slot 100 (parent=99) gets lifecycle events but NO entries.
-    // This puts it into the block machine's block_buffer_map without any entries.
-    for status in [
-        SlotStatus::SlotFirstShredReceived,
-        SlotStatus::SlotCreatedBank,
+    let mut entry = make_entry_update(100, 0, 0);
+    let mut meta = make_block_meta_update(101, 100, 0, &Hash::new_unique());
+    if let Some(UpdateOneof::Entry(entry)) = entry.update_oneof.as_mut() {
+        entry.bank_id = 7;
+    }
+    if let Some(UpdateOneof::BlockMeta(meta)) = meta.update_oneof.as_mut() {
+        meta.bank_id = 7;
+    }
+    for update in [entry, meta] {
+        input_tx
+            .send(CoordinatorInput::GeyserUpdate(Box::new(update)))
+            .await
+            .unwrap();
+    }
+
+    let result = tokio::time::timeout(Duration::from_secs(2), coordinator)
+        .await
+        .expect("coordinator must stop")
+        .expect("coordinator must not panic");
+    assert!(matches!(
+        result,
+        Err(CoordinatorError::BankInTwoSlots { bank_id: 7, .. })
+    ));
+}
+
+async fn send_to_bank(harness: &TestHarness, mut update: SubscribeUpdate, bank_id: u64) {
+    match update.update_oneof.as_mut().unwrap() {
+        UpdateOneof::Slot(slot) => slot.bank_id = Some(bank_id),
+        UpdateOneof::Entry(entry) => entry.bank_id = bank_id,
+        UpdateOneof::BlockMeta(meta) => meta.bank_id = bank_id,
+        _ => unreachable!(),
+    }
+    harness
+        .input_tx
+        .send(CoordinatorInput::GeyserUpdate(Box::new(update)))
+        .await
+        .unwrap();
+}
+
+/// Slot 42 never gets its BlockMeta, so it never freezes. Its confirmed child 43 must
+/// flush once the stream is well past slot 42, not wait forever.
+#[tokio::test]
+async fn lost_parent_block_meta_does_not_block_child_forever() {
+    let mut harness = TestHarness::spawn();
+    let parent = harness.slot(41).parent(40).empty().await;
+    parent.confirm().await;
+    harness.expect_flush(41).await;
+
+    send_to_bank(
+        &harness,
+        make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
+        42,
+    )
+    .await;
+    let child = harness.slot(43).parent(42).empty().await;
+    child.confirm().await;
+    harness.expect_no_flush().await;
+
+    for slot in 44..=43 + 64 {
+        harness.slot(slot).parent(slot - 1).empty().await;
+    }
+    harness.expect_flush(43).await;
+}
+
+/// Bank 10 of slot 42 dies and repair bank 11 wins. The block machine then reports every
+/// child of 42 as forked, so a forked report must not stop the confirmed child 43.
+#[tokio::test]
+async fn child_of_repaired_dead_slot_flushes() {
+    let mut harness = TestHarness::spawn();
+    let parent = harness.slot(41).parent(40).empty().await;
+    parent.confirm().await;
+    harness.expect_flush(41).await;
+
+    send_to_bank(
+        &harness,
+        make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
+        10,
+    )
+    .await;
+    send_to_bank(&harness, make_slot_update(42, 41, SlotStatus::SlotDead), 10).await;
+    for update in [
+        make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
+        make_entry_update(42, 0, 0),
+        make_block_meta_update(42, 41, 0, &Hash::new_unique()),
+        make_slot_update(42, 41, SlotStatus::SlotConfirmed),
     ] {
-        input_tx
-            .send(CoordinatorInput::GeyserUpdate(Box::new(make_slot_update(
-                100, 99, status,
-            ))))
-            .await
-            .unwrap();
+        send_to_bank(&harness, update, 11).await;
     }
 
-    // --- Step 2: child slot 101 (parent=100) gets a full lifecycle. Its BlockMeta
-    // finds parent 100 still buffered with no entries, so the freeze fails and
-    // DeadletterEvent::Incomplete(100) goes to the DLQ.
-    for status in [
-        SlotStatus::SlotFirstShredReceived,
-        SlotStatus::SlotCreatedBank,
-    ] {
-        input_tx
-            .send(CoordinatorInput::GeyserUpdate(Box::new(make_slot_update(
-                101, 100, status,
-            ))))
-            .await
-            .unwrap();
-    }
-
-    input_tx
-        .send(CoordinatorInput::GeyserUpdate(Box::new(make_entry_update(
-            101, 0, 1,
-        ))))
-        .await
-        .unwrap();
-
-    input_tx
-        .send(CoordinatorInput::GeyserUpdate(Box::new(make_slot_update(
-            101,
-            100,
-            SlotStatus::SlotCompleted,
-        ))))
-        .await
-        .unwrap();
-
-    {
-        let blockhash = Hash::new_unique();
-        input_tx
-            .send(CoordinatorInput::GeyserUpdate(Box::new(
-                make_block_meta_update(101, 100, 1, &blockhash),
-            )))
-            .await
-            .unwrap();
-    }
-
-    // Allow event processing.
-    tokio::time::sleep(Duration::from_millis(20)).await;
-
-    // --- Step 3: Send a TransactionParsed for slot 101 so the tx gate is satisfied.
-    parsed_tx
-        .send(CoordinatorMessage::TransactionParsed { slot: 101 })
-        .await
-        .unwrap();
-
-    // --- Step 4: Confirm slot 101. If the DLQ was drained, parent 100 is in
-    // discarded_slots, so 101's flush check (parent_slot in discarded) passes.
-    input_tx
-        .send(CoordinatorInput::GeyserUpdate(Box::new(make_slot_update(
-            101,
-            100,
-            SlotStatus::SlotConfirmed,
-        ))))
-        .await
-        .unwrap();
-
-    let flushed = tokio::time::timeout(Duration::from_secs(2), output_rx.recv())
-        .await
-        .expect("Timed out — slot 101 never flushed (DLQ not drained?)")
-        .expect("Channel closed");
-    assert_eq!(flushed.slot, 101);
+    let child = harness.slot(43).parent(42).empty().await;
+    child.confirm().await;
+    harness.expect_flush(43).await;
 }
