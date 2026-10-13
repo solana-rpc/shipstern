@@ -13,13 +13,14 @@ use yellowstone_grpc_proto::geyser::{subscribe_update::UpdateOneof, SubscribeUpd
 use crate::{
     state::{CoordinatorEvent, CoordinatorState},
     types::{
-        AccountCommitAt, AccountSlot, BlockMetadata, ColorSlot, CoordinatorError, CoordinatorInput,
-        CoordinatorMessage, DiscardReason, InstructionSlot,
+        AccountCommitAt, AccountSlot, BankKey, BlockMetadata, ColorSlot, CoordinatorError,
+        CoordinatorInput, CoordinatorMessage, DiscardReason, InstructionSlot,
     },
 };
 
 /// Core orchestrator that owns a `BlocksStateMachineWrapper` and delegates
-/// ordering/flush decisions to the pure-ish `CoordinatorState`.
+/// ordering/flush decisions to the pure-ish `CoordinatorState`. It discards a slot that
+/// never freezes itself, because only the wrapper outputs show that.
 pub struct BlockMachineCoordinator<R> {
     wrapper: BlocksStateMachineWrapper,
     state: CoordinatorState<R>,
@@ -29,10 +30,14 @@ pub struct BlockMachineCoordinator<R> {
     account_output_tx: Option<mpsc::Sender<AccountSlot<R>>>,
     /// When false, Gate 1 is disabled by forcing expected_tx_count to 0.
     require_tx_gate: bool,
-    /// Recent frozen banks, to find a parent whose BlockMeta never came.
-    frozen_banks: BTreeSet<(Slot, u64)>,
-    /// Parents of frozen blocks that have not frozen yet.
+    /// Recent frozen banks, to find a slot whose BlockMeta never came.
+    frozen_banks: BTreeSet<BankKey>,
+    /// Recent slots that must freeze: named as a parent, or sent records.
+    named_parents: BTreeSet<Slot>,
+    /// Slots that must freeze and have not frozen yet.
     missing_parents: BTreeSet<Slot>,
+    /// The last slot that `expect_slot` checked, to skip repeated records.
+    last_expected_slot: Option<Slot>,
     /// The slot of each recent bank, in two generations so that memory stays bounded.
     bank_slots: [HashMap<u64, Slot>; 2],
 }
@@ -69,7 +74,9 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
             account_output_tx,
             require_tx_gate,
             frozen_banks: BTreeSet::new(),
+            named_parents: BTreeSet::new(),
             missing_parents: BTreeSet::new(),
+            last_expected_slot: None,
             bank_slots: Default::default(),
         }
     }
@@ -115,6 +122,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                     }
                 }
                 Some(msg) = self.parsed_rx.recv() => {
+                    self.expect_slot(msg.slot());
                     Self::convert_parsed_message(msg)
                 }
                 else => {
@@ -205,7 +213,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
             return Ok(events);
         };
         // The wrapper rejects only events for a discarded bank or a duplicate block. Neither
-        // removes the slot, so a rejection must not discard the slot.
+        // removes the slot, so a rejection must not discard the other banks of the slot.
         if self.wrapper.handle_new_geyser_event(info).is_err() {
             return Ok(events);
         }
@@ -238,10 +246,10 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                             observed_transactions = ?observed_tx_count,
                             "Discarding incomplete block"
                         );
-                        events.push(CoordinatorEvent::SlotDiscarded {
+                        events.push(CoordinatorEvent::BankDiscarded {
                             slot: frozen.slot,
+                            bank_id: frozen.bank_id,
                             reason: DiscardReason::Incomplete,
-                            bank_ids: vec![frozen.bank_id],
                         });
                         continue;
                     }
@@ -282,6 +290,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                 BlockStateMachineOutput::SlotStatus(_) => {},
                 BlockStateMachineOutput::DeadSlotDetected(dead) => {
                     self.missing_parents.remove(&dead.slot);
+                    self.named_parents.remove(&dead.slot);
                     events.push(CoordinatorEvent::SlotDiscarded {
                         slot: dead.slot,
                         reason: DiscardReason::Dead,
@@ -290,14 +299,30 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                 },
                 BlockStateMachineOutput::ForksDetected(fork) => {
                     self.missing_parents.remove(&fork.slot);
+                    self.named_parents.remove(&fork.slot);
                     events.push(CoordinatorEvent::SlotDiscarded {
                         slot: fork.slot,
                         reason: DiscardReason::Forked,
                         bank_ids: fork.bank_ids,
                     });
                 },
-                // Records are kept per slot, so one bank of a slot cannot be dropped alone.
-                BlockStateMachineOutput::BankDiscarded(_) => {},
+                BlockStateMachineOutput::BankDiscarded(discarded) => {
+                    // A frozen loser can be the parent's only frozen bank, which hides a
+                    // winner whose BlockMeta never comes.
+                    if self
+                        .frozen_banks
+                        .remove(&(discarded.slot, discarded.bank_id))
+                        && !self.has_frozen_bank(discarded.slot)
+                        && self.named_parents.contains(&discarded.slot)
+                    {
+                        self.missing_parents.insert(discarded.slot);
+                    }
+                    events.push(CoordinatorEvent::BankDiscarded {
+                        slot: discarded.slot,
+                        bank_id: discarded.bank_id,
+                        reason: DiscardReason::Forked,
+                    });
+                },
             }
         }
 
@@ -331,9 +356,27 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         Ok(())
     }
 
-    /// Yellowstone sends no BlockMeta for a bank that never seals, so block machine 0.11
-    /// never freezes it, and its child waits forever. Discard such a parent once the stream
-    /// is well past it.
+    /// A record for a slot that the chain skips would block every later slot, so treat such
+    /// a slot like a parent that never froze.
+    fn expect_slot(&mut self, slot: Slot) {
+        if self.last_expected_slot.replace(slot) == Some(slot)
+            || self
+                .state
+                .last_flushed_slot()
+                .is_some_and(|last| slot <= last)
+            || self.state.is_slot_discarded(slot)
+            || self.frozen_banks.first().is_none_or(|&(low, _)| slot < low)
+            || self.is_far_ahead(slot)
+            || self.has_frozen_bank(slot)
+        {
+            return;
+        }
+        self.named_parents.insert(slot);
+        self.missing_parents.insert(slot);
+    }
+
+    /// Block machine 0.11 never freezes a bank whose BlockMeta is lost, and the child then
+    /// waits on it forever. Discard such a parent once the stream is well past it.
     fn discard_lost_parents(
         &mut self,
         slot: Slot,
@@ -352,6 +395,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
 
         // Record a far slot too, or every slot after a real jump counts as far.
         self.frozen_banks.insert((slot, bank_id));
+        self.named_parents.insert(parent);
         self.missing_parents.remove(&slot);
         if far_ahead {
             return Vec::new();
@@ -359,6 +403,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
 
         let window_start = slot.saturating_sub(FROZEN_SLOT_WINDOW);
         self.frozen_banks = self.frozen_banks.split_off(&(window_start, 0));
+        self.named_parents = self.named_parents.split_off(&window_start);
 
         let still_open = self
             .missing_parents

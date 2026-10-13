@@ -167,7 +167,7 @@ impl shipstern::Handler<TransactionUpdate, TransactionUpdate> for BufferingHandl
 impl shipstern::Handler<AccountUpdate, AccountUpdate> for BufferingHandler {
     async fn handle(&self, update: &AccountUpdate, _raw: &AccountUpdate) -> HandlerResult<()> {
         let slot = update.slot;
-        // A proto 14 server sets bank_id on every account except startup accounts.
+        // Only startup accounts have no bank. CoordinatorSource stops on any other one.
         let Some(bank_id) = update.bank_id else {
             tracing::debug!(slot, "Account update without bank_id skipped");
             return Ok(());

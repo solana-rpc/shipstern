@@ -1,9 +1,12 @@
 use std::fmt;
 
 use smallvec::SmallVec;
-use solana_clock::Slot;
+use solana_clock::{BankId, Slot};
 use solana_hash::Hash;
 use yellowstone_grpc_proto::geyser::SubscribeUpdate;
+
+/// A slot and one of its banks.
+pub(crate) type BankKey = (Slot, BankId);
 
 /// Block metadata that always transitions together.
 #[derive(Debug, Clone)]
@@ -13,9 +16,8 @@ pub struct BlockMetadata {
     pub expected_tx_count: u64,
 }
 
-/// Reason a slot was discarded by the coordinator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
+/// Reason the coordinator discarded a slot or a bank.
+#[derive(Debug, Clone, Copy)]
 pub enum DiscardReason {
     Dead,
     Forked,
@@ -47,6 +49,15 @@ pub enum CoordinatorError {
     MissingBankId {
         slot: Slot,
     },
+    ConfirmedBankDiscarded {
+        slot: Slot,
+        bank_id: u64,
+    },
+    ConflictingConfirmedBank {
+        slot: Slot,
+        existing: u64,
+        new: u64,
+    },
     TwoGateInvariantViolation {
         slot: Slot,
         last_flushed: Option<Slot>,
@@ -74,6 +85,14 @@ impl fmt::Display for CoordinatorError {
                 f,
                 "Slot {slot} has no bank ID. The server likely runs Geyser proto 12.7 or older"
             ),
+            Self::ConfirmedBankDiscarded { slot, bank_id } => {
+                write!(f, "Confirmed bank {bank_id} discarded in slot {slot}")
+            },
+            Self::ConflictingConfirmedBank {
+                slot,
+                existing,
+                new,
+            } => write!(f, "Slot {slot} confirmed bank {new} after bank {existing}"),
             Self::TwoGateInvariantViolation { slot, last_flushed } => write!(
                 f,
                 "Two-gate invariant violated: slot {slot} <= last_flushed {last_flushed:?}"
@@ -107,9 +126,12 @@ pub enum ParseStatsKind {
     TransactionStatusSucceeded,
 }
 
+///
 /// Messages from handlers back to the coordinator.
 ///
-/// `bank_id` comes from the update the handler parsed.
+/// `bank_id` comes from the update the handler parsed. Records stay per bank until one
+/// bank of the slot is confirmed.
+///
 pub enum CoordinatorMessage<R> {
     /// A parsed instruction record ready to buffer (sorted by tx_index, ix_path).
     InstructionParsed {
@@ -170,7 +192,7 @@ impl InstructionRecordSortKey {
 /// Sort key for account records within a slot.
 /// Ordered by write_version (geyser-assigned version number for
 /// deterministic ordering), then pubkey (discriminate multiple accounts
-/// in the same update). Slot is implicit (it's the buffer's key).
+/// in the same update). Slot and bank_id are implicit (they are the buffer's key).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AccountRecordSortKey {
     write_version: u64,
