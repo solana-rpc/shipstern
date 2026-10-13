@@ -7,8 +7,13 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `shipstern-core`, `shipstern`: `PrefilterBuilder::block_footers` and `RuntimeBuilder::block_footer` subscribe to Alpenglow block footers, with `shipstern_block_footers_*` metrics. `CoordinatorSource` and the jetstreamer source deliver no footers ([#354](https://github.com/solana-rpc/shipstern/pull/354) by @senzenn).
+
 ### Changed
 
+- **Breaking** for struct-literal construction and exhaustive matches: `Prefilter` gained `block_footer`, and `BuilderError` gained `BlockFooterCollision` ([#354](https://github.com/solana-rpc/shipstern/pull/354) by @senzenn).
 - **Breaking** all crates: moved to `yellowstone-grpc-proto` ~14.0.1, `yellowstone-grpc-client` 15.0.0, `yellowstone-fumarole-client` 0.9.0 and `yellowstone-block-machine` 0.11.0. Bank-scoped updates carry a `bank_id` ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
 - **Breaking** `shipstern-yellowstone-grpc-source`: only a processed stream with no `from_slot` and no `RuntimeHandle` reconnects, and a reconnect can repeat the cut-off block. Any other stream ends the run on a stream loss ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
 - **Breaking** `shipstern-yellowstone-grpc-source`: reconnect needs a server that sends bank IDs (Geyser proto 13 or newer) and stores slots. On a Geyser proto 12.7 or older server, set `auto-reconnect = false`, or the run ends with `FailedPrecondition` at the first account update or reconnect ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
