@@ -244,6 +244,7 @@ async fn send_filter_update<S>(
         slots = request.slots.len(),
         blocks = request.blocks.len(),
         blocks_meta = request.blocks_meta.len(),
+        block_footer = request.block_footer.len(),
         "Sending filter update to the live subscription"
     );
 
@@ -359,6 +360,7 @@ impl SourceTrait for YellowstoneGrpcSource {
             blocks_meta_filters = ?subscribe_request.blocks_meta.keys().collect::<Vec<_>>(),
             has_slots = !subscribe_request.slots.is_empty(),
             slots_filters = ?subscribe_request.slots.keys().collect::<Vec<_>>(),
+            block_footer_filters = ?subscribe_request.block_footer.keys().collect::<Vec<_>>(),
             from_slot = ?subscribe_request.from_slot,
             commitment = ?subscribe_request.commitment,
             "Subscribing to gRPC stream"

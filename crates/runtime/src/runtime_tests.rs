@@ -10,8 +10,8 @@ use std::{
 
 use async_trait::async_trait;
 use shipstern_core::{
-    instruction::InstructionUpdate, AccountPrefilter, Filters, ParseResult, Parser, Prefilter,
-    Pubkey, SlotUpdate,
+    instruction::InstructionUpdate, AccountPrefilter, BlockFooterUpdate, Filters, ParseResult,
+    Parser, Prefilter, Pubkey, SlotUpdate,
 };
 use yellowstone_grpc_proto::{
     geyser::{subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate, SubscribeUpdateSlot},
@@ -732,6 +732,71 @@ async fn test_one_builder_runs_against_different_sources() {
 
     assert!(completed.try_run_async().await.is_ok());
     assert_eq!(ONE_BUILDER_SLOTS_HANDLED.load(Ordering::Relaxed), 2);
+}
+
+const TEST_FOOTER_FILTER: &str = "test::FooterParser";
+static FOOTERS_HANDLED: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug)]
+struct MockFooterSource;
+
+#[async_trait]
+impl SourceTrait for MockFooterSource {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext { tx, .. } = ctx;
+
+        wait_for_runtime_ready().await;
+
+        let footer = SubscribeUpdate {
+            filters: vec![TEST_FOOTER_FILTER.to_string()],
+            update_oneof: Some(UpdateOneof::BlockFooter(BlockFooterUpdate::default())),
+            created_at: None,
+        };
+        if tx.send(Ok(footer)).await.is_err() {
+            return Ok(SourceExitStatus::ReceiverDropped);
+        }
+
+        Ok(SourceExitStatus::Completed)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FooterParser;
+
+impl Parser for FooterParser {
+    type Input = BlockFooterUpdate;
+    type Output = BlockFooterUpdate;
+
+    fn id(&self) -> Cow<'static, str> { TEST_FOOTER_FILTER.into() }
+
+    fn prefilter(&self) -> Prefilter { Prefilter::default() }
+
+    async fn parse(&self, value: &Self::Input) -> ParseResult<Self::Output> { Ok(value.clone()) }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FooterHandler;
+
+impl Handler<BlockFooterUpdate, BlockFooterUpdate> for FooterHandler {
+    async fn handle(
+        &self,
+        _value: &BlockFooterUpdate,
+        _raw_event: &BlockFooterUpdate,
+    ) -> crate::HandlerResult<()> {
+        FOOTERS_HANDLED.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn test_block_footer_reaches_its_pipeline() {
+    let runtime = Runtime::builder()
+        .block_footer(Pipeline::new(FooterParser, [FooterHandler]))
+        .try_build_with(MockFooterSource, default_buffer_config())
+        .unwrap();
+
+    assert!(runtime.try_run_async().await.is_ok());
+    assert_eq!(FOOTERS_HANDLED.load(Ordering::Relaxed), 1);
 }
 
 /// A source picked at runtime runs through `Box<dyn SourceTrait>`, which is
