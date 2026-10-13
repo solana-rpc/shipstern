@@ -28,8 +28,15 @@
 | `dead_slot_discarded` | Dead slot removed, no output |
 | `dead_slot_spares_sibling` | A dead slot does not discard its sibling |
 | `incomplete_block_discarded` | BlockMeta without entries is discarded as incomplete |
-| `lost_parent_block_meta_does_not_block_child_forever` | A parent that never freezes is discarded after 64 slots |
+| `late_block_meta_for_losing_bank_keeps_confirmed_bank` | Only the confirmed bank of a slot flushes |
+| `repaired_bank_of_dead_slot_flushes` | A new bank of a dead slot can still flush |
 | `child_of_repaired_dead_slot_flushes` | A forked report does not stop a confirmed child of a repaired slot |
+| `dead_bank_record_does_not_block_after_repair_loses` | A record of a dead bank does not block later slots |
+| `unfrozen_bank_of_forked_slot_can_still_win` | A bank that has not frozen survives a fork report and can win |
+| `lost_parent_block_meta_does_not_block_child_forever` | A parent that never freezes is discarded after 64 slots |
+| `lost_block_meta_of_winning_bank_does_not_block_child_forever` | A frozen losing bank does not hide a lost parent |
+| `late_parent_block_meta_within_grace_flushes` | A parent BlockMeta that arrives inside the grace window still flushes |
+| `record_for_skipped_slot_does_not_block_forever` | A record for a slot that never freezes is discarded after 64 slots |
 | `discarded_slot_ignores_parsed_messages` | Messages for discarded slot dropped |
 
 ### Fork Handling

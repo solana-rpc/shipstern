@@ -18,8 +18,8 @@ use tokio::sync::mpsc::Sender;
 use yellowstone_grpc_client::GeyserGrpcClient;
 use yellowstone_grpc_proto::{
     geyser::{
-        subscribe_update::UpdateOneof, SubscribeRequest, SubscribeRequestFilterBlocksMeta,
-        SubscribeRequestFilterEntry,
+        subscribe_update::UpdateOneof, SlotStatus, SubscribeRequest,
+        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry, SubscribeUpdate,
     },
     tonic::transport::ClientTlsConfig,
 };
@@ -29,6 +29,30 @@ use crate::{fixtures::FixtureWriter, types::CoordinatorInput};
 const DEFAULT_STREAM_IDLE_WARN_SECS: u64 = 0;
 
 const fn default_stream_idle_warn_secs() -> u64 { DEFAULT_STREAM_IDLE_WARN_SECS }
+
+/// The coordinator keys records by bank, so the source stops when the server sends no bank
+/// IDs. Other updates show a missing ID only as 0, and startup accounts have no bank.
+fn validate_bank_id(update: &SubscribeUpdate) -> Result<(), &'static str> {
+    match update.update_oneof.as_ref() {
+        Some(UpdateOneof::Account(account)) if account.bank_id.is_none() && !account.is_startup => {
+            Err("Account update has no bank ID")
+        },
+        // A proto 14 server sets a bank ID on each of these statuses.
+        Some(UpdateOneof::Slot(slot))
+            if slot.bank_id.is_none()
+                && matches!(
+                    slot.status(),
+                    SlotStatus::SlotCreatedBank
+                        | SlotStatus::SlotProcessed
+                        | SlotStatus::SlotConfirmed
+                        | SlotStatus::SlotFinalized
+                ) =>
+        {
+            Err("Slot status has no bank ID")
+        },
+        _ => Ok(()),
+    }
+}
 
 /// Config for CoordinatorSource.
 ///
@@ -119,7 +143,8 @@ impl CoordinatorSubscription for SubscribeRequest {
 /// 1. Forward the raw event to the coordinator (clone for BlockSM-relevant events)
 /// 2. Forward Account/Transaction events to the Shipstern Runtime (move, no clone)
 ///
-/// The source does not reconnect, so a stream loss ends it.
+/// The source does not reconnect, so a stream loss ends it. It also stops when the
+/// server sends no bank IDs.
 ///
 #[derive(Debug)]
 pub struct CoordinatorSource {
@@ -245,6 +270,9 @@ impl SourceTrait for CoordinatorSource {
             };
 
             if let Ok(subscribe_update) = &update {
+                if let Err(message) = validate_bank_id(subscribe_update) {
+                    break SourceExitStatus::Error(message.to_string());
+                }
                 // Capture raw protobuf to fixture file if enabled.
                 if let Some(ref mut writer) = fixture_writer {
                     match writer.write(subscribe_update) {
@@ -351,5 +379,58 @@ impl SourceTrait for CoordinatorSource {
         tracing::debug!("CoordinatorSource gRPC stream ended");
 
         Ok(exit_status)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use yellowstone_grpc_proto::geyser::{
+        subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate, SubscribeUpdateAccount,
+        SubscribeUpdateSlot,
+    };
+
+    use super::validate_bank_id;
+
+    #[test]
+    fn missing_bank_id_fails_closed() {
+        let mut update = SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::Account(SubscribeUpdateAccount {
+                slot: 42,
+                is_startup: false,
+                bank_id: None,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert!(validate_bank_id(&update).is_err());
+        if let Some(UpdateOneof::Account(account)) = &mut update.update_oneof {
+            account.is_startup = true;
+        }
+        assert!(validate_bank_id(&update).is_ok());
+
+        update.update_oneof = Some(UpdateOneof::Slot(SubscribeUpdateSlot {
+            slot: 42,
+            status: SlotStatus::SlotConfirmed as i32,
+            bank_id: None,
+            ..Default::default()
+        }));
+        assert!(validate_bank_id(&update).is_err());
+
+        update.update_oneof = Some(UpdateOneof::Slot(SubscribeUpdateSlot {
+            slot: 42,
+            status: SlotStatus::SlotCreatedBank as i32,
+            bank_id: None,
+            ..Default::default()
+        }));
+        assert!(validate_bank_id(&update).is_err());
+
+        // A first-shred status has no bank by design, so it must not stop the stream.
+        update.update_oneof = Some(UpdateOneof::Slot(SubscribeUpdateSlot {
+            slot: 42,
+            status: SlotStatus::SlotFirstShredReceived as i32,
+            bank_id: None,
+            ..Default::default()
+        }));
+        assert!(validate_bank_id(&update).is_ok());
     }
 }
