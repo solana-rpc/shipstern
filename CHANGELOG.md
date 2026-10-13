@@ -25,6 +25,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 - **Breaking** `shipstern-block-coordinator`: `CoordinatorError` and `DiscardReason` are `#[non_exhaustive]`, so a match needs a wildcard arm. `DiscardReason` derives `PartialEq` and `Eq` ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
 - **Breaking** `shipstern-block-coordinator`: `CoordinatorSource` does not reconnect, and it ignores `auto-reconnect` and `reconnect-max-retries` ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
 - **Breaking** `shipstern-yellowstone-fumarole-source`: fumarole-client 0.9 needs a Fumarole service at minor version 39 or newer. An older or unparsable version ends the run with an error at connect ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
+- **Breaking** `shipstern-block-coordinator`: `CoordinatorEvent`, `CoordinatorMessage`, `CoordinatorInput` and the `CoordinatorHandle` senders take a `bank_id`, and `CoordinatorEvent::SlotDiscarded` carries `bank_ids`. `shipstern-kafka-sink` skips account updates that carry no `bank_id` ([#345](https://github.com/solana-rpc/shipstern/pull/345) by @senzenn).
 
 ### Fixed
 

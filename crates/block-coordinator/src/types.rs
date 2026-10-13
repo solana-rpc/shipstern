@@ -108,24 +108,32 @@ pub enum ParseStatsKind {
 }
 
 /// Messages from handlers back to the coordinator.
+///
+/// `bank_id` comes from the update the handler parsed.
 pub enum CoordinatorMessage<R> {
     /// A parsed instruction record ready to buffer (sorted by tx_index, ix_path).
     InstructionParsed {
         slot: Slot,
+        bank_id: u64,
         key: InstructionRecordSortKey,
         record: R,
     },
     /// A parsed account record ready to buffer, sorted by ingress_seq:pubkey.
     AccountParsed {
         slot: Slot,
+        bank_id: u64,
         key: AccountRecordSortKey,
         record: R,
     },
     /// Signal that a transaction has been fully parsed by the handler.
     /// Coordinator counts these to determine when a slot is fully parsed.
-    TransactionParsed { slot: Slot },
+    TransactionParsed { slot: Slot, bank_id: u64 },
     /// A parse stat event (filtered or error) for aggregate tracking.
-    ParseStats { slot: Slot, kind: ParseStatsKind },
+    ParseStats {
+        slot: Slot,
+        bank_id: u64,
+        kind: ParseStatsKind,
+    },
 }
 
 impl<R> CoordinatorMessage<R> {
@@ -133,7 +141,7 @@ impl<R> CoordinatorMessage<R> {
         match self {
             Self::InstructionParsed { slot, .. }
             | Self::AccountParsed { slot, .. }
-            | Self::TransactionParsed { slot }
+            | Self::TransactionParsed { slot, .. }
             | Self::ParseStats { slot, .. } => *slot,
         }
     }
@@ -183,9 +191,9 @@ impl AccountRecordSortKey {
 pub enum CoordinatorInput {
     /// A raw geyser SubscribeUpdate (Entry, Slot, BlockMeta).
     GeyserUpdate(Box<SubscribeUpdate>),
-    /// A raw Account event was seen on the geyser stream for this slot.
-    /// Lightweight signal — only the slot, no protobuf payload.
-    AccountEventSeen { slot: Slot },
+    /// A raw Account event was seen on the geyser stream for this bank.
+    /// Lightweight signal: only the slot and bank, no protobuf payload.
+    AccountEventSeen { slot: Slot, bank_id: u64 },
 }
 
 /// Wraps a slot number with a deterministic ANSI color for log readability.
@@ -261,41 +269,59 @@ impl<R: Send> CoordinatorHandle<R> {
     pub async fn send_instruction_parsed(
         &self,
         slot: Slot,
+        bank_id: u64,
         key: InstructionRecordSortKey,
         record: R,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<CoordinatorMessage<R>>> {
         self.tx
-            .send(CoordinatorMessage::InstructionParsed { slot, key, record })
+            .send(CoordinatorMessage::InstructionParsed {
+                slot,
+                bank_id,
+                key,
+                record,
+            })
             .await
     }
 
     pub async fn send_account_parsed(
         &self,
         slot: Slot,
+        bank_id: u64,
         key: AccountRecordSortKey,
         record: R,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<CoordinatorMessage<R>>> {
         self.tx
-            .send(CoordinatorMessage::AccountParsed { slot, key, record })
+            .send(CoordinatorMessage::AccountParsed {
+                slot,
+                bank_id,
+                key,
+                record,
+            })
             .await
     }
 
     pub async fn send_transaction_parsed(
         &self,
         slot: Slot,
+        bank_id: u64,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<CoordinatorMessage<R>>> {
         self.tx
-            .send(CoordinatorMessage::TransactionParsed { slot })
+            .send(CoordinatorMessage::TransactionParsed { slot, bank_id })
             .await
     }
 
     pub async fn send_parse_stats(
         &self,
         slot: Slot,
+        bank_id: u64,
         kind: ParseStatsKind,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<CoordinatorMessage<R>>> {
         self.tx
-            .send(CoordinatorMessage::ParseStats { slot, kind })
+            .send(CoordinatorMessage::ParseStats {
+                slot,
+                bank_id,
+                kind,
+            })
             .await
     }
 }
