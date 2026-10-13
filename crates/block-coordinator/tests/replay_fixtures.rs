@@ -92,9 +92,14 @@ async fn run_coordinator_with_updates(
 
     for update in updates {
         // Send AccountEventSeen for Account events.
-        if let Some(UpdateOneof::Account(acct)) = &update.update_oneof {
+        if let Some(UpdateOneof::Account(acct)) = &update.update_oneof
+            && let Some(bank_id) = acct.bank_id
+        {
             input_tx
-                .send(CoordinatorInput::AccountEventSeen { slot: acct.slot })
+                .send(CoordinatorInput::AccountEventSeen {
+                    slot: acct.slot,
+                    bank_id,
+                })
                 .await
                 .unwrap();
         }
@@ -117,7 +122,10 @@ async fn run_coordinator_with_updates(
             let tx_count = meta.executed_transaction_count;
             for _ in 0..tx_count {
                 parsed_tx
-                    .send(CoordinatorMessage::TransactionParsed { slot: meta.slot })
+                    .send(CoordinatorMessage::TransactionParsed {
+                        slot: meta.slot,
+                        bank_id: meta.bank_id,
+                    })
                     .await
                     .unwrap();
             }

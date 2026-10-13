@@ -108,8 +108,8 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                         CoordinatorInput::GeyserUpdate(update) => {
                             self.convert_geyser_update(update.as_ref())?
                         }
-                        CoordinatorInput::AccountEventSeen { slot } => {
-                            vec![CoordinatorEvent::AccountEventSeen { slot }]
+                        CoordinatorInput::AccountEventSeen { slot, bank_id } => {
+                            vec![CoordinatorEvent::AccountEventSeen { slot, bank_id }]
                         }
                     }
                 }
@@ -240,6 +240,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                         events.push(CoordinatorEvent::SlotDiscarded {
                             slot: frozen.slot,
                             reason: DiscardReason::Incomplete,
+                            bank_ids: vec![frozen.bank_id],
                         });
                         continue;
                     }
@@ -255,6 +256,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                     };
                     events.push(CoordinatorEvent::BlockFrozen {
                         slot: frozen.slot,
+                        bank_id: frozen.bank_id,
                         metadata,
                     });
                 },
@@ -262,13 +264,19 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                     if status.commitment
                         == solana_commitment_config::CommitmentLevel::Confirmed =>
                 {
-                    events.push(CoordinatorEvent::SlotConfirmed { slot: status.slot });
+                    events.push(CoordinatorEvent::SlotConfirmed {
+                        slot: status.slot,
+                        bank_id: status.bank_id,
+                    });
                 },
                 BlockStateMachineOutput::SlotStatus(status)
                     if status.commitment
                         == solana_commitment_config::CommitmentLevel::Finalized =>
                 {
-                    events.push(CoordinatorEvent::SlotFinalized { slot: status.slot });
+                    events.push(CoordinatorEvent::SlotFinalized {
+                        slot: status.slot,
+                        bank_id: status.bank_id,
+                    });
                 },
                 BlockStateMachineOutput::SlotStatus(_) => {},
                 BlockStateMachineOutput::DeadSlotDetected(dead) => {
@@ -276,6 +284,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                     events.push(CoordinatorEvent::SlotDiscarded {
                         slot: dead.slot,
                         reason: DiscardReason::Dead,
+                        bank_ids: dead.bank_ids,
                     });
                 },
                 BlockStateMachineOutput::ForksDetected(fork) => {
@@ -283,6 +292,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                     events.push(CoordinatorEvent::SlotDiscarded {
                         slot: fork.slot,
                         reason: DiscardReason::Forked,
+                        bank_ids: fork.bank_ids,
                     });
                 },
                 // Records are kept per slot, so one bank of a slot cannot be dropped alone.
@@ -356,6 +366,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                 CoordinatorEvent::SlotDiscarded {
                     slot: parent,
                     reason: DiscardReason::Incomplete,
+                    bank_ids: Vec::new(),
                 }
             })
             .collect()
@@ -377,18 +388,40 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
 
     fn convert_parsed_message(msg: CoordinatorMessage<R>) -> Vec<CoordinatorEvent<R>> {
         match msg {
-            CoordinatorMessage::InstructionParsed { slot, key, record } => {
-                vec![CoordinatorEvent::InstructionRecordParsed { slot, key, record }]
+            CoordinatorMessage::InstructionParsed {
+                slot,
+                bank_id,
+                key,
+                record,
+            } => vec![CoordinatorEvent::InstructionRecordParsed {
+                slot,
+                bank_id,
+                key,
+                record,
+            }],
+            CoordinatorMessage::AccountParsed {
+                slot,
+                bank_id,
+                key,
+                record,
+            } => vec![CoordinatorEvent::AccountRecordParsed {
+                slot,
+                bank_id,
+                key,
+                record,
+            }],
+            CoordinatorMessage::TransactionParsed { slot, bank_id } => {
+                vec![CoordinatorEvent::TransactionParsed { slot, bank_id }]
             },
-            CoordinatorMessage::AccountParsed { slot, key, record } => {
-                vec![CoordinatorEvent::AccountRecordParsed { slot, key, record }]
-            },
-            CoordinatorMessage::TransactionParsed { slot } => {
-                vec![CoordinatorEvent::TransactionParsed { slot }]
-            },
-            CoordinatorMessage::ParseStats { slot, kind } => {
-                vec![CoordinatorEvent::ParseStats { slot, kind }]
-            },
+            CoordinatorMessage::ParseStats {
+                slot,
+                bank_id,
+                kind,
+            } => vec![CoordinatorEvent::ParseStats {
+                slot,
+                bank_id,
+                kind,
+            }],
         }
     }
 }

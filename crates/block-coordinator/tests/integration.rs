@@ -502,6 +502,7 @@ impl SlotBuilder {
             self.parsed_tx
                 .send(CoordinatorMessage::InstructionParsed {
                     slot: self.slot,
+                    bank_id: self.slot,
                     key: key.clone(),
                     record: record.clone(),
                 })
@@ -512,7 +513,10 @@ impl SlotBuilder {
         // Send TransactionParsed signals
         for _ in 0..tx_count {
             self.parsed_tx
-                .send(CoordinatorMessage::TransactionParsed { slot: self.slot })
+                .send(CoordinatorMessage::TransactionParsed {
+                    slot: self.slot,
+                    bank_id: self.slot,
+                })
                 .await
                 .unwrap();
         }
@@ -551,7 +555,10 @@ impl Slot {
         tokio::time::sleep(Duration::from_millis(5)).await;
         for _ in 0..account_count {
             self.input_tx
-                .send(CoordinatorInput::AccountEventSeen { slot: self.slot })
+                .send(CoordinatorInput::AccountEventSeen {
+                    slot: self.slot,
+                    bank_id: self.slot,
+                })
                 .await
                 .unwrap();
         }
@@ -593,13 +600,17 @@ impl Slot {
         self.parsed_tx
             .send(CoordinatorMessage::InstructionParsed {
                 slot: self.slot,
+                bank_id: self.slot,
                 key: InstructionRecordSortKey::new(tx_index, vec![0]),
                 record: value.to_string(),
             })
             .await
             .unwrap();
         self.parsed_tx
-            .send(CoordinatorMessage::TransactionParsed { slot: self.slot })
+            .send(CoordinatorMessage::TransactionParsed {
+                slot: self.slot,
+                bank_id: self.slot,
+            })
             .await
             .unwrap();
         tokio::time::sleep(Duration::from_millis(5)).await;
@@ -615,13 +626,17 @@ async fn send_record_to_slot(
     parsed_tx
         .send(CoordinatorMessage::InstructionParsed {
             slot,
+            bank_id: slot,
             key: InstructionRecordSortKey::new(0, vec![0]),
             record: value.to_string(),
         })
         .await
         .unwrap();
     parsed_tx
-        .send(CoordinatorMessage::TransactionParsed { slot })
+        .send(CoordinatorMessage::TransactionParsed {
+            slot,
+            bank_id: slot,
+        })
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(5)).await;
@@ -973,6 +988,7 @@ async fn account_gate_blocks_flush_until_account_count_received() {
         .parsed_tx
         .send(CoordinatorMessage::AccountParsed {
             slot: 100,
+            bank_id: 100,
             key: shipstern_block_coordinator::AccountRecordSortKey::new(1, [1; 32]),
             record: "acct1".to_string(),
         })
@@ -982,6 +998,7 @@ async fn account_gate_blocks_flush_until_account_count_received() {
         .parsed_tx
         .send(CoordinatorMessage::AccountParsed {
             slot: 100,
+            bank_id: 100,
             key: shipstern_block_coordinator::AccountRecordSortKey::new(2, [2; 32]),
             record: "acct2".to_string(),
         })
@@ -1019,6 +1036,7 @@ async fn account_only_mode_flushes_without_transaction_parsed_messages() {
         .parsed_tx
         .send(CoordinatorMessage::AccountParsed {
             slot: 100,
+            bank_id: 100,
             key: shipstern_block_coordinator::AccountRecordSortKey::new(1, [1; 32]),
             record: "acct1".to_string(),
         })
@@ -1047,7 +1065,10 @@ async fn account_event_after_confirmed_is_warn_not_error() {
     // (Account gate is frozen at confirm.)
     harness
         .input_tx
-        .send(CoordinatorInput::AccountEventSeen { slot: 100 })
+        .send(CoordinatorInput::AccountEventSeen {
+            slot: 100,
+            bank_id: 100,
+        })
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1057,6 +1078,7 @@ async fn account_event_after_confirmed_is_warn_not_error() {
         .parsed_tx
         .send(CoordinatorMessage::AccountParsed {
             slot: 100,
+            bank_id: 100,
             key: shipstern_block_coordinator::AccountRecordSortKey::new(1, [1; 32]),
             record: "acct1".to_string(),
         })
@@ -1086,6 +1108,7 @@ async fn duplicate_confirm_does_not_change_frozen_count() {
         .parsed_tx
         .send(CoordinatorMessage::AccountParsed {
             slot: 100,
+            bank_id: 100,
             key: shipstern_block_coordinator::AccountRecordSortKey::new(1, [1; 32]),
             record: "acct1".to_string(),
         })
@@ -1095,6 +1118,7 @@ async fn duplicate_confirm_does_not_change_frozen_count() {
         .parsed_tx
         .send(CoordinatorMessage::AccountParsed {
             slot: 100,
+            bank_id: 100,
             key: shipstern_block_coordinator::AccountRecordSortKey::new(2, [2; 32]),
             record: "acct2".to_string(),
         })

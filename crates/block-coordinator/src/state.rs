@@ -13,32 +13,46 @@ use crate::{
 /// All inputs to the coordinator state machine.
 pub enum CoordinatorEvent<R> {
     /// Block metadata received (from FrozenBlock via BlockSM wrapper).
-    BlockFrozen { slot: Slot, metadata: BlockMetadata },
-    /// Slot confirmed by cluster consensus.
-    SlotConfirmed { slot: Slot },
-    /// Slot finalized by cluster consensus.
-    SlotFinalized { slot: Slot },
-    /// Slot discarded (dead, forked, or incomplete).
-    SlotDiscarded { slot: Slot, reason: DiscardReason },
+    BlockFrozen {
+        slot: Slot,
+        bank_id: u64,
+        metadata: BlockMetadata,
+    },
+    /// Bank confirmed by cluster consensus.
+    SlotConfirmed { slot: Slot, bank_id: u64 },
+    /// Bank finalized by cluster consensus.
+    SlotFinalized { slot: Slot, bank_id: u64 },
+    /// Slot discarded (dead, forked, or incomplete). `bank_ids` are the banks known at that time.
+    SlotDiscarded {
+        slot: Slot,
+        reason: DiscardReason,
+        bank_ids: Vec<u64>,
+    },
     /// A raw Account event was seen on the geyser stream.
     /// Counted internally; frozen as expected_account_count when account gate is frozen.
-    AccountEventSeen { slot: Slot },
+    AccountEventSeen { slot: Slot, bank_id: u64 },
     /// A parsed instruction record from a handler (sorted by key).
     InstructionRecordParsed {
         slot: Slot,
+        bank_id: u64,
         key: InstructionRecordSortKey,
         record: R,
     },
     /// A parsed account record from a handler (sorted by write_version:pubkey).
     AccountRecordParsed {
         slot: Slot,
+        bank_id: u64,
         key: AccountRecordSortKey,
         record: R,
     },
     /// A handler finished parsing a transaction.
-    TransactionParsed { slot: Slot },
+    TransactionParsed { slot: Slot, bank_id: u64 },
     /// A parse stat event (filtered or error).
-    ParseStats { slot: Slot, kind: ParseStatsKind },
+    ParseStats {
+        slot: Slot,
+        bank_id: u64,
+        kind: ParseStatsKind,
+    },
 }
 
 /// Pure-ish coordinator state (no channels, no wrapper).
@@ -111,7 +125,7 @@ impl<R> CoordinatorState<R> {
 
     pub fn apply(&mut self, event: CoordinatorEvent<R>) -> Result<(), CoordinatorError> {
         match event {
-            CoordinatorEvent::BlockFrozen { slot, metadata } => {
+            CoordinatorEvent::BlockFrozen { slot, metadata, .. } => {
                 if self.is_already_flushed(slot, "BlockFrozen") {
                     return Ok(());
                 }
@@ -123,7 +137,7 @@ impl<R> CoordinatorState<R> {
                 let buf = self.buffer.entry(slot).or_default();
                 buf.set_block_metadata(metadata);
             },
-            CoordinatorEvent::SlotConfirmed { slot } => {
+            CoordinatorEvent::SlotConfirmed { slot, .. } => {
                 if self.is_already_flushed(slot, "SlotConfirmed") {
                     return Ok(());
                 }
@@ -139,7 +153,7 @@ impl<R> CoordinatorState<R> {
                     self.freeze_account_gate(slot);
                 }
             },
-            CoordinatorEvent::SlotFinalized { slot } => {
+            CoordinatorEvent::SlotFinalized { slot, .. } => {
                 // Finalized is only relevant when account commit is configured at finalized.
                 if self.account_commit_at != AccountCommitAt::Finalized {
                     return Ok(());
@@ -161,13 +175,14 @@ impl<R> CoordinatorState<R> {
             CoordinatorEvent::SlotDiscarded {
                 slot,
                 reason: DiscardReason::Forked,
+                ..
             } => {
                 self.forked_slots.insert(slot);
             },
-            CoordinatorEvent::SlotDiscarded { slot, reason } => {
+            CoordinatorEvent::SlotDiscarded { slot, reason, .. } => {
                 self.discard_slot(slot, reason);
             },
-            CoordinatorEvent::AccountEventSeen { slot } => {
+            CoordinatorEvent::AccountEventSeen { slot, .. } => {
                 if self.is_already_flushed(slot, "AccountEventSeen") {
                     return Ok(());
                 }
@@ -188,7 +203,9 @@ impl<R> CoordinatorState<R> {
                 }
                 *self.account_event_counts.entry(slot).or_default() += 1;
             },
-            CoordinatorEvent::InstructionRecordParsed { slot, key, record } => {
+            CoordinatorEvent::InstructionRecordParsed {
+                slot, key, record, ..
+            } => {
                 if !self.validate_instruction_slot(slot, "InstructionRecordParsed") {
                     return Ok(());
                 }
@@ -197,7 +214,9 @@ impl<R> CoordinatorState<R> {
                     .or_default()
                     .insert_instruction_record(key, record);
             },
-            CoordinatorEvent::AccountRecordParsed { slot, key, record } => {
+            CoordinatorEvent::AccountRecordParsed {
+                slot, key, record, ..
+            } => {
                 if !self.validate_account_slot(slot, "AccountRecordParsed") {
                     return Ok(());
                 }
@@ -205,7 +224,7 @@ impl<R> CoordinatorState<R> {
                 buf.insert_account_record(key, record);
                 buf.increment_account_processed_count();
             },
-            CoordinatorEvent::TransactionParsed { slot } => {
+            CoordinatorEvent::TransactionParsed { slot, .. } => {
                 if !self.validate_instruction_slot(slot, "TransactionParsed") {
                     return Ok(());
                 }
@@ -214,7 +233,7 @@ impl<R> CoordinatorState<R> {
                     .or_default()
                     .increment_parsed_tx_count();
             },
-            CoordinatorEvent::ParseStats { slot, kind } => {
+            CoordinatorEvent::ParseStats { slot, kind, .. } => {
                 let is_account_stat = matches!(
                     kind,
                     ParseStatsKind::AccountFiltered | ParseStatsKind::AccountError
@@ -512,18 +531,19 @@ mod tests {
         state
             .apply(CoordinatorEvent::BlockFrozen {
                 slot,
+                bank_id: 0,
                 metadata: metadata(parent, expected_tx_count),
             })
             .unwrap();
 
         for _ in 0..expected_tx_count {
             state
-                .apply(CoordinatorEvent::TransactionParsed { slot })
+                .apply(CoordinatorEvent::TransactionParsed { slot, bank_id: 0 })
                 .unwrap();
         }
 
         state
-            .apply(CoordinatorEvent::SlotConfirmed { slot })
+            .apply(CoordinatorEvent::SlotConfirmed { slot, bank_id: 0 })
             .unwrap();
     }
 
@@ -566,6 +586,7 @@ mod tests {
             .apply(CoordinatorEvent::SlotDiscarded {
                 slot: 101,
                 reason: DiscardReason::Dead,
+                bank_ids: vec![],
             })
             .unwrap();
 
@@ -586,6 +607,7 @@ mod tests {
             .apply(CoordinatorEvent::SlotDiscarded {
                 slot: 100,
                 reason: DiscardReason::Dead,
+                bank_ids: vec![],
             })
             .unwrap();
 
@@ -602,6 +624,7 @@ mod tests {
         state
             .apply(CoordinatorEvent::BlockFrozen {
                 slot,
+                bank_id: 0,
                 metadata: metadata(99, 2),
             })
             .unwrap();
@@ -609,6 +632,7 @@ mod tests {
         state
             .apply(CoordinatorEvent::InstructionRecordParsed {
                 slot,
+                bank_id: 0,
                 key: InstructionRecordSortKey::new(1, vec![0]),
                 record: "b".to_string(),
             })
@@ -616,19 +640,20 @@ mod tests {
         state
             .apply(CoordinatorEvent::InstructionRecordParsed {
                 slot,
+                bank_id: 0,
                 key: InstructionRecordSortKey::new(0, vec![0]),
                 record: "a".to_string(),
             })
             .unwrap();
 
         state
-            .apply(CoordinatorEvent::TransactionParsed { slot })
+            .apply(CoordinatorEvent::TransactionParsed { slot, bank_id: 0 })
             .unwrap();
         state
-            .apply(CoordinatorEvent::TransactionParsed { slot })
+            .apply(CoordinatorEvent::TransactionParsed { slot, bank_id: 0 })
             .unwrap();
         state
-            .apply(CoordinatorEvent::SlotConfirmed { slot })
+            .apply(CoordinatorEvent::SlotConfirmed { slot, bank_id: 0 })
             .unwrap();
 
         let flushed = state.drain_instruction_flushable().unwrap();
@@ -647,7 +672,10 @@ mod tests {
 
         // Second confirm for an already-flushed slot is silently dropped.
         state
-            .apply(CoordinatorEvent::SlotConfirmed { slot: 100 })
+            .apply(CoordinatorEvent::SlotConfirmed {
+                slot: 100,
+                bank_id: 0,
+            })
             .unwrap();
 
         let flushed = drain_both(&mut state).unwrap();
@@ -665,12 +693,16 @@ mod tests {
         state
             .apply(CoordinatorEvent::InstructionRecordParsed {
                 slot: 100,
+                bank_id: 0,
                 key: InstructionRecordSortKey::new(0, vec![0]),
                 record: "late".to_string(),
             })
             .unwrap();
         state
-            .apply(CoordinatorEvent::TransactionParsed { slot: 100 })
+            .apply(CoordinatorEvent::TransactionParsed {
+                slot: 100,
+                bank_id: 0,
+            })
             .unwrap();
 
         let flushed = drain_both(&mut state).unwrap();
@@ -692,6 +724,7 @@ mod tests {
                 .apply(CoordinatorEvent::SlotDiscarded {
                     slot: s,
                     reason: DiscardReason::Dead,
+                    bank_ids: vec![],
                 })
                 .unwrap();
         }
@@ -712,6 +745,7 @@ mod tests {
                 .apply(CoordinatorEvent::SlotDiscarded {
                     slot: s,
                     reason: DiscardReason::Dead,
+                    bank_ids: vec![],
                 })
                 .unwrap();
         }
@@ -731,6 +765,7 @@ mod tests {
             .apply(CoordinatorEvent::SlotDiscarded {
                 slot: 96,
                 reason: DiscardReason::Dead,
+                bank_ids: vec![],
             })
             .unwrap();
 
@@ -749,6 +784,7 @@ mod tests {
             .apply(CoordinatorEvent::SlotDiscarded {
                 slot: 96,
                 reason: DiscardReason::Dead,
+                bank_ids: vec![],
             })
             .unwrap();
 
@@ -759,12 +795,16 @@ mod tests {
         state
             .apply(CoordinatorEvent::InstructionRecordParsed {
                 slot: 96,
+                bank_id: 0,
                 key: InstructionRecordSortKey::new(0, vec![0]),
                 record: "late fork".to_string(),
             })
             .unwrap();
         state
-            .apply(CoordinatorEvent::TransactionParsed { slot: 96 })
+            .apply(CoordinatorEvent::TransactionParsed {
+                slot: 96,
+                bank_id: 0,
+            })
             .unwrap();
 
         assert_eq!(state.pending_slot_count(), 0);
@@ -788,6 +828,7 @@ mod tests {
             .apply(CoordinatorEvent::SlotDiscarded {
                 slot: 50,
                 reason: DiscardReason::Dead,
+                bank_ids: vec![],
             })
             .unwrap();
         assert_eq!(state.discarded_slot_count(), 1);
@@ -808,17 +849,18 @@ mod tests {
         state
             .apply(CoordinatorEvent::BlockFrozen {
                 slot,
+                bank_id: 0,
                 metadata: metadata(99, 0),
             })
             .unwrap();
         state
-            .apply(CoordinatorEvent::AccountEventSeen { slot })
+            .apply(CoordinatorEvent::AccountEventSeen { slot, bank_id: 0 })
             .unwrap();
         state
-            .apply(CoordinatorEvent::AccountEventSeen { slot })
+            .apply(CoordinatorEvent::AccountEventSeen { slot, bank_id: 0 })
             .unwrap();
         state
-            .apply(CoordinatorEvent::SlotConfirmed { slot })
+            .apply(CoordinatorEvent::SlotConfirmed { slot, bank_id: 0 })
             .unwrap();
 
         // Instruction flush ok, but accounts wait.
@@ -831,6 +873,7 @@ mod tests {
         state
             .apply(CoordinatorEvent::AccountRecordParsed {
                 slot,
+                bank_id: 0,
                 key: AccountRecordSortKey::new(1, [1; 32]),
                 record: "a".to_string(),
             })
@@ -842,6 +885,7 @@ mod tests {
         state
             .apply(CoordinatorEvent::AccountRecordParsed {
                 slot,
+                bank_id: 0,
                 key: AccountRecordSortKey::new(2, [2; 32]),
                 record: "b".to_string(),
             })
@@ -859,24 +903,26 @@ mod tests {
         state
             .apply(CoordinatorEvent::BlockFrozen {
                 slot,
+                bank_id: 0,
                 metadata: metadata(99, 1),
             })
             .unwrap();
         state
-            .apply(CoordinatorEvent::TransactionParsed { slot })
+            .apply(CoordinatorEvent::TransactionParsed { slot, bank_id: 0 })
             .unwrap();
         state
-            .apply(CoordinatorEvent::AccountEventSeen { slot })
+            .apply(CoordinatorEvent::AccountEventSeen { slot, bank_id: 0 })
             .unwrap();
         state
             .apply(CoordinatorEvent::AccountRecordParsed {
                 slot,
+                bank_id: 0,
                 key: AccountRecordSortKey::new(1, [1; 32]),
                 record: "acct".to_string(),
             })
             .unwrap();
         state
-            .apply(CoordinatorEvent::SlotConfirmed { slot })
+            .apply(CoordinatorEvent::SlotConfirmed { slot, bank_id: 0 })
             .unwrap();
 
         // Instructions flush at confirmed.
@@ -889,7 +935,7 @@ mod tests {
 
         // Finalize → accounts flush.
         state
-            .apply(CoordinatorEvent::SlotFinalized { slot })
+            .apply(CoordinatorEvent::SlotFinalized { slot, bank_id: 0 })
             .unwrap();
         let acct_flushed = state.drain_account_flushable();
         assert_eq!(acct_flushed.len(), 1);
@@ -901,7 +947,10 @@ mod tests {
         let mut state = CoordinatorState::<String>::default();
 
         state
-            .apply(CoordinatorEvent::SlotFinalized { slot: 123 })
+            .apply(CoordinatorEvent::SlotFinalized {
+                slot: 123,
+                bank_id: 0,
+            })
             .unwrap();
 
         assert_eq!(state.pending_slot_count(), 0);
@@ -916,11 +965,12 @@ mod tests {
         state
             .apply(CoordinatorEvent::BlockFrozen {
                 slot,
+                bank_id: 0,
                 metadata: metadata(99, 0),
             })
             .unwrap();
         state
-            .apply(CoordinatorEvent::SlotConfirmed { slot })
+            .apply(CoordinatorEvent::SlotConfirmed { slot, bank_id: 0 })
             .unwrap();
 
         // Drain accounts (0 expected, 0 processed → immediately ready).
@@ -929,7 +979,7 @@ mod tests {
 
         // Late AccountEventSeen → warn + drop (not error).
         state
-            .apply(CoordinatorEvent::AccountEventSeen { slot })
+            .apply(CoordinatorEvent::AccountEventSeen { slot, bank_id: 0 })
             .unwrap();
         assert_eq!(state.late_account_event_drops(), 1);
     }
@@ -941,22 +991,23 @@ mod tests {
 
         // Count one account event before freeze.
         state
-            .apply(CoordinatorEvent::AccountEventSeen { slot })
+            .apply(CoordinatorEvent::AccountEventSeen { slot, bank_id: 0 })
             .unwrap();
         state
             .apply(CoordinatorEvent::BlockFrozen {
                 slot,
+                bank_id: 0,
                 metadata: metadata(100, 0),
             })
             .unwrap();
         state
-            .apply(CoordinatorEvent::SlotConfirmed { slot })
+            .apply(CoordinatorEvent::SlotConfirmed { slot, bank_id: 0 })
             .unwrap();
 
         // Gate is frozen with expected_account_count=1, but not yet ready.
         // Another AccountEventSeen must be treated as late and dropped.
         state
-            .apply(CoordinatorEvent::AccountEventSeen { slot })
+            .apply(CoordinatorEvent::AccountEventSeen { slot, bank_id: 0 })
             .unwrap();
         assert_eq!(state.late_account_event_drops(), 1);
 
@@ -964,6 +1015,7 @@ mod tests {
         state
             .apply(CoordinatorEvent::AccountRecordParsed {
                 slot,
+                bank_id: 0,
                 key: AccountRecordSortKey::new(1, [1; 32]),
                 record: "acct".to_string(),
             })
@@ -980,18 +1032,25 @@ mod tests {
         // Account event arrives for slot 100, but account gate won't freeze
         // until finalized.
         state
-            .apply(CoordinatorEvent::AccountEventSeen { slot: 100 })
+            .apply(CoordinatorEvent::AccountEventSeen {
+                slot: 100,
+                bank_id: 0,
+            })
             .unwrap();
 
         // A later slot advances only the instruction frontier.
         state
             .apply(CoordinatorEvent::BlockFrozen {
                 slot: 200,
+                bank_id: 0,
                 metadata: metadata(199, 0),
             })
             .unwrap();
         state
-            .apply(CoordinatorEvent::SlotConfirmed { slot: 200 })
+            .apply(CoordinatorEvent::SlotConfirmed {
+                slot: 200,
+                bank_id: 0,
+            })
             .unwrap();
         let ix_flushed = state.drain_instruction_flushable().unwrap();
         assert_eq!(ix_flushed.len(), 1);
@@ -1001,14 +1060,21 @@ mod tests {
         state
             .apply(CoordinatorEvent::BlockFrozen {
                 slot: 100,
+                bank_id: 0,
                 metadata: metadata(99, 0),
             })
             .unwrap();
         state
-            .apply(CoordinatorEvent::SlotConfirmed { slot: 100 })
+            .apply(CoordinatorEvent::SlotConfirmed {
+                slot: 100,
+                bank_id: 0,
+            })
             .unwrap();
         state
-            .apply(CoordinatorEvent::SlotFinalized { slot: 100 })
+            .apply(CoordinatorEvent::SlotFinalized {
+                slot: 100,
+                bank_id: 0,
+            })
             .unwrap();
 
         // Should not flush yet: expected_account_count must still be 1.
@@ -1018,6 +1084,7 @@ mod tests {
         state
             .apply(CoordinatorEvent::AccountRecordParsed {
                 slot: 100,
+                bank_id: 0,
                 key: AccountRecordSortKey::new(1, [1; 32]),
                 record: "acct".to_string(),
             })
@@ -1042,6 +1109,7 @@ mod tests {
         state
             .apply(CoordinatorEvent::AccountRecordParsed {
                 slot,
+                bank_id: 0,
                 key: AccountRecordSortKey::new(1, [1; 32]),
                 record: "late".to_string(),
             })
@@ -1052,6 +1120,7 @@ mod tests {
         state
             .apply(CoordinatorEvent::ParseStats {
                 slot,
+                bank_id: 0,
                 kind: ParseStatsKind::AccountFiltered,
             })
             .unwrap();
@@ -1082,24 +1151,26 @@ mod tests {
         state
             .apply(CoordinatorEvent::BlockFrozen {
                 slot,
+                bank_id: 0,
                 metadata: metadata(99, 1),
             })
             .unwrap();
         state
             .apply(CoordinatorEvent::AccountRecordParsed {
                 slot,
+                bank_id: 0,
                 key: AccountRecordSortKey::new(42, [1; 32]),
                 record: "acct".to_string(),
             })
             .unwrap();
         state
-            .apply(CoordinatorEvent::TransactionParsed { slot })
+            .apply(CoordinatorEvent::TransactionParsed { slot, bank_id: 0 })
             .unwrap();
         state
-            .apply(CoordinatorEvent::AccountEventSeen { slot })
+            .apply(CoordinatorEvent::AccountEventSeen { slot, bank_id: 0 })
             .unwrap();
         state
-            .apply(CoordinatorEvent::SlotConfirmed { slot })
+            .apply(CoordinatorEvent::SlotConfirmed { slot, bank_id: 0 })
             .unwrap();
 
         let acct_flushed = state.drain_account_flushable();
@@ -1113,13 +1184,14 @@ mod tests {
         let slot = 100;
 
         state
-            .apply(CoordinatorEvent::AccountEventSeen { slot })
+            .apply(CoordinatorEvent::AccountEventSeen { slot, bank_id: 0 })
             .unwrap();
         assert!(state.account_event_counts.contains_key(&slot));
 
         state
             .apply(CoordinatorEvent::BlockFrozen {
                 slot,
+                bank_id: 0,
                 metadata: metadata(99, 0),
             })
             .unwrap();
@@ -1128,13 +1200,14 @@ mod tests {
         state
             .apply(CoordinatorEvent::AccountRecordParsed {
                 slot,
+                bank_id: 0,
                 key: AccountRecordSortKey::new(1, [1; 32]),
                 record: "acct".to_string(),
             })
             .unwrap();
 
         state
-            .apply(CoordinatorEvent::SlotConfirmed { slot })
+            .apply(CoordinatorEvent::SlotConfirmed { slot, bank_id: 0 })
             .unwrap();
         assert!(!state.account_event_counts.contains_key(&slot));
 
@@ -1147,7 +1220,10 @@ mod tests {
         let mut state = CoordinatorState::<String>::default();
 
         state
-            .apply(CoordinatorEvent::AccountEventSeen { slot: 100 })
+            .apply(CoordinatorEvent::AccountEventSeen {
+                slot: 100,
+                bank_id: 0,
+            })
             .unwrap();
 
         apply_ready_slot(&mut state, 200, 199, 0);
@@ -1166,20 +1242,22 @@ mod tests {
         state
             .apply(CoordinatorEvent::BlockFrozen {
                 slot,
+                bank_id: 0,
                 metadata: metadata(99, 0),
             })
             .unwrap();
         state
-            .apply(CoordinatorEvent::AccountEventSeen { slot })
+            .apply(CoordinatorEvent::AccountEventSeen { slot, bank_id: 0 })
             .unwrap();
         state
             .apply(CoordinatorEvent::ParseStats {
                 slot,
+                bank_id: 0,
                 kind: ParseStatsKind::AccountError,
             })
             .unwrap();
         state
-            .apply(CoordinatorEvent::SlotConfirmed { slot })
+            .apply(CoordinatorEvent::SlotConfirmed { slot, bank_id: 0 })
             .unwrap();
 
         let acct_flushed = state.drain_account_flushable();
@@ -1196,18 +1274,20 @@ mod tests {
         state
             .apply(CoordinatorEvent::BlockFrozen {
                 slot,
+                bank_id: 0,
                 metadata: metadata(99, 0),
             })
             .unwrap();
         state
-            .apply(CoordinatorEvent::AccountEventSeen { slot })
+            .apply(CoordinatorEvent::AccountEventSeen { slot, bank_id: 0 })
             .unwrap();
         state
-            .apply(CoordinatorEvent::AccountEventSeen { slot })
+            .apply(CoordinatorEvent::AccountEventSeen { slot, bank_id: 0 })
             .unwrap();
         state
             .apply(CoordinatorEvent::AccountRecordParsed {
                 slot,
+                bank_id: 0,
                 key: AccountRecordSortKey::new(5, [1; 32]),
                 record: "first".to_string(),
             })
@@ -1215,12 +1295,13 @@ mod tests {
         state
             .apply(CoordinatorEvent::AccountRecordParsed {
                 slot,
+                bank_id: 0,
                 key: AccountRecordSortKey::new(10, [1; 32]),
                 record: "second".to_string(),
             })
             .unwrap();
         state
-            .apply(CoordinatorEvent::SlotConfirmed { slot })
+            .apply(CoordinatorEvent::SlotConfirmed { slot, bank_id: 0 })
             .unwrap();
 
         let acct_flushed = state.drain_account_flushable();

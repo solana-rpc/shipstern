@@ -265,8 +265,12 @@ impl SourceTrait for CoordinatorSource {
                 Ok(subscribe_update) => {
                     // Send lightweight AccountEventSeen for each Account event.
                     if let Some(UpdateOneof::Account(acct)) = &subscribe_update.update_oneof
+                        && let Some(bank_id) = acct.bank_id
                         && coordinator_tx
-                            .send(CoordinatorInput::AccountEventSeen { slot: acct.slot })
+                            .send(CoordinatorInput::AccountEventSeen {
+                                slot: acct.slot,
+                                bank_id,
+                            })
                             .await
                             .is_err()
                     {
