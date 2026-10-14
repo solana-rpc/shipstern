@@ -22,7 +22,7 @@ timeout = 60
 
 # Maximum reconnect attempts before the stream gives up.
 # Only applies when auto-reconnect is enabled. Defaults to 10, which with the
-# 500ms/2.0x backoff covers outages up to ~4 minutes. Increase for longer
+# 500ms/2.0x backoff covers outages up to about 8.5 minutes. Increase for longer
 # tolerated outages.
 #reconnect-max-retries = 10
 

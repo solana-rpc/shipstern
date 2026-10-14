@@ -36,7 +36,7 @@ const fn default_auto_reconnect() -> bool { true }
 
 /// Reconnect defaults, deliberately sturdier than the client library's
 /// (3 retries / 10ms base), which gives up in under ~100ms. With these,
-/// 10 retries doubling from 500ms cover outages up to ~4 minutes
+/// 10 retries doubling from 500ms cover outages up to about 8.5 minutes
 /// (500ms, 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s).
 const DEFAULT_RECONNECT_MAX_RETRIES: u32 = 10;
 const DEFAULT_RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
@@ -82,6 +82,8 @@ pub struct YellowstoneGrpcConfig {
     /// Only a processed stream with no `from_slot` and no `RuntimeHandle` reconnects. The client
     /// holds replayed updates in memory until they finalize, and the cut-off block can repeat.
     /// Set it to `false` for a server older than Geyser proto 14 or one without stored slots.
+    /// The client adds its own `blocks_meta` and `slots` filters, which a server that allows
+    /// one filter of a kind refuses.
     ///
     #[arg(long, env, default_value_t = true)]
     #[serde(default = "default_auto_reconnect")]
@@ -89,8 +91,7 @@ pub struct YellowstoneGrpcConfig {
 
     /// Max reconnect attempts before the stream gives up.
     ///
-    /// Only applies when `auto_reconnect` is set. Falls back to the client
-    /// library default when unset.
+    /// Only applies when `auto_reconnect` is set. Defaults to 10 when unset.
     #[arg(long, env)]
     pub reconnect_max_retries: Option<u32>,
 }
@@ -291,11 +292,9 @@ impl SourceTrait for YellowstoneGrpcSource {
         let SourceContext {
             filters,
             tx,
-            filter_updates,
+            mut filter_updates,
             ..
         } = ctx;
-
-        let mut filter_updates_rx = Some(filter_updates);
 
         let config = self.config.clone();
         let timeout = Duration::from_secs(config.timeout);
@@ -317,15 +316,15 @@ impl SourceTrait for YellowstoneGrpcSource {
 
         // With no RuntimeHandle the update channel is already closed, so no filter
         // update can arrive and the client may reconnect the stream.
-        let has_handle = filter_updates_rx
-            .as_ref()
-            .is_some_and(|rx| rx.has_changed().is_ok());
+        let has_handle = filter_updates.has_changed().is_ok();
 
         // A closed slot can still hold one set that the runtime did not read.
-        let filters = match filter_updates_rx.as_mut() {
-            Some(rx) if !has_handle => rx.borrow_and_update().clone(),
-            _ => filters,
+        let filters = if has_handle {
+            filters
+        } else {
+            filter_updates.borrow_and_update().clone()
         };
+        let mut filter_updates_rx = Some(filter_updates);
 
         let reconnect_config = config.reconnect_config();
         let reconnect = reconnect_config.is_some() && config.can_reconnect(has_handle);
@@ -335,7 +334,7 @@ impl SourceTrait for YellowstoneGrpcSource {
                 tracing::debug!(?reconnect_config, "Auto-reconnect enabled");
                 builder = builder.set_reconnect_config(reconnect_config);
             },
-            Some(_) => tracing::warn!(
+            Some(_) => tracing::info!(
                 commitment = ?config.commitment_level,
                 from_slot = ?config.from_slot,
                 has_handle,
@@ -467,8 +466,8 @@ mod tests {
         toml::from_str(toml_src).expect("config must deserialize")
     }
 
-    /// Stands in for the client's sink, which has private fields and no
-    /// constructor. A rejecting sink acts like one whose request channel is gone.
+    /// Stands in for the client's sink, which has no constructor without the client's
+    /// `test-tools` feature. A rejecting sink acts like one whose request channel is gone.
     #[derive(Default)]
     struct TestSink {
         sent: Vec<SubscribeRequest>,
