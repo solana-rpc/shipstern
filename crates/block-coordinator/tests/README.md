@@ -29,8 +29,8 @@
 | `dead_slot_spares_sibling` | A dead slot does not discard its sibling |
 | `incomplete_block_discarded` | BlockMeta without entries is discarded as incomplete |
 | `late_block_meta_for_losing_bank_keeps_confirmed_bank` | Only the confirmed bank of a slot flushes |
-| `repaired_bank_of_dead_slot_flushes` | A new bank of a dead slot can still flush |
 | `child_of_repaired_dead_slot_flushes` | A forked report does not stop a confirmed child of a repaired slot |
+| `forked_report_after_confirm_keeps_confirmed_bank` | A forked report after the confirm keeps the confirmed bank |
 | `dead_bank_record_does_not_block_after_repair_loses` | A record of a dead bank does not block later slots |
 | `unfrozen_bank_of_forked_slot_can_still_win` | A bank that has not frozen survives a fork report and can win |
 | `lost_parent_block_meta_does_not_block_child_forever` | A parent that never freezes is discarded after 64 slots |
@@ -49,15 +49,29 @@
 | Test | Verifies |
 |------|----------|
 | `parsed_messages_before_lifecycle_are_buffered` | Early messages preserved |
-| `duplicate_confirm_does_not_change_frozen_count` | Confirming twice is safe |
+| `duplicate_confirm_does_not_change_frozen_count` | A second confirm keeps the frozen account count |
 | `malformed_block_meta_or_entry_is_skipped` | A bad hash, or a parent at or above the slot, is skipped |
 | `missing_bank_id_stops_coordinator` | Bank ID 0 in two slots stops the coordinator with `MissingBankId` |
 | `bank_in_two_slots_stops_coordinator` | One bank ID in two slots stops the coordinator with an error |
+| `output_channel_closed_returns_error` | A closed instruction output stops the coordinator with an error |
+
+### Account Gate
+| Test | Verifies |
+|------|----------|
+| `account_gate_blocks_flush_until_account_count_received` | Accounts flush once the confirmed account count is met |
+| `account_only_mode_flushes_without_transaction_parsed_messages` | With the tx gate off, instructions flush with no TransactionParsed |
+| `account_event_after_confirmed_is_warn_not_error` | An account event after the confirm is dropped, not an error |
 
 ### Late Post-Flush Messages
 | Test | Verifies |
 |------|----------|
 | `late_message_for_flushed_slot_is_dropped` | Drops stale parsed events after the flush frontier |
+
+### Replay (`replay_fixtures.rs`)
+| Test | Verifies |
+|------|----------|
+| `replay_fixture_through_coordinator` | Real slots flush in order with the right tx count and parent |
+| `replay_fixture_with_competing_bank_flushes_only_confirmed_bank` | A second bank that never confirms does not change the output |
 
 ## Fixture File
 
