@@ -37,6 +37,7 @@
 | `lost_block_meta_of_winning_bank_does_not_block_child_forever` | A frozen losing bank does not hide a lost parent |
 | `late_parent_block_meta_within_grace_flushes` | A parent BlockMeta that arrives inside the grace window still flushes |
 | `record_for_skipped_slot_does_not_block_forever` | A record for a slot that never freezes is discarded after 64 slots |
+| `first_slot_that_never_freezes_does_not_block_forever` | The same holds for the first slot of the stream |
 | `discarded_slot_ignores_parsed_messages` | Messages for discarded slot dropped |
 
 ### Fork Handling

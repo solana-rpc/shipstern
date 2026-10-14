@@ -1543,6 +1543,29 @@ async fn bank_in_two_slots_stops_coordinator() {
     ));
 }
 
+/// The stream starts inside slot 42, and its bank never freezes. Slot 43 must flush once the
+/// stream is well past slot 42, even though no bank froze before slot 42 got records.
+#[tokio::test]
+async fn first_slot_that_never_freezes_does_not_block_forever() {
+    let mut harness = TestHarness::spawn();
+    send_to_bank(
+        &harness,
+        make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
+        42,
+    )
+    .await;
+    send_record_to_slot(&harness.parsed_tx, 42, "partial").await;
+
+    let child = harness.slot(43).parent(42).empty().await;
+    child.confirm().await;
+    harness.expect_no_flush().await;
+
+    for slot in 44..=43 + 64 {
+        harness.slot(slot).parent(slot - 1).empty().await;
+    }
+    harness.expect_flush(43).await;
+}
+
 /// A record arrives for slot 42, which the chain skips. Slot 43 must flush once the stream
 /// is well past slot 42, not wait forever.
 #[tokio::test]
