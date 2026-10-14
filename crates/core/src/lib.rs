@@ -615,7 +615,7 @@ impl BlockMetaPrefilter {
     pub fn merge(_lhs: &mut Self, _rhs: Self) {}
 }
 
-/// A prefilter for matching Alpenglow block footer updates.
+/// A prefilter for matching block footer updates. (post Alpenglow)
 #[derive(Debug, Default, Clone, PartialEq, Copy)]
 pub struct BlockFooterPrefilter {
     /// Also receive the vote certificates of the block.
