@@ -92,7 +92,7 @@ pub type AccountUpdateInfo = SubscribeUpdateAccountInfo;
 pub type TransactionUpdate = SubscribeUpdateTransaction;
 /// A block meta update from Yellowstone.
 pub type BlockMetaUpdate = SubscribeUpdateBlockMeta;
-/// An Alpenglow block footer update from Yellowstone.
+/// A block footer update from Yellowstone. (post Alpenglow)
 pub type BlockFooterUpdate = SubscribeUpdateBlockFooter;
 /// A block update from Yellowstone.
 pub type BlockUpdate = SubscribeUpdateBlock;
