@@ -106,8 +106,8 @@ impl<R> CoordinatorState<R> {
         }
     }
 
-    /// Buffered banks. A slot with two banks counts twice.
-    pub fn pending_slot_count(&self) -> usize { self.buffer.len() }
+    /// Number of buffered banks.
+    pub fn pending_bank_count(&self) -> usize { self.buffer.len() }
 
     pub fn discarded_slot_count(&self) -> usize { self.discarded_slots.len() }
 
@@ -949,7 +949,7 @@ mod tests {
 
         let flushed = drain_both(&mut state).unwrap();
         assert!(flushed.is_empty());
-        assert_eq!(state.pending_slot_count(), 0);
+        assert_eq!(state.pending_bank_count(), 0);
     }
 
     #[test]
@@ -976,7 +976,7 @@ mod tests {
 
         let flushed = drain_both(&mut state).unwrap();
         assert!(flushed.is_empty());
-        assert_eq!(state.pending_slot_count(), 0);
+        assert_eq!(state.pending_bank_count(), 0);
     }
 
     #[test]
@@ -1076,21 +1076,21 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(state.pending_slot_count(), 0);
+        assert_eq!(state.pending_bank_count(), 0);
     }
 
     #[test]
     fn observability_accessors() {
         let mut state = CoordinatorState::<String>::default();
 
-        assert_eq!(state.pending_slot_count(), 0);
+        assert_eq!(state.pending_bank_count(), 0);
         assert_eq!(state.discarded_slot_count(), 0);
         assert_eq!(state.last_flushed_slot(), None);
         assert_eq!(state.oldest_pending_slot(), None);
 
         apply_ready_slot(&mut state, 100, 99, 0);
         apply_ready_slot(&mut state, 102, 101, 0);
-        assert_eq!(state.pending_slot_count(), 2);
+        assert_eq!(state.pending_bank_count(), 2);
         assert_eq!(state.oldest_pending_slot(), Some(100));
 
         state
@@ -1105,7 +1105,7 @@ mod tests {
         let flushed = drain_both(&mut state).unwrap();
         assert_eq!(flushed.len(), 1);
         assert_eq!(state.last_flushed_slot(), Some(100));
-        assert_eq!(state.pending_slot_count(), 1);
+        assert_eq!(state.pending_bank_count(), 1);
         assert_eq!(state.oldest_pending_slot(), Some(102));
         assert_eq!(state.discarded_slot_count(), 1);
     }
@@ -1222,7 +1222,7 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(state.pending_slot_count(), 0);
+        assert_eq!(state.pending_bank_count(), 0);
         assert_eq!(state.oldest_pending_slot(), None);
     }
 
@@ -1590,12 +1590,12 @@ mod tests {
         let ix = state.drain_instruction_flushable().unwrap();
         assert_eq!(ix.len(), 1);
         // Buffer entry still present (accounts not drained).
-        assert_eq!(state.pending_slot_count(), 1);
+        assert_eq!(state.pending_bank_count(), 1);
 
         // Drain accounts.
         let acct = state.drain_account_flushable();
         assert_eq!(acct.len(), 1);
         // Now buffer entry removed.
-        assert_eq!(state.pending_slot_count(), 0);
+        assert_eq!(state.pending_bank_count(), 0);
     }
 }
