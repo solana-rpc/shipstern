@@ -1546,7 +1546,7 @@ impl PrefilterBuilder {
         })
     }
 
-    /// Set prefilter will request Alpenglow block footer updates. `include_certificates` also
+    /// Set prefilter will request block footer updates. `include_certificates` also
     /// asks for the vote certificates of each block.
     pub fn block_footers(self, include_certificates: bool) -> Self {
         self.mutate(|this| {
