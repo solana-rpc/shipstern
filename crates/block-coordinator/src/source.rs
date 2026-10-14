@@ -176,18 +176,10 @@ impl SourceTrait for CoordinatorSource {
 
         let mut client = builder.connect().await?;
 
-        let mut subscribe_request = SubscribeRequest::from(filters)
+        let subscribe_request = SubscribeRequest::from(filters)
             .with_coordinator_subscriptions()
             .with_from_slot(config.from_slot)
             .with_commitment_processed();
-        // The source forwards only accounts and transactions, so footers never reach a pipeline.
-        if !subscribe_request.block_footer.is_empty() {
-            tracing::warn!(
-                source_label,
-                "CoordinatorSource drops the block footer filter"
-            );
-            subscribe_request.block_footer.clear();
-        }
 
         tracing::info!(
             source_label,
