@@ -49,15 +49,6 @@ pub enum CoordinatorError {
     MissingBankId {
         slot: Slot,
     },
-    ConfirmedBankDiscarded {
-        slot: Slot,
-        bank_id: u64,
-    },
-    ConflictingConfirmedBank {
-        slot: Slot,
-        existing: u64,
-        new: u64,
-    },
     TwoGateInvariantViolation {
         slot: Slot,
         last_flushed: Option<Slot>,
@@ -85,14 +76,6 @@ impl fmt::Display for CoordinatorError {
                 f,
                 "Slot {slot} has no bank ID. The server likely runs Geyser proto 12.7 or older"
             ),
-            Self::ConfirmedBankDiscarded { slot, bank_id } => {
-                write!(f, "Confirmed bank {bank_id} discarded in slot {slot}")
-            },
-            Self::ConflictingConfirmedBank {
-                slot,
-                existing,
-                new,
-            } => write!(f, "Slot {slot} confirmed bank {new} after bank {existing}"),
             Self::TwoGateInvariantViolation { slot, last_flushed } => write!(
                 f,
                 "Two-gate invariant violated: slot {slot} <= last_flushed {last_flushed:?}"

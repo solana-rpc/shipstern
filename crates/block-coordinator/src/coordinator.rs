@@ -19,8 +19,8 @@ use crate::{
 };
 
 /// Core orchestrator that owns a `BlocksStateMachineWrapper` and delegates
-/// ordering/flush decisions to the pure-ish `CoordinatorState`. It discards a slot that
-/// never freezes itself, because only the wrapper outputs show that.
+/// ordering/flush decisions to the pure-ish `CoordinatorState`. It also discards a slot that
+/// never freezes, because only the wrapper outputs show that.
 pub struct BlockMachineCoordinator<R> {
     wrapper: BlocksStateMachineWrapper,
     state: CoordinatorState<R>,
@@ -212,7 +212,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         else {
             return Ok(events);
         };
-        // The wrapper rejects only events for a discarded bank or a duplicate block. Neither
+        // The wrapper rejects only events for a discarded or already frozen bank. Neither
         // removes the slot, so a rejection must not discard the other banks of the slot.
         if self.wrapper.handle_new_geyser_event(info).is_err() {
             return Ok(events);
