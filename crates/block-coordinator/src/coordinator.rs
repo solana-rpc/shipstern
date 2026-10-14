@@ -364,7 +364,6 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                 .last_flushed_slot()
                 .is_some_and(|last| slot <= last)
             || self.state.is_slot_discarded(slot)
-            || self.frozen_banks.first().is_none_or(|&(low, _)| slot < low)
             || self.is_far_ahead(slot)
             || self.has_frozen_bank(slot)
         {
