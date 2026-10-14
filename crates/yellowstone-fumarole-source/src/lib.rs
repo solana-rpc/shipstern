@@ -109,13 +109,14 @@ impl SourceTrait for YellowstoneFumaroleSource {
             },
         };
 
-        // fumarole-client 0.9 panics on a service version it does not support.
+        // fumarole-client 0.9 panics below its SHARDED_DOWNLOAD_MINIMUM_MINOR_VERSION.
+        const MIN_SERVICE_MINOR_VERSION: u64 = 39;
         let version = fumarole_client
             .version()
             .await
             .map_err(ShipsternError::YellowstoneStatus)?
             .version;
-        if !semver::Version::parse(&version).is_ok_and(|v| v.minor >= 39) {
+        if !semver::Version::parse(&version).is_ok_and(|v| v.minor >= MIN_SERVICE_MINOR_VERSION) {
             return Err(ShipsternError::Other(
                 format!("Fumarole service version {version} is not supported").into(),
             ));
