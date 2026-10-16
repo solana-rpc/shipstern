@@ -1136,6 +1136,41 @@ async fn malformed_block_meta_or_entry_is_skipped() {
     harness.expect_flush(51).await;
 }
 
+/// A server on Geyser proto 12.7 or older sends no bank ID, which decodes as 0.
+#[tokio::test]
+async fn missing_bank_id_stops_coordinator() {
+    let (input_tx, input_rx) = mpsc::channel(8);
+    let (_parsed_tx, parsed_rx) = mpsc::channel(8);
+    let coordinator = tokio::spawn(BlockMachineCoordinator::<String>::run(
+        input_rx,
+        parsed_rx,
+        None,
+        None,
+        AccountCommitAt::Confirmed,
+        true,
+    ));
+
+    for slot in [100, 101] {
+        let mut entry = make_entry_update(slot, 0, 0);
+        if let Some(UpdateOneof::Entry(entry)) = entry.update_oneof.as_mut() {
+            entry.bank_id = 0;
+        }
+        input_tx
+            .send(CoordinatorInput::GeyserUpdate(Box::new(entry)))
+            .await
+            .unwrap();
+    }
+
+    let result = tokio::time::timeout(Duration::from_secs(2), coordinator)
+        .await
+        .expect("coordinator must stop")
+        .expect("coordinator must not panic");
+    assert!(matches!(
+        result,
+        Err(CoordinatorError::MissingBankId { slot: 101 })
+    ));
+}
+
 #[tokio::test]
 async fn bank_in_two_slots_stops_coordinator() {
     let (input_tx, input_rx) = mpsc::channel(8);

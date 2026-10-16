@@ -36,8 +36,9 @@ const fn default_auto_reconnect() -> bool { true }
 
 /// Reconnect defaults, deliberately sturdier than the client library's
 /// (3 retries / 10ms base), which gives up in under ~100ms. With these,
-/// 10 retries doubling from 500ms cover outages up to about 8.5 minutes
-/// (500ms, 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s).
+/// 10 retries doubling from 500ms span about 8.5 minutes
+/// (500ms, 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s). Recovery also needs the
+/// server to still hold the missed slots, or the run ends with `OutOfRange`.
 const DEFAULT_RECONNECT_MAX_RETRIES: u32 = 10;
 const DEFAULT_RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 const DEFAULT_RECONNECT_MULTIPLIER: f64 = 2.0;
@@ -81,7 +82,7 @@ pub struct YellowstoneGrpcConfig {
     ///
     /// Only a processed stream with no `from_slot` and no `RuntimeHandle` reconnects. The client
     /// holds replayed updates in memory until they finalize, and the cut-off block can repeat.
-    /// Set it to `false` for a server older than Geyser proto 14 or one without stored slots.
+    /// Set it to `false` for a server on Geyser proto 12.7 or older, or one without stored slots.
     /// The client adds its own `blocks_meta` and `slots` filters, which a server that allows
     /// one filter of a kind refuses.
     ///

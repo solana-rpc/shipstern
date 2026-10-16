@@ -16,14 +16,14 @@ x-token = "<X-TOKEN>"
 timeout = 60
 
 # Built-in auto-reconnect (default true). Only a processed stream with no from-slot and
-# no RuntimeHandle reconnects. Set it to false for a server older than Geyser proto 14
-# or one without replay_stored_slots.
+# no RuntimeHandle reconnects. Set it to false for a server on Geyser proto 12.7 or
+# older, or one without replay_stored_slots.
 #auto-reconnect = true
 
 # Maximum reconnect attempts before the stream gives up.
-# Only applies when auto-reconnect is enabled. Defaults to 10, which with the
-# 500ms/2.0x backoff covers outages up to about 8.5 minutes. Increase for longer
-# tolerated outages.
+# Only applies when auto-reconnect is enabled. Defaults to 10. With the 500ms/2.0x
+# backoff, the retries span about 8.5 minutes. Recovery also needs the server to
+# still hold the missed slots, or the run ends with OutOfRange.
 #reconnect-max-retries = 10
 
 # Windows of account data to receive in place of the whole account.

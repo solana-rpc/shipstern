@@ -40,6 +40,9 @@ pub enum CoordinatorError {
         slot: Slot,
         other_slot: Slot,
     },
+    MissingBankId {
+        slot: Slot,
+    },
     TwoGateInvariantViolation {
         slot: Slot,
         last_flushed: Option<Slot>,
@@ -63,6 +66,10 @@ impl fmt::Display for CoordinatorError {
                 slot,
                 other_slot,
             } => write!(f, "Bank {bank_id} is in slot {slot} and slot {other_slot}"),
+            Self::MissingBankId { slot } => write!(
+                f,
+                "Slot {slot} has no bank ID. The server likely runs Geyser proto 12.7 or older"
+            ),
             Self::TwoGateInvariantViolation { slot, last_flushed } => write!(
                 f,
                 "Two-gate invariant violated: slot {slot} <= last_flushed {last_flushed:?}"

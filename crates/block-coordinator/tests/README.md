@@ -43,6 +43,7 @@
 | `parsed_messages_before_lifecycle_are_buffered` | Early messages preserved |
 | `duplicate_confirm_does_not_change_frozen_count` | Confirming twice is safe |
 | `malformed_block_meta_or_entry_is_skipped` | A bad hash, or a parent at or above the slot, is skipped |
+| `missing_bank_id_stops_coordinator` | Bank ID 0 in two slots stops the coordinator with `MissingBankId` |
 | `bank_in_two_slots_stops_coordinator` | One bank ID in two slots stops the coordinator with an error |
 
 ### Late Post-Flush Messages

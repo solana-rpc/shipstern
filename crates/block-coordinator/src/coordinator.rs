@@ -303,6 +303,10 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         if let Some(&other_slot) = current.get(&bank_id).or_else(|| previous.get(&bank_id))
             && other_slot != slot
         {
+            // Agave gives bank ID 0 only to its first bank. A repeated 0 is a missing field.
+            if bank_id == 0 {
+                return Err(CoordinatorError::MissingBankId { slot });
+            }
             return Err(CoordinatorError::BankInTwoSlots {
                 bank_id,
                 slot,

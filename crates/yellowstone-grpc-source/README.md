@@ -110,6 +110,38 @@ also depends on the provider. Both `yellowstone-grpc-geyser` and `richat` apply
 mid-stream requests to a live subscription, but a deployment can sit behind
 infrastructure that does not forward them.
 
+## Reconnect
+
+With `auto-reconnect` on, the source reconnects only a processed stream with no
+`from_slot` and no `RuntimeHandle`. On reconnect, the client replays the missed
+slots from the server. The server must send bank IDs (Geyser proto 13 or newer)
+and store slots. If not, the run ends:
+
+- An account update with no `bank_id` ends the run with `FailedPrecondition`.
+- During a reconnect, a finalized slot with no `bank_id` ends the run with
+  `FailedPrecondition`.
+- If the server no longer holds the missed slots, the run ends with `OutOfRange`.
+
+The client adds its own `blocks_meta` and `slots` filters. A server that allows
+one filter of a kind refuses a run that also has a block-meta or slot pipeline.
+Set `auto-reconnect = false` for such a server, and for a server on Geyser
+proto 12.7 or older.
+
+A reconnect replays the bank that was cut off, so handlers can see its updates
+twice. On a Yellowstone server older than 16.1.2, the bank in progress when the
+client subscribes again can also lose its first updates, with no error
+([rpcpool/yellowstone-grpc#915](https://github.com/rpcpool/yellowstone-grpc/pull/915)).
+A stream at confirmed or finalized does not reconnect, so run it under a
+supervisor that restarts it.
+
+## Banks at processed
+
+At processed, a slot can have more than one bank, and each update carries its
+`bank_id`. Keep only the bank that reaches confirmed. A `bank_id` is local to
+one server, so do not match two streams on it. At the Alpenglow switch the
+cluster drops some vote-only blocks with no event, and the slot numbers then
+skip ahead.
+
 ## Creating a Custom Source
 
 A source is a value the runtime is handed. Implement `SourceTrait` with one
