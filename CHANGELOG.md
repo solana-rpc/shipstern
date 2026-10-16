@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- `shipstern-jetstream-source`: moved `jetstreamer-firehose` and `jetstreamer-utils` from the archived `anza-xyz/jetstreamer` to `vaultic-win/jetstreamer` v0.9.0, which no longer drops block callbacks after a worker steals work or reconnects. The Rust toolchain moves from 1.93.0 to 1.93.1, which `serial_test` 4.0.1 needs ([#346](https://github.com/solana-rpc/shipstern/pull/346) by @senzenn).
+
 ## [0.12.0] - 2026-10-11
 
 ### Added
