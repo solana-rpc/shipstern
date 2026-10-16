@@ -743,7 +743,16 @@ struct MockFooterSource;
 #[async_trait]
 impl SourceTrait for MockFooterSource {
     async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
-        let SourceContext { tx, .. } = ctx;
+        let SourceContext { filters, tx, .. } = ctx;
+
+        // Like a server, send a footer only when the parser asks for footers.
+        let Some(Prefilter {
+            block_footer: Some(_),
+            ..
+        }) = filters.get(TEST_FOOTER_FILTER)
+        else {
+            return Ok(SourceExitStatus::Completed);
+        };
 
         wait_for_runtime_ready().await;
 
@@ -769,7 +778,7 @@ impl Parser for FooterParser {
 
     fn id(&self) -> Cow<'static, str> { TEST_FOOTER_FILTER.into() }
 
-    fn prefilter(&self) -> Prefilter { Prefilter::default() }
+    fn prefilter(&self) -> Prefilter { Prefilter::builder().block_footers(false).build().unwrap() }
 
     async fn parse(&self, value: &Self::Input) -> ParseResult<Self::Output> { Ok(value.clone()) }
 }

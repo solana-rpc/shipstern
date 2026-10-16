@@ -2108,7 +2108,6 @@ mod tests {
             one(prefilter).block_footer["p"].include_certificates,
             Some(true)
         );
-        assert!(one(Prefilter::default()).block_footer.is_empty());
     }
 
     /// Every field #303 listed has to survive the conversion, so one assertion
@@ -2329,6 +2328,7 @@ mod tests {
         assert!(accounts.filters.is_empty());
         assert_eq!(accounts.nonempty_txn_signature, None);
         assert!(request.accounts_data_slice.is_empty());
+        assert!(request.block_footer.is_empty());
 
         // The account-only prefilter above leaves `transactions` and `slots`
         // empty, so the defaults on those two need their own request.
