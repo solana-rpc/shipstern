@@ -2,8 +2,8 @@
 use std::sync::Arc;
 
 use shipstern_core::{
-    instruction::InstructionUpdate, AccountUpdate, BlockMetaUpdate, BlockUpdate, SlotUpdate,
-    TransactionUpdate,
+    instruction::InstructionUpdate, AccountUpdate, BlockFooterUpdate, BlockMetaUpdate, BlockUpdate,
+    SlotUpdate, TransactionUpdate,
 };
 use tokio::sync::watch;
 
@@ -37,6 +37,9 @@ pub enum BuilderError {
     /// Two block meta pipelines were registered with the same parser ID.
     #[error("ID collision detected among block meta pipelines")]
     BlockMetaCollision,
+    /// Two block footer pipelines were registered with the same parser ID.
+    #[error("ID collision detected among block footer pipelines")]
+    BlockFooterCollision,
     /// Two block pipelines were registered with the same parser ID.
     #[error("ID collision detected among block pipelines")]
     BlockCollision,
@@ -66,6 +69,8 @@ pub struct Builder<K: BuilderKind> {
     pub instruction: Vec<BoxPipeline<'static, InstructionUpdate>>,
     /// The block meta pipelines.
     pub block_meta: Vec<BoxPipeline<'static, BlockMetaUpdate>>,
+    /// The block footer pipelines.
+    pub block_footer: Vec<BoxPipeline<'static, BlockFooterUpdate>>,
     /// The block meta pipelines.
     pub block: Vec<BoxPipeline<'static, BlockUpdate>>,
     /// The slot pipelines.
@@ -85,6 +90,7 @@ impl<K: BuilderKind> Default for Builder<K> {
             transaction: vec![],
             instruction: vec![],
             block_meta: vec![],
+            block_footer: vec![],
             block: vec![],
             slot: vec![],
             extra: K::default(),
@@ -169,6 +175,14 @@ impl RuntimeBuilder {
         self.mutate(|s| s.block_meta.push(Box::new(block_meta)))
     }
 
+    /// Add a new block footer pipeline to the builder.
+    pub fn block_footer<T: DynPipeline<BlockFooterUpdate> + Send + Sync + 'static>(
+        self,
+        block_footer: T,
+    ) -> Self {
+        self.mutate(|s| s.block_footer.push(Box::new(block_footer)))
+    }
+
     /// Add a new block pipeline to the builder.
     pub fn block<T: DynPipeline<BlockUpdate> + Send + Sync + 'static>(self, block: T) -> Self {
         self.mutate(|s| s.block.push(Box::new(block)))
@@ -209,6 +223,7 @@ impl RuntimeBuilder {
             transaction,
             instruction,
             block_meta,
+            block_footer,
             block,
             slot,
             extra: RuntimeKind,
@@ -246,6 +261,7 @@ impl RuntimeBuilder {
         let account_len = account.len();
         let transaction_len = transaction.len();
         let block_meta_len = block_meta.len();
+        let block_footer_len = block_footer.len();
         let block_len = block.len();
         let slot_len = slot.len();
 
@@ -254,6 +270,7 @@ impl RuntimeBuilder {
             transaction: transaction.into_iter().collect(),
             instruction: ixs,
             block_meta: block_meta.into_iter().collect(),
+            block_footer: block_footer.into_iter().collect(),
             block: block.into_iter().collect(),
             slot: slot.into_iter().collect(),
         };
@@ -268,6 +285,10 @@ impl RuntimeBuilder {
 
         if pipelines.block_meta.len() != block_meta_len {
             return Err(BuilderError::BlockMetaCollision);
+        }
+
+        if pipelines.block_footer.len() != block_footer_len {
+            return Err(BuilderError::BlockFooterCollision);
         }
 
         if pipelines.block.len() != block_len {

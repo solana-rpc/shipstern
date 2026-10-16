@@ -19,6 +19,13 @@ The [`Source`](https://github.com/solana-rpc/shipstern/blob/main/crates/runtime/
 - Configure filters for data processing
 - Manage source-specific configuration
 
+## Block footers
+
+A block footer pipeline gets one footer per block on an Alpenglow cluster. A
+server on Geyser proto 12.7 or older ignores the footer filter, and a cluster
+without Alpenglow sends no footers. A proto 13 server sends certificates at
+field numbers that proto 14 reserves, so they are dropped.
+
 ## Runtime filter updates
 
 The gRPC source keeps the `SubscribeRequest` sink that `yellowstone-grpc-client`

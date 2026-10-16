@@ -232,6 +232,9 @@ impl ShipsternStreamHandler {
             if prefilter.slot.is_some() {
                 matches.slot.push(filter_id.clone());
             }
+            if prefilter.block_footer.is_some() {
+                tracing::warn!(%filter_id, "The jetstreamer source sends no block footers");
+            }
 
             // 3. Transaction matches. The firehose can't filter by account, so any
             // transaction prefilter receives every transaction.
@@ -1075,6 +1078,7 @@ slot-end = 2000
             account: None,
             transaction: None,
             block_meta: None,
+            block_footer: None,
             block: Some(BlockPrefilter {
                 accounts_include: Default::default(),
                 include_transactions: false,
@@ -1200,6 +1204,7 @@ slot-end = 2000
             account: None,
             transaction: None,
             block_meta: None,
+            block_footer: None,
             block: Some(BlockPrefilter {
                 accounts_include: Default::default(),
                 include_transactions: false,
@@ -1285,6 +1290,7 @@ slot-end = 2000
             account: None,
             transaction: None,
             block_meta: Some(BlockMetaPrefilter {}),
+            block_footer: None,
             block: None,
             slot: None,
         });
@@ -1333,6 +1339,7 @@ slot-end = 2000
             account: None,
             transaction: None,
             block_meta: None,
+            block_footer: None,
             block: None,
             slot: Some(SlotPrefilter::default()),
         });
@@ -1378,6 +1385,7 @@ slot-end = 2000
             account: None,
             transaction: None,
             block_meta: Some(BlockMetaPrefilter {}),
+            block_footer: None,
             block: Some(BlockPrefilter {
                 accounts_include: Default::default(),
                 include_transactions: true,

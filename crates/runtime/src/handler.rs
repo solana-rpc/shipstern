@@ -5,8 +5,8 @@ use std::{borrow::Cow, collections::HashMap, pin::Pin};
 
 use futures_util::{Future, FutureExt, StreamExt};
 use shipstern_core::{
-    AccountUpdate, BlockMetaUpdate, BlockUpdate, Filters, GetPrefilter, ParseError, Parser,
-    ParserId, Prefilter, SlotUpdate, TransactionUpdate,
+    AccountUpdate, BlockFooterUpdate, BlockMetaUpdate, BlockUpdate, Filters, GetPrefilter,
+    ParseError, Parser, ParserId, Prefilter, SlotUpdate, TransactionUpdate,
 };
 use smallvec::SmallVec;
 use tracing::{trace, Instrument, Span};
@@ -251,6 +251,7 @@ pub(crate) struct PipelineSets {
     pub transaction: PipelineSet<BoxPipeline<'static, TransactionUpdate>>,
     pub instruction: PipelineSet<BoxPipeline<'static, TransactionUpdate>>,
     pub block_meta: PipelineSet<BoxPipeline<'static, BlockMetaUpdate>>,
+    pub block_footer: PipelineSet<BoxPipeline<'static, BlockFooterUpdate>>,
     pub block: PipelineSet<BoxPipeline<'static, BlockUpdate>>,
     pub slot: PipelineSet<BoxPipeline<'static, SlotUpdate>>,
 }
@@ -264,6 +265,7 @@ impl PipelineSets {
                 .chain(self.transaction.filters())
                 .chain(self.instruction.filters())
                 .chain(self.block_meta.filters())
+                .chain(self.block_footer.filters())
                 .chain(self.block.filters())
                 .chain(self.slot.filters())
                 .collect(),
