@@ -26,20 +26,25 @@
 | Test | Verifies |
 |------|----------|
 | `dead_slot_discarded` | Dead slot removed, no output |
-| `dead_slot_unblocks_next` | Discard unblocks subsequent slot |
-| `untracked_slot_discarded` | Rejected BlockSummary causes discard |
+| `dead_slot_spares_sibling` | A dead slot does not discard its sibling |
+| `incomplete_block_discarded` | BlockMeta without entries is discarded as incomplete |
+| `lost_parent_block_meta_does_not_block_child_forever` | A parent that never freezes is discarded after 64 slots |
+| `child_of_repaired_dead_slot_flushes` | A forked report does not stop a confirmed child of a repaired slot |
 | `discarded_slot_ignores_parsed_messages` | Messages for discarded slot dropped |
 
 ### Fork Handling
 | Test | Verifies |
 |------|----------|
-| `sibling_fork_via_finalized` | Finalizing one sibling forks other |
+| `sibling_fork_via_finalized` | A forked sibling does not block a later slot on the winner |
 
 ### Edge Cases
 | Test | Verifies |
 |------|----------|
 | `parsed_messages_before_lifecycle_are_buffered` | Early messages preserved |
-| `double_confirmation_is_idempotent` | Confirming twice is safe |
+| `duplicate_confirm_does_not_change_frozen_count` | Confirming twice is safe |
+| `malformed_block_meta_or_entry_is_skipped` | A bad hash, or a parent at or above the slot, is skipped |
+| `missing_bank_id_stops_coordinator` | Bank ID 0 in two slots stops the coordinator with `MissingBankId` |
+| `bank_in_two_slots_stops_coordinator` | One bank ID in two slots stops the coordinator with an error |
 
 ### Late Post-Flush Messages
 | Test | Verifies |
@@ -48,12 +53,12 @@
 
 ## Fixture File
 
-`fixtures/sample.bin` — Captured 05-feb-2026 from live Richat geyser stream.
+`fixtures/sample.bin`: captured 09-oct-2026 from a live mainnet Yellowstone gRPC stream (proto 14, with bank IDs).
 
 **Contents:**
-- 50 slots (398202773 - 398202820)
-- 40,186 total messages
-- 39,840 entries
+- 50 slots (454787399 - 454787448)
+- 60,420 total messages
+- 60,073 entries
 - 295 slot lifecycle events
 - 50 BlockMeta events
 

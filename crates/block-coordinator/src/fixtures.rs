@@ -129,6 +129,7 @@ mod tests {
                     parent: Some(slot.saturating_sub(1)),
                     status: 0,
                     dead_error: None,
+                    bank_id: None,
                 },
             )),
         }

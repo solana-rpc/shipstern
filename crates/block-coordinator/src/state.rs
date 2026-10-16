@@ -18,7 +18,7 @@ pub enum CoordinatorEvent<R> {
     SlotConfirmed { slot: Slot },
     /// Slot finalized by cluster consensus.
     SlotFinalized { slot: Slot },
-    /// Slot discarded (dead, forked, or untracked).
+    /// Slot discarded (dead, forked, or incomplete).
     SlotDiscarded { slot: Slot, reason: DiscardReason },
     /// A raw Account event was seen on the geyser stream.
     /// Counted internally; frozen as expected_account_count when account gate is frozen.
@@ -45,6 +45,9 @@ pub enum CoordinatorEvent<R> {
 pub struct CoordinatorState<R> {
     buffer: BTreeMap<Slot, SlotRecordBuffer<R>>,
     discarded_slots: BTreeSet<Slot>,
+    /// Slots the block machine reported forked. In block machine 0.11 this is only a hint,
+    /// because the mark also reaches the children of a repaired slot, so a confirm clears it.
+    forked_slots: BTreeSet<Slot>,
     last_instruction_flushed_slot: Option<Slot>,
     last_account_flushed_slot: Option<Slot>,
     /// Running count of AccountEventSeen signals per slot.
@@ -67,6 +70,7 @@ impl<R> CoordinatorState<R> {
         Self {
             buffer: BTreeMap::new(),
             discarded_slots: BTreeSet::new(),
+            forked_slots: BTreeSet::new(),
             last_instruction_flushed_slot: None,
             last_account_flushed_slot: None,
             account_event_counts: HashMap::new(),
@@ -111,6 +115,11 @@ impl<R> CoordinatorState<R> {
                 if self.is_already_flushed(slot, "BlockFrozen") {
                     return Ok(());
                 }
+                // Records are kept per slot, so a repair bank of a discarded slot cannot flush.
+                if self.discarded_slots.contains(&slot) {
+                    self.log_discarded_slot_drop(slot, "BlockFrozen");
+                    return Ok(());
+                }
                 let buf = self.buffer.entry(slot).or_default();
                 buf.set_block_metadata(metadata);
             },
@@ -118,6 +127,12 @@ impl<R> CoordinatorState<R> {
                 if self.is_already_flushed(slot, "SlotConfirmed") {
                     return Ok(());
                 }
+                // Block machine 0.11 still reports the commitment of a bank that froze incomplete.
+                if self.discarded_slots.contains(&slot) {
+                    self.log_discarded_slot_drop(slot, "SlotConfirmed");
+                    return Ok(());
+                }
+                self.forked_slots.remove(&slot);
                 let buf = self.buffer.entry(slot).or_default();
                 buf.mark_instruction_commitment_reached();
                 if self.account_commit_at == AccountCommitAt::Confirmed {
@@ -132,11 +147,22 @@ impl<R> CoordinatorState<R> {
                 if self.is_already_flushed(slot, "SlotFinalized") {
                     return Ok(());
                 }
+                // Block machine 0.11 still reports the commitment of a bank that froze incomplete.
+                if self.discarded_slots.contains(&slot) {
+                    self.log_discarded_slot_drop(slot, "SlotFinalized");
+                    return Ok(());
+                }
                 let buf = self.buffer.entry(slot).or_default();
                 buf.mark_as_finalized();
                 if self.account_commit_at == AccountCommitAt::Finalized {
                     self.freeze_account_gate(slot);
                 }
+            },
+            CoordinatorEvent::SlotDiscarded {
+                slot,
+                reason: DiscardReason::Forked,
+            } => {
+                self.forked_slots.insert(slot);
             },
             CoordinatorEvent::SlotDiscarded { slot, reason } => {
                 self.discard_slot(slot, reason);
@@ -225,7 +251,7 @@ impl<R> CoordinatorState<R> {
             let buf = self.buffer.get(&slot).unwrap();
             if buf.instructions_drained() || !buf.instruction_gate_reached() {
                 // Stop at the first non-ready slot to maintain ordering.
-                if !buf.instructions_drained() {
+                if !buf.instructions_drained() && !self.forked_slots.contains(&slot) {
                     break;
                 }
                 continue;
@@ -239,7 +265,8 @@ impl<R> CoordinatorState<R> {
             let parent_ok = self
                 .last_instruction_flushed_slot
                 .is_some_and(|last| parent_slot <= last)
-                || self.discarded_slots.contains(&parent_slot);
+                || self.discarded_slots.contains(&parent_slot)
+                || self.forked_slots.contains(&parent_slot);
 
             if !is_first && !parent_ok {
                 break;
@@ -266,7 +293,7 @@ impl<R> CoordinatorState<R> {
         for slot in slots_to_check {
             let buf = self.buffer.get(&slot).unwrap();
             if buf.accounts_drained() || !buf.account_gate_reached() {
-                if !buf.accounts_drained() {
+                if !buf.accounts_drained() && !self.forked_slots.contains(&slot) {
                     break;
                 }
                 continue;
@@ -293,6 +320,14 @@ impl<R> CoordinatorState<R> {
             .collect();
         for slot in drained {
             self.buffer.remove(&slot);
+        }
+        // A slot at or below both flush points can never flush.
+        if let (Some(ix), Some(acct)) = (
+            self.last_instruction_flushed_slot,
+            self.last_account_flushed_slot,
+        ) {
+            let last = ix.min(acct);
+            self.buffer.retain(|&slot, _| slot > last);
         }
         self.prune_discarded_slots();
         // Prune by the account frontier, not the instruction one: in finalized mode
@@ -437,6 +472,7 @@ impl<R> CoordinatorState<R> {
         if let Some(last) = self.last_flushed_slot() {
             let min_retained = last.saturating_sub(Self::DISCARDED_SLOT_RETENTION_BEHIND_FLUSH);
             self.discarded_slots.retain(|&s| s > min_retained);
+            self.forked_slots.retain(|&s| s > min_retained);
         }
         if self.discarded_slots.len() > Self::MAX_DISCARDED_SLOTS {
             tracing::warn!(
@@ -694,7 +730,7 @@ mod tests {
         state
             .apply(CoordinatorEvent::SlotDiscarded {
                 slot: 96,
-                reason: DiscardReason::Forked,
+                reason: DiscardReason::Dead,
             })
             .unwrap();
 
@@ -712,7 +748,7 @@ mod tests {
         state
             .apply(CoordinatorEvent::SlotDiscarded {
                 slot: 96,
-                reason: DiscardReason::Forked,
+                reason: DiscardReason::Dead,
             })
             .unwrap();
 
