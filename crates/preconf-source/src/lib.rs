@@ -7,14 +7,16 @@
 use std::{collections::BTreeSet, time::Duration};
 
 use async_trait::async_trait;
-use futures_util::{future, stream, Stream, StreamExt};
+use futures_util::{future, future::Either, stream, Stream, StreamExt};
 use shipstern::{
     sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     Error as ShipsternError,
 };
 use tokio::sync::mpsc::Sender;
-use tonic::Status;
-use triton_preconfs_proto::preconfs::{harmonic_client::HarmonicClient, HarmonicUpdate};
+use tonic::{transport::Channel, Status};
+use triton_preconfs_proto::preconfs::{
+    bam_client::BamClient, harmonic_client::HarmonicClient, SubscribeRequest,
+};
 use yellowstone_grpc_proto::geyser::SubscribeUpdate;
 
 mod config;
@@ -25,13 +27,16 @@ mod framer;
 #[cfg(test)]
 mod test_fixtures;
 
-pub use config::{HarmonicRegion, PreconfConfig};
+pub use config::{BamRegion, HarmonicRegion, PreconfConfig};
 pub use connect::ConnectError;
 pub use filter::FilterError;
 
-use crate::framer::{Counts, Framer};
+use crate::{
+    connect::TokenInterceptor,
+    framer::{Counts, Feed, FeedUpdate, Framer},
+};
 
-/// The Harmonic feed as a source. Each preconfirmed transaction arrives as a
+/// The Harmonic and BAM feeds as one source. Each preconfirmed transaction arrives as a
 /// `SubscribeUpdateTransaction` with `bank_id` 0, a per-slot arrival `index`, and a meta
 /// that carries only the outcome. The source sends no slot updates.
 #[derive(Debug)]
@@ -45,9 +50,9 @@ impl FromConfig for PreconfSource {
     fn from_config(config: Self::Config) -> Self { Self { config } }
 }
 
-/// One item of a merged region stream: the region's position in the configured list, and
-/// `None` once that region's stream ended.
-type RegionItem = (usize, Option<Result<HarmonicUpdate, Status>>);
+/// One item of the merged streams: the stream's position in the feed list, and `None` once
+/// that stream ended.
+type StreamItem = (usize, Option<Result<FeedUpdate, Status>>);
 
 #[async_trait]
 impl SourceTrait for PreconfSource {
@@ -56,15 +61,12 @@ impl SourceTrait for PreconfSource {
         let config = &self.config;
 
         // A region named twice would open two streams on it and double delivery and billing.
-        let regions: Vec<HarmonicRegion> = config
-            .harmonic_regions
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
+        let feeds: Vec<Feed> = dedup(&config.harmonic_regions)
+            .map(Feed::Harmonic)
+            .chain(dedup(&config.bam_regions).map(Feed::Bam))
             .collect();
-        if regions.is_empty() {
-            tracing::error!("Preconf source needs at least one harmonic region");
+        if feeds.is_empty() {
+            tracing::error!("Preconf source needs at least one harmonic or bam region");
             return Err(ShipsternError::ConfigError);
         }
 
@@ -78,31 +80,29 @@ impl SourceTrait for PreconfSource {
         }
         let vote_rules = filter::vote_rules(&filters);
 
-        let interceptor = connect::TokenInterceptor::new(config.x_token.as_deref())
+        let interceptor = TokenInterceptor::new(config.x_token.as_deref())
             .inspect_err(|err| tracing::error!(err = %err, "Preconf source token is not usable"))?;
         let channel = connect::channel(&config.endpoint, Duration::from_secs(config.timeout))
             .await
             .inspect_err(|err| tracing::error!(err = %err, "Preconf source connection failed"))?;
 
-        let mut framers = Vec::with_capacity(regions.len());
-        let mut streams = Vec::with_capacity(regions.len());
-        for (index, &region) in regions.iter().enumerate() {
-            let request = filter::request(&transactions, region.into());
-            let mut client = HarmonicClient::with_interceptor(channel.clone(), interceptor.clone());
-            let stream = match client.subscribe(request).await {
-                Ok(response) => response.into_inner(),
-                Err(status) => {
+        let mut framers = Vec::with_capacity(feeds.len());
+        let mut streams = Vec::with_capacity(feeds.len());
+        for (index, &feed) in feeds.iter().enumerate() {
+            let request = filter::request(&transactions, feed.region());
+            let stream = subscribe(&channel, &interceptor, feed, request)
+                .await
+                .map_err(|status| {
                     tracing::error!(
-                        ?region,
+                        ?feed,
                         code = ?status.code(),
                         message = status.message(),
                         "Preconf source subscription failed"
                     );
-                    return Err(ShipsternError::YellowstoneStatus(status));
-                },
-            };
-            framers.push(Framer::new(vote_rules.clone()));
-            // The end marker tells the loop which region closed; `select_all` alone hides it.
+                    ShipsternError::YellowstoneStatus(status)
+                })?;
+            framers.push(Framer::new(feed, vote_rules.clone()));
+            // The end marker tells the loop which stream closed; `select_all` alone hides it.
             streams.push(
                 stream
                     .map(move |item| (index, Some(item)))
@@ -110,7 +110,7 @@ impl SourceTrait for PreconfSource {
             );
         }
 
-        let exit_status = run(stream::select_all(streams), &mut framers, &regions, &tx).await;
+        let exit_status = run(stream::select_all(streams), &mut framers, &feeds, &tx).await;
 
         let counts = framers
             .iter()
@@ -120,6 +120,7 @@ impl SourceTrait for PreconfSource {
             vote_rule_dropped = counts.vote_rule_dropped,
             undecodable = counts.undecodable,
             out_of_frame = counts.out_of_frame,
+            unknown_payload = counts.unknown_payload,
             clipped = counts.clipped,
             restarts = counts.restarts,
             "Preconf source stopped"
@@ -129,11 +130,42 @@ impl SourceTrait for PreconfSource {
     }
 }
 
-/// Pump the merged region streams into the runtime until one region ends or fails.
+fn dedup<T: Ord + Copy>(regions: &[T]) -> impl Iterator<Item = T> {
+    regions.iter().copied().collect::<BTreeSet<_>>().into_iter()
+}
+
+/// One stream per feed and region. Both feeds share the channel and the token.
+async fn subscribe(
+    channel: &Channel,
+    interceptor: &TokenInterceptor,
+    feed: Feed,
+    request: SubscribeRequest,
+) -> Result<impl Stream<Item = Result<FeedUpdate, Status>>, Status> {
+    // The two clients yield different stream types, so `Either` joins them without a box.
+    let stream = match feed {
+        Feed::Harmonic(_) => Either::Left(
+            HarmonicClient::with_interceptor(channel.clone(), interceptor.clone())
+                .subscribe(request)
+                .await?
+                .into_inner()
+                .map(|item| item.map(FeedUpdate::Harmonic)),
+        ),
+        Feed::Bam(_) => Either::Right(
+            BamClient::with_interceptor(channel.clone(), interceptor.clone())
+                .subscribe(request)
+                .await?
+                .into_inner()
+                .map(|item| item.map(FeedUpdate::Bam)),
+        ),
+    };
+    Ok(stream)
+}
+
+/// Pump the merged streams into the runtime until one stream ends or fails.
 async fn run(
-    mut merged: impl Stream<Item = RegionItem> + Unpin,
+    mut merged: impl Stream<Item = StreamItem> + Unpin,
     framers: &mut [Framer],
-    regions: &[HarmonicRegion],
+    feeds: &[Feed],
     tx: &Sender<Result<SubscribeUpdate, Status>>,
 ) -> SourceExitStatus {
     loop {
@@ -141,13 +173,13 @@ async fn run(
             tracing::info!("Source returned None, exiting");
             break SourceExitStatus::StreamEnded;
         };
-        let Some(item) = item else {
-            // One region gone would leave a partial feed with no signal, so stop instead.
-            tracing::info!(region = ?regions.get(index), "A region stream ended, exiting");
-            break SourceExitStatus::StreamEnded;
+        let (Some(framer), Some(&feed)) = (framers.get_mut(index), feeds.get(index)) else {
+            break SourceExitStatus::Error(format!("no framer for stream {index}"));
         };
-        let Some(framer) = framers.get_mut(index) else {
-            break SourceExitStatus::Error(format!("no framer for region stream {index}"));
+        let Some(item) = item else {
+            // One stream gone would leave a partial feed with no signal, so stop instead.
+            tracing::info!(?feed, "A stream ended, exiting");
+            break SourceExitStatus::StreamEnded;
         };
 
         match item {
@@ -161,6 +193,7 @@ async fn run(
                 }
             },
             Err(status) => {
+                tracing::error!(?feed, code = ?status.code(), "A stream failed, exiting");
                 let _ = tx.send(Err(status.clone())).await;
                 break SourceExitStatus::StreamError {
                     code: status.code(),
@@ -179,21 +212,23 @@ mod tests {
     use shipstern::sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait};
     use shipstern_core::{Filters, Prefilter, Pubkey, TransactionPrefilter};
     use tokio::sync::mpsc;
+    use tonic::{Code, Status};
     use triton_preconfs_proto::preconfs::{
-        harmonic_update::Payload, ExecutionResult, HarmonicTransaction, HarmonicUpdate,
+        harmonic_update, ExecutionResult, HarmonicTransaction, HarmonicUpdate,
     };
 
     use super::{
-        run, ConnectError, FilterError, Framer, HarmonicRegion, PreconfConfig, PreconfSource,
-        RegionItem,
+        run, BamRegion, ConnectError, Feed, FeedUpdate, FilterError, Framer, HarmonicRegion,
+        PreconfConfig, PreconfSource, StreamItem,
     };
     use crate::test_fixtures::{fixture, LEGACY};
 
-    fn config(harmonic_regions: Vec<HarmonicRegion>) -> PreconfConfig {
+    fn config(harmonic_regions: Vec<HarmonicRegion>, bam_regions: Vec<BamRegion>) -> PreconfConfig {
         PreconfConfig {
             endpoint: "http://127.0.0.1:9".to_string(),
             x_token: None,
             harmonic_regions,
+            bam_regions,
             timeout: 1,
         }
     }
@@ -206,6 +241,19 @@ mod tests {
             }),
             ..Default::default()
         })]))
+    }
+
+    fn harmonic_transaction(slot: u64) -> FeedUpdate {
+        let (bytes, _) = fixture(LEGACY);
+        FeedUpdate::Harmonic(HarmonicUpdate {
+            filters: vec!["p".to_string()],
+            payload: Some(harmonic_update::Payload::Transaction(HarmonicTransaction {
+                transaction: bytes.into(),
+                slot,
+                result: Some(ExecutionResult::Success as i32),
+                ..Default::default()
+            })),
+        })
     }
 
     async fn connect(
@@ -221,7 +269,20 @@ mod tests {
     /// A refused dial is an error, not a panic.
     #[tokio::test]
     async fn connect_reports_connection_errors_instead_of_panicking() {
-        let source = PreconfSource::from_config(config(vec![HarmonicRegion::Fra]));
+        let source = PreconfSource::from_config(config(vec![HarmonicRegion::Fra], vec![]));
+
+        let result = connect(source, filters()).await;
+
+        let Err(shipstern::Error::Other(err)) = result else {
+            panic!("expected a connect error, got {result:?}");
+        };
+        assert!(err.is::<ConnectError>(), "{err}");
+    }
+
+    /// A BAM-only configuration reaches the dial: the feeds are peers.
+    #[tokio::test]
+    async fn bam_regions_alone_are_enough() {
+        let source = PreconfSource::from_config(config(vec![], vec![BamRegion::Fra]));
 
         let result = connect(source, filters()).await;
 
@@ -234,7 +295,7 @@ mod tests {
     /// A prefilter the feed cannot express is refused before any dial.
     #[tokio::test]
     async fn filters_are_checked_before_the_dial() {
-        let source = PreconfSource::from_config(config(vec![HarmonicRegion::Fra]));
+        let source = PreconfSource::from_config(config(vec![HarmonicRegion::Fra], vec![]));
 
         let result = connect(source, Filters::new(HashMap::new())).await;
 
@@ -244,34 +305,30 @@ mod tests {
         assert!(err.is::<FilterError>(), "{err}");
     }
 
-    /// No region means no stream, which would end the source at once with no error.
+    /// No region on either feed means no stream, which would end the source at once with no
+    /// error.
     #[tokio::test]
     async fn a_region_is_required() {
-        let source = PreconfSource::from_config(config(vec![]));
+        let source = PreconfSource::from_config(config(vec![], vec![]));
 
         let result = connect(source, filters()).await;
 
         assert!(matches!(result, Err(shipstern::Error::ConfigError)));
     }
 
-    /// One region that ends stops the source, so a partial feed never runs on unseen.
+    /// One stream that ends stops the source, so a partial feed never runs on unseen.
     #[tokio::test]
-    async fn a_region_that_ends_stops_the_source() {
-        let (bytes, _) = fixture(LEGACY);
-        let update = HarmonicUpdate {
-            filters: vec!["p".to_string()],
-            payload: Some(Payload::Transaction(HarmonicTransaction {
-                transaction: bytes.into(),
-                slot: 7,
-                result: Some(ExecutionResult::Success as i32),
-                region: "fra".to_string(),
-                seq: 0,
-            })),
-        };
-        let ended = stream::iter([(0, Some(Ok(update))), (0, None)]);
-        let live = stream::pending::<RegionItem>();
-        let regions = [HarmonicRegion::Fra, HarmonicRegion::Ams];
-        let mut framers = vec![Framer::new(HashMap::new()), Framer::new(HashMap::new())];
+    async fn a_stream_that_ends_stops_the_source() {
+        let ended = stream::iter([(0, Some(Ok(harmonic_transaction(7)))), (0, None)]);
+        let live = stream::pending::<StreamItem>();
+        let feeds = [
+            Feed::Harmonic(HarmonicRegion::Fra),
+            Feed::Harmonic(HarmonicRegion::Ams),
+        ];
+        let mut framers: Vec<_> = feeds
+            .iter()
+            .map(|&feed| Framer::new(feed, HashMap::new()))
+            .collect();
         let (tx, mut rx) = mpsc::channel(4);
 
         let exit = tokio::time::timeout(
@@ -279,14 +336,47 @@ mod tests {
             run(
                 stream::select_all([ended.boxed(), live.boxed()]),
                 &mut framers,
-                &regions,
+                &feeds,
                 &tx,
             ),
         )
         .await
-        .expect("the source must stop when a region ends");
+        .expect("the source must stop when a stream ends");
 
         assert!(matches!(exit, SourceExitStatus::StreamEnded), "{exit:?}");
         assert!(rx.try_recv().is_ok_and(|item| item.is_ok()));
+    }
+
+    /// A failed stream of either feed stops the source and forwards the status, so a BAM outage
+    /// is never swallowed.
+    #[tokio::test]
+    async fn a_stream_that_fails_stops_the_source() {
+        let merged = stream::iter([
+            (0, Some(Ok(harmonic_transaction(7)))),
+            (1, Some(Err(Status::unavailable("maintenance")))),
+            (0, Some(Ok(harmonic_transaction(8)))),
+        ]);
+        let feeds = [
+            Feed::Harmonic(HarmonicRegion::Fra),
+            Feed::Bam(BamRegion::Fra),
+        ];
+        let mut framers: Vec<_> = feeds
+            .iter()
+            .map(|&feed| Framer::new(feed, HashMap::new()))
+            .collect();
+        let (tx, mut rx) = mpsc::channel(4);
+
+        let exit = run(merged, &mut framers, &feeds, &tx).await;
+
+        assert!(
+            matches!(exit, SourceExitStatus::StreamError {
+                code: Code::Unavailable,
+                ..
+            }),
+            "{exit:?}"
+        );
+        assert!(rx.try_recv().is_ok_and(|item| item.is_ok()));
+        assert!(rx.try_recv().is_ok_and(|item| item.is_err()));
+        assert!(rx.try_recv().is_err());
     }
 }

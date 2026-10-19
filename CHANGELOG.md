@@ -9,7 +9,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- `shipstern-preconf-source`: a source for Triton Harmonic preconfirmations. Each preconfirmed transaction arrives as a `SubscribeUpdateTransaction` with `bank_id` 0, a per-slot `index` and a meta that carries only the outcome (by @senzenn).
+- `shipstern-preconf-source`: a source for Triton Harmonic and BAM preconfirmations. Each preconfirmed transaction arrives as a `SubscribeUpdateTransaction` with `bank_id` 0, a per-slot `index` and a meta that carries only the outcome (by @senzenn).
 - `shipstern-core`, `shipstern`: `PrefilterBuilder::block_footers` and `RuntimeBuilder::block_footer` subscribe to Alpenglow block footers, with `shipstern_block_footers_*` metrics. `CoordinatorSource` and the jetstreamer source deliver no footers ([#354](https://github.com/solana-rpc/shipstern/pull/354) by @senzenn).
 
 ### Changed
