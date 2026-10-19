@@ -7130,6 +7130,7 @@ dependencies = [
  "solana-transaction",
  "thiserror 1.0.69",
  "tokio",
+ "toml 0.8.23",
  "tonic 0.14.6",
  "tracing",
  "triton-preconfs-proto",

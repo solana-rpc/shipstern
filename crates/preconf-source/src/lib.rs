@@ -8,7 +8,7 @@
 use std::{collections::BTreeSet, time::Duration};
 
 use async_trait::async_trait;
-use futures_util::{future, future::Either, stream, Stream, StreamExt};
+use futures_util::{future::Either, stream, Stream, StreamExt};
 use shipstern::{
     sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     Error as ShipsternError,
@@ -25,6 +25,7 @@ mod connect;
 mod convert;
 mod filter;
 mod framer;
+mod reconnect;
 #[cfg(test)]
 mod test_fixtures;
 
@@ -35,6 +36,7 @@ pub use filter::FilterError;
 use crate::{
     connect::TokenInterceptor,
     framer::{Feed, FeedUpdate, Framer},
+    reconnect::{Item, Policy},
 };
 
 /// The Harmonic and BAM feeds as one source. Each preconfirmed transaction arrives as a
@@ -57,9 +59,8 @@ impl FromConfig for PreconfSource {
     fn from_config(config: Self::Config) -> Self { Self { config } }
 }
 
-/// One item of the merged streams: the stream's position in the feed list, and `None` once
-/// that stream ended.
-type StreamItem = (usize, Option<Result<FeedUpdate, Status>>);
+/// One item of the merged streams, tagged with the stream's position in the feed list.
+type StreamItem = (usize, Item);
 
 #[async_trait]
 impl SourceTrait for PreconfSource {
@@ -90,15 +91,22 @@ impl SourceTrait for PreconfSource {
         let timeout = Duration::from_secs(config.timeout);
         let channel = connect::channel(&config.endpoint, config.x_token.is_some(), timeout).await?;
 
+        let policy = Policy {
+            enabled: config.auto_reconnect,
+            max_retries: config.reconnect_max_retries,
+            subscribe_timeout: timeout,
+        };
         let mut framers = Vec::with_capacity(feeds.len());
         let mut streams = Vec::with_capacity(feeds.len());
         for (index, &feed) in feeds.iter().enumerate() {
-            let request = filter::request(&transactions, feed.region());
-            // A point of presence can take the request and never answer, so bound the call.
-            let subscribed = subscribe(&channel, &interceptor, feed, request);
-            let stream = tokio::time::timeout(timeout, subscribed)
+            // One closure for the first subscribe and each resubscribe, so the two cannot drift.
+            let open_stream = {
+                let (channel, interceptor) = (channel.clone(), interceptor.clone());
+                let request = filter::request(&transactions, feed.region());
+                move || subscribe(channel.clone(), interceptor.clone(), feed, request.clone())
+            };
+            let first = reconnect::bounded(timeout, open_stream())
                 .await
-                .unwrap_or_else(|_| Err(Status::deadline_exceeded("subscribe did not answer")))
                 .map_err(|status| {
                     tracing::error!(
                         ?feed,
@@ -110,11 +118,12 @@ impl SourceTrait for PreconfSource {
                 })?;
             tracing::info!(?feed, "Preconf source subscribed");
             framers.push(Framer::new(feed, vote_rules.clone()));
-            // The end marker tells the loop which stream closed; `select_all` alone hides it.
+            // The unfold's step future is not `Unpin`, so one box per stream lets `select_all`
+            // merge them.
             streams.push(
-                stream
-                    .map(move |item| (index, Some(item)))
-                    .chain(stream::once(future::ready((index, None)))),
+                reconnect::resubscribing(feed, first, open_stream, policy)
+                    .map(move |item| (index, item))
+                    .boxed(),
             );
         }
 
@@ -133,6 +142,7 @@ impl SourceTrait for PreconfSource {
                 clipped = counts.clipped,
                 restarts = counts.restarts,
                 unknown_payload = counts.unknown_payload,
+                reconnects = counts.reconnects,
                 "Preconf stream stopped"
             );
         }
@@ -147,22 +157,22 @@ fn dedup<T: Ord + Copy>(regions: &[T]) -> impl Iterator<Item = T> {
 
 /// Subscribe to one feed in one region. Both feeds share the channel and the token.
 async fn subscribe(
-    channel: &Channel,
-    interceptor: &TokenInterceptor,
+    channel: Channel,
+    interceptor: TokenInterceptor,
     feed: Feed,
     request: SubscribeRequest,
 ) -> Result<impl Stream<Item = Result<FeedUpdate, Status>>, Status> {
     // The two clients yield different stream types, so `Either` joins them without a box.
     let stream = match feed {
         Feed::Harmonic(_) => Either::Left(
-            HarmonicClient::with_interceptor(channel.clone(), interceptor.clone())
+            HarmonicClient::with_interceptor(channel, interceptor)
                 .subscribe(request)
                 .await?
                 .into_inner()
                 .map(|item| item.map(FeedUpdate::Harmonic)),
         ),
         Feed::Bam(_) => Either::Right(
-            BamClient::with_interceptor(channel.clone(), interceptor.clone())
+            BamClient::with_interceptor(channel, interceptor)
                 .subscribe(request)
                 .await?
                 .into_inner()
@@ -172,14 +182,26 @@ async fn subscribe(
     Ok(stream)
 }
 
-/// Pump the merged streams into the runtime until one stream ends or fails.
+/// Pump the merged streams into the runtime until one stream ends or fails for good.
 async fn run(
     mut merged: impl Stream<Item = StreamItem> + Unpin,
     framers: &mut [Framer],
     tx: &Sender<Result<SubscribeUpdate, Status>>,
 ) -> SourceExitStatus {
+    // One registration for the whole run instead of one for each item.
+    let closed = tx.closed();
+    tokio::pin!(closed);
     loop {
-        let Some((index, item)) = merged.next().await else {
+        // While every stream sleeps in a backoff no send happens, so watch the receiver too.
+        let next = tokio::select! {
+            biased;
+            () = &mut closed => {
+                tracing::info!("Receiver dropped, stopping source");
+                break SourceExitStatus::ReceiverDropped;
+            },
+            next = merged.next() => next,
+        };
+        let Some((index, item)) = next else {
             tracing::info!("Source returned None, exiting");
             break SourceExitStatus::StreamEnded;
         };
@@ -187,24 +209,27 @@ async fn run(
             break SourceExitStatus::Error(format!("no framer for stream {index}"));
         };
         let feed = framer.feed();
-        let Some(item) = item else {
-            // One stream gone would leave a partial feed with no signal, so stop instead.
-            tracing::info!(?feed, "A stream ended, exiting");
-            break SourceExitStatus::StreamEnded;
-        };
-
         match item {
-            Ok(update) => {
+            Item::Ended => {
+                // One stream gone would leave a partial feed with no signal, so stop instead.
+                tracing::info!(?feed, "A stream ended, exiting");
+                break SourceExitStatus::StreamEnded;
+            },
+            Item::Reconnected => {
+                tracing::info!(?feed, "A stream subscribed again");
+                framer.reconnected();
+            },
+            Item::Update(Ok(update)) => {
                 let Some(update) = framer.apply(update) else {
                     continue;
                 };
                 if tx.send(Ok(update)).await.is_err() {
-                    tracing::info!("Receiver dropped, stopping source");
+                    tracing::info!("Receiver dropped, stopping source; the update in hand is lost");
                     break SourceExitStatus::ReceiverDropped;
                 }
                 framer.counts.delivered += 1;
             },
-            Err(status) => {
+            Item::Update(Err(status)) => {
                 tracing::error!(?feed, code = ?status.code(), "A stream failed, exiting");
                 let code = status.code();
                 let message = status.message().to_string();
@@ -219,18 +244,19 @@ async fn run(
 mod tests {
     use std::{collections::HashMap, time::Duration};
 
-    use futures_util::{stream, StreamExt};
+    use futures_util::{stream, FutureExt, StreamExt};
     use shipstern::sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait};
     use shipstern_core::{Filters, Prefilter, Pubkey, TokenAccounts, TransactionPrefilter};
     use tokio::sync::mpsc;
     use tonic::{Code, Status};
     use triton_preconfs_proto::preconfs::ExecutionResult;
+    use yellowstone_grpc_proto::geyser::{subscribe_update::UpdateOneof, SubscribeUpdate};
 
     use super::{
-        run, BamRegion, ConnectError, Feed, FeedUpdate, FilterError, Framer, HarmonicRegion,
+        run, BamRegion, ConnectError, Feed, FeedUpdate, FilterError, Framer, HarmonicRegion, Item,
         PreconfConfig, PreconfSource, StreamItem,
     };
-    use crate::test_fixtures::{fixture, transaction, LEGACY};
+    use crate::test_fixtures::{fixture, start, transaction, LEGACY};
 
     fn config(harmonic_regions: Vec<HarmonicRegion>, bam_regions: Vec<BamRegion>) -> PreconfConfig {
         PreconfConfig {
@@ -239,6 +265,8 @@ mod tests {
             harmonic_regions,
             bam_regions,
             timeout: 1,
+            auto_reconnect: true,
+            reconnect_max_retries: None,
         }
     }
 
@@ -515,10 +543,14 @@ mod tests {
         ]);
     }
 
-    /// One stream that ends stops the source, so a run never continues on a partial feed.
+    /// A stream that ends for good stops the source, so the run does not continue on a partial
+    /// feed.
     #[tokio::test]
     async fn a_stream_that_ends_stops_the_source() {
-        let ended = stream::iter([(0, Some(Ok(harmonic_transaction(7)))), (0, None)]);
+        let ended = stream::iter([
+            (0, Item::Update(Ok(harmonic_transaction(7)))),
+            (0, Item::Ended),
+        ]);
         let live = stream::pending::<StreamItem>();
         let mut framers = [
             Feed::Harmonic(HarmonicRegion::Fra),
@@ -536,7 +568,7 @@ mod tests {
             ),
         )
         .await
-        .expect("the source must stop when a stream ends");
+        .expect("the source must stop when a stream ends for good");
 
         assert!(matches!(exit, SourceExitStatus::StreamEnded), "{exit:?}");
         assert!(rx.try_recv().is_ok_and(|item| item.is_ok()));
@@ -547,15 +579,22 @@ mod tests {
     #[tokio::test]
     async fn a_send_to_a_dropped_receiver_is_not_delivered() {
         let mut framers = [framer(Feed::Harmonic(HarmonicRegion::Fra))];
-        let (tx, rx) = mpsc::channel(4);
-        drop(rx);
+        let (tx, rx) = mpsc::channel(1);
+        // Fill the one slot, so the run waits in `send` with the update in hand.
+        tx.try_send(Ok(SubscribeUpdate::default()))
+            .expect("an empty channel");
 
-        let exit = run(
-            stream::iter([(0, Some(Ok(harmonic_transaction(7))))]),
-            &mut framers,
-            &tx,
-        )
-        .await;
+        let exit = {
+            let merged = stream::iter([(0, Item::Update(Ok(harmonic_transaction(7))))]);
+            let running = run(merged, &mut framers, &tx);
+            tokio::pin!(running);
+            assert!(
+                running.as_mut().now_or_never().is_none(),
+                "the run must wait in send"
+            );
+            drop(rx);
+            running.await
+        };
 
         assert!(
             matches!(exit, SourceExitStatus::ReceiverDropped),
@@ -564,14 +603,101 @@ mod tests {
         assert_eq!(framers[0].counts.delivered, 0);
     }
 
-    /// A failed stream of either feed stops the source and forwards the status, so a BAM outage
-    /// is never hidden.
+    /// The indexes of the delivered transactions; a forwarded status is not one.
+    fn indexes(rx: &mut mpsc::Receiver<Result<SubscribeUpdate, Status>>) -> Vec<u64> {
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|item| item.ok().map(|update| update.update_oneof))
+            .map(|update| match update {
+                Some(UpdateOneof::Transaction(tx)) => tx.transaction.unwrap().index,
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    }
+
+    /// A resubscribed Harmonic stream joins at the next slot start, so the old open slot is
+    /// closed and the new slot counts from zero. A late transaction of the old slot keeps its
+    /// count and is counted out of frame.
+    #[tokio::test]
+    async fn a_resubscribe_closes_the_open_slots() {
+        let merged = stream::iter([
+            (0, Item::Update(Ok(start(10)))),
+            (0, Item::Update(Ok(harmonic_transaction(10)))),
+            (0, Item::Reconnected),
+            (0, Item::Update(Ok(harmonic_transaction(10)))),
+            (0, Item::Update(Ok(start(11)))),
+            (0, Item::Update(Ok(harmonic_transaction(11)))),
+            (0, Item::Ended),
+        ]);
+        let mut framers = [framer(Feed::Harmonic(HarmonicRegion::Fra))];
+        let (tx, mut rx) = mpsc::channel(4);
+
+        let exit = run(merged, &mut framers, &tx).await;
+
+        assert!(matches!(exit, SourceExitStatus::StreamEnded), "{exit:?}");
+        assert_eq!(indexes(&mut rx), [0, 1, 0]);
+        assert_eq!(framers[0].counts.delivered, 3);
+        assert_eq!(framers[0].counts.reconnects, 1);
+        assert_eq!(framers[0].counts.out_of_frame, 1);
+    }
+
+    /// One stream that subscribes again does not stop the run: the other stream keeps
+    /// delivering until a stream fails for good.
+    #[tokio::test]
+    async fn a_reconnected_stream_keeps_the_run_going() {
+        let merged = stream::iter([
+            (0, Item::Update(Ok(harmonic_transaction(7)))),
+            (1, Item::Reconnected),
+            (0, Item::Update(Ok(harmonic_transaction(8)))),
+            (1, Item::Update(Err(Status::permission_denied("off")))),
+        ]);
+        let mut framers = [
+            Feed::Harmonic(HarmonicRegion::Fra),
+            Feed::Bam(BamRegion::Fra),
+        ]
+        .map(framer);
+        let (tx, mut rx) = mpsc::channel(4);
+
+        let exit = run(merged, &mut framers, &tx).await;
+
+        assert!(
+            matches!(exit, SourceExitStatus::StreamError {
+                code: Code::PermissionDenied,
+                ..
+            }),
+            "{exit:?}"
+        );
+        assert_eq!(indexes(&mut rx).len(), 2);
+        assert_eq!(framers[1].counts.reconnects, 1);
+    }
+
+    /// A dropped receiver ends the run at once, even while every stream sleeps in a backoff.
+    #[tokio::test]
+    async fn a_dropped_receiver_ends_a_sleeping_run() {
+        let mut framers = [framer(Feed::Harmonic(HarmonicRegion::Fra))];
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+
+        let exit = tokio::time::timeout(
+            Duration::from_secs(5),
+            run(stream::pending::<StreamItem>(), &mut framers, &tx),
+        )
+        .await
+        .expect("the run must notice the dropped receiver");
+
+        assert!(
+            matches!(exit, SourceExitStatus::ReceiverDropped),
+            "{exit:?}"
+        );
+    }
+
+    /// A stream of either feed that fails for good stops the source and forwards the status, so
+    /// a BAM outage is never hidden.
     #[tokio::test]
     async fn a_stream_that_fails_stops_the_source() {
         let merged = stream::iter([
-            (0, Some(Ok(harmonic_transaction(7)))),
-            (1, Some(Err(Status::unavailable("maintenance")))),
-            (0, Some(Ok(harmonic_transaction(8)))),
+            (0, Item::Update(Ok(harmonic_transaction(7)))),
+            (1, Item::Update(Err(Status::unavailable("maintenance")))),
+            (0, Item::Update(Ok(harmonic_transaction(8)))),
         ]);
         let mut framers = [
             Feed::Harmonic(HarmonicRegion::Fra),
