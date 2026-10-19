@@ -1,0 +1,10 @@
+[source]
+endpoint = "https://preconfs.rpcpool.com"
+x-token = "<X-TOKEN>"
+harmonic-regions = ["fra"]
+bam-regions = []
+auto-reconnect = true
+
+[buffer]
+jobs = 4
+sources-channel-size = 100
