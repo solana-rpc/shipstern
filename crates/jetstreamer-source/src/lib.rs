@@ -567,9 +567,7 @@ pub struct JetstreamSourceConfig {
     pub shutdown_signal_tx: Option<broadcast::Sender<()>>,
 }
 
-fn default_stats_interval_slots() -> u64 {
-    10_000
-}
+fn default_stats_interval_slots() -> u64 { 10_000 }
 
 /// Ripget window used in sequential mode when the caller sets none.
 ///
@@ -664,9 +662,7 @@ pub struct JetstreamSource {
 impl FromConfig for JetstreamSource {
     type Config = JetstreamSourceConfig;
 
-    fn from_config(config: Self::Config) -> Self {
-        Self { config }
-    }
+    fn from_config(config: Self::Config) -> Self { Self { config } }
 }
 
 #[async_trait]
@@ -1080,23 +1076,20 @@ slot-end = 2000
         use solana_runtime::bank::KeyedRewardsAndNumPartitions;
 
         let mut prefilters = StdHashMap::new();
-        prefilters.insert(
-            "block-with-entries".to_string(),
-            Prefilter {
-                account: None,
-                transaction: None,
-                block_meta: None,
-                block_footer: None,
-                block: Some(BlockPrefilter {
-                    accounts_include: Default::default(),
-                    include_transactions: false,
-                    include_accounts: false,
-                    include_entries: true,
-                    cuckoo_accounts_include: Default::default(),
-                }),
-                slot: None,
-            },
-        );
+        prefilters.insert("block-with-entries".to_string(), Prefilter {
+            account: None,
+            transaction: None,
+            block_meta: None,
+            block_footer: None,
+            block: Some(BlockPrefilter {
+                accounts_include: Default::default(),
+                include_transactions: false,
+                include_accounts: false,
+                include_entries: true,
+                cuckoo_accounts_include: Default::default(),
+            }),
+            slot: None,
+        });
         let filters = Filters::new(prefilters);
 
         let (updates_tx, mut updates_rx) = mpsc::channel(4);
@@ -1209,23 +1202,20 @@ slot-end = 2000
         use shipstern_core::{BlockPrefilter, Prefilter};
 
         let mut prefilters = StdHashMap::new();
-        prefilters.insert(
-            "wants-entries".to_string(),
-            Prefilter {
-                account: None,
-                transaction: None,
-                block_meta: None,
-                block_footer: None,
-                block: Some(BlockPrefilter {
-                    accounts_include: Default::default(),
-                    include_transactions: false,
-                    include_accounts: false,
-                    include_entries: true,
-                    cuckoo_accounts_include: Default::default(),
-                }),
-                slot: None,
-            },
-        );
+        prefilters.insert("wants-entries".to_string(), Prefilter {
+            account: None,
+            transaction: None,
+            block_meta: None,
+            block_footer: None,
+            block: Some(BlockPrefilter {
+                accounts_include: Default::default(),
+                include_transactions: false,
+                include_accounts: false,
+                include_entries: true,
+                cuckoo_accounts_include: Default::default(),
+            }),
+            slot: None,
+        });
         let filters = Filters::new(prefilters);
 
         let (updates_tx, _updates_rx) = mpsc::channel(4);
@@ -1298,17 +1288,14 @@ slot-end = 2000
     async fn block_meta_prefilter_receives_a_block_meta_update() {
         use shipstern_core::{BlockMetaPrefilter, Prefilter};
 
-        let filters = filters_with(
-            "wants-block-meta",
-            Prefilter {
-                account: None,
-                transaction: None,
-                block_meta: Some(BlockMetaPrefilter {}),
-                block_footer: None,
-                block: None,
-                slot: None,
-            },
-        );
+        let filters = filters_with("wants-block-meta", Prefilter {
+            account: None,
+            transaction: None,
+            block_meta: Some(BlockMetaPrefilter {}),
+            block_footer: None,
+            block: None,
+            slot: None,
+        });
 
         let (updates_tx, mut updates_rx) = mpsc::channel(4);
         let handler = ShipsternStreamHandler::new(updates_tx, None, filters);
@@ -1350,17 +1337,14 @@ slot-end = 2000
     async fn slot_prefilter_receives_a_finalized_slot_update() {
         use shipstern_core::{Prefilter, SlotPrefilter};
 
-        let filters = filters_with(
-            "wants-slots",
-            Prefilter {
-                account: None,
-                transaction: None,
-                block_meta: None,
-                block_footer: None,
-                block: None,
-                slot: Some(SlotPrefilter::default()),
-            },
-        );
+        let filters = filters_with("wants-slots", Prefilter {
+            account: None,
+            transaction: None,
+            block_meta: None,
+            block_footer: None,
+            block: None,
+            slot: Some(SlotPrefilter::default()),
+        });
 
         let (updates_tx, mut updates_rx) = mpsc::channel(4);
         let handler = ShipsternStreamHandler::new(updates_tx, None, filters);
@@ -1399,23 +1383,20 @@ slot-end = 2000
     async fn every_requested_variant_is_emitted_for_one_block() {
         use shipstern_core::{BlockMetaPrefilter, BlockPrefilter, Prefilter, SlotPrefilter};
 
-        let filters = filters_with(
-            "wants-everything",
-            Prefilter {
-                account: None,
-                transaction: None,
-                block_meta: Some(BlockMetaPrefilter {}),
-                block_footer: None,
-                block: Some(BlockPrefilter {
-                    accounts_include: Default::default(),
-                    include_transactions: true,
-                    include_accounts: false,
-                    include_entries: false,
-                    cuckoo_accounts_include: Default::default(),
-                }),
-                slot: Some(SlotPrefilter::default()),
-            },
-        );
+        let filters = filters_with("wants-everything", Prefilter {
+            account: None,
+            transaction: None,
+            block_meta: Some(BlockMetaPrefilter {}),
+            block_footer: None,
+            block: Some(BlockPrefilter {
+                accounts_include: Default::default(),
+                include_transactions: true,
+                include_accounts: false,
+                include_entries: false,
+                cuckoo_accounts_include: Default::default(),
+            }),
+            slot: Some(SlotPrefilter::default()),
+        });
 
         let (updates_tx, mut updates_rx) = mpsc::channel(8);
         let handler = ShipsternStreamHandler::new(updates_tx, None, filters);

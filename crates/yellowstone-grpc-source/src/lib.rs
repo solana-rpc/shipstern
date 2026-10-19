@@ -38,9 +38,7 @@ impl From<ShipsternCompressionEncoding> for CompressionEncoding {
     }
 }
 
-const fn default_auto_reconnect() -> bool {
-    true
-}
+const fn default_auto_reconnect() -> bool { true }
 
 /// Reconnect defaults, deliberately sturdier than the client library's
 /// (3 retries / 10ms base), which gives up in under ~100ms. With these,
@@ -610,9 +608,7 @@ impl FilterUpdateSource for YellowstoneGrpcSource {}
 impl FromConfig for YellowstoneGrpcSource {
     type Config = YellowstoneGrpcConfig;
 
-    fn from_config(config: Self::Config) -> Self {
-        Self { config }
-    }
+    fn from_config(config: Self::Config) -> Self { Self { config } }
 }
 
 #[cfg(test)]
@@ -650,17 +646,14 @@ mod tests {
     /// A set carrying one account owner, so a test can tell the request the
     /// sink received apart from an empty one.
     fn filters_owned_by(marker: u8) -> Filters {
-        Filters::new(HashMap::from([(
-            "p".to_owned(),
-            Prefilter {
-                account: Some(AccountPrefilter {
-                    accounts: HashSet::new(),
-                    owners: HashSet::from([Pubkey::new([marker; 32])]),
-                    ..Default::default()
-                }),
+        Filters::new(HashMap::from([("p".to_owned(), Prefilter {
+            account: Some(AccountPrefilter {
+                accounts: HashSet::new(),
+                owners: HashSet::from([Pubkey::new([marker; 32])]),
                 ..Default::default()
-            },
-        )]))
+            }),
+            ..Default::default()
+        })]))
     }
 
     /// The owners the sink actually received under parser `p`.
@@ -731,10 +724,9 @@ mod tests {
 
         assert_eq!(sent, 1);
         assert_eq!(sink.sent.len(), 1);
-        assert_eq!(
-            received_owners(&sink.sent[0]),
-            [Pubkey::new([1; 32]).to_string()]
-        );
+        assert_eq!(received_owners(&sink.sent[0]), [
+            Pubkey::new([1; 32]).to_string()
+        ]);
     }
 
     /// A set the sink refuses is dropped, and the counter does not count it, so a
