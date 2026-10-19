@@ -22,8 +22,6 @@ pub struct SlotRecordBuffer<R> {
     parsed_tx_count: u64,
     /// Instruction commitment reached (confirmed by cluster consensus).
     instruction_commitment_reached: bool,
-    /// Finalized by cluster consensus.
-    finalized: bool,
     /// Account commitment reached (set at configured commitment level).
     account_commitment_reached: bool,
     /// Expected account count from source (None = not yet frozen, blocks account flush).
@@ -51,7 +49,6 @@ impl<R> Default for SlotRecordBuffer<R> {
             metadata: None,
             parsed_tx_count: 0,
             instruction_commitment_reached: false,
-            finalized: false,
             account_commitment_reached: false,
             expected_account_count: None,
             account_processed_count: 0,
@@ -146,15 +143,17 @@ impl<R> SlotRecordBuffer<R> {
         self.instruction_commitment_reached = true;
     }
 
-    pub fn mark_as_finalized(&mut self) { self.finalized = true; }
+    pub fn mark_account_commitment_reached(&mut self) {
+        self.account_commitment_reached = true;
+    }
 
-    pub fn mark_account_commitment_reached(&mut self) { self.account_commitment_reached = true; }
+    pub fn instruction_commitment_reached(&self) -> bool {
+        self.instruction_commitment_reached
+    }
 
-    pub fn instruction_commitment_reached(&self) -> bool { self.instruction_commitment_reached }
-
-    pub fn account_commitment_reached(&self) -> bool { self.account_commitment_reached }
-
-    pub fn is_finalized(&self) -> bool { self.finalized }
+    pub fn account_commitment_reached(&self) -> bool {
+        self.account_commitment_reached
+    }
 
     /// Set the expected account count for the account-count gate. First-write-wins: if already
     /// set, subsequent calls are ignored (prevents duplicate Slot(Confirmed)
@@ -178,7 +177,9 @@ impl<R> SlotRecordBuffer<R> {
         self.expected_account_count = Some(count);
     }
 
-    pub fn account_processed_count(&self) -> u64 { self.account_processed_count }
+    pub fn account_processed_count(&self) -> u64 {
+        self.account_processed_count
+    }
 
     pub fn tx_parse_complete(&self) -> bool {
         self.metadata
@@ -213,18 +214,26 @@ impl<R> SlotRecordBuffer<R> {
         self.instruction_gate_reached() && self.account_gate_reached()
     }
 
-    pub fn instructions_drained(&self) -> bool { self.instructions_drained }
+    pub fn instructions_drained(&self) -> bool {
+        self.instructions_drained
+    }
 
-    pub fn accounts_drained(&self) -> bool { self.accounts_drained }
+    pub fn accounts_drained(&self) -> bool {
+        self.accounts_drained
+    }
 
     /// True when both instruction and account drains are complete.
-    pub fn is_fully_drained(&self) -> bool { self.instructions_drained && self.accounts_drained }
+    pub fn is_fully_drained(&self) -> bool {
+        self.instructions_drained && self.accounts_drained
+    }
 
     pub fn parent_slot(&self) -> Option<Slot> {
         self.metadata.as_ref().map(|meta| meta.parent_slot)
     }
 
-    pub fn parsed_tx_count(&self) -> u64 { self.parsed_tx_count }
+    pub fn parsed_tx_count(&self) -> u64 {
+        self.parsed_tx_count
+    }
 
     pub fn record_count(&self) -> usize {
         self.instruction_records.len() + self.account_records.len()
@@ -292,11 +301,14 @@ mod tests {
         buf.insert_instruction_record(InstructionRecordSortKey::new(0, vec![0]), "tx0-ix0".into());
 
         let ix_slot = buf.drain_instruction_records(42).expect("instruction slot");
-        assert_eq!(ix_slot.records, vec![
-            "tx0-ix0".to_string(),
-            "tx0-ix0.1".to_string(),
-            "tx1-ix0".to_string(),
-        ]);
+        assert_eq!(
+            ix_slot.records,
+            vec![
+                "tx0-ix0".to_string(),
+                "tx0-ix0.1".to_string(),
+                "tx1-ix0".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -309,11 +321,14 @@ mod tests {
         buf.insert_account_record(AccountRecordSortKey::new(200, [2; 32]), "wv200".into());
 
         let acct_slot = buf.drain_account_records(42);
-        assert_eq!(acct_slot.records, vec![
-            "wv100".to_string(),
-            "wv200".to_string(),
-            "wv300".to_string(),
-        ]);
+        assert_eq!(
+            acct_slot.records,
+            vec![
+                "wv100".to_string(),
+                "wv200".to_string(),
+                "wv300".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -388,12 +403,15 @@ mod tests {
         buf.insert_instruction_record(InstructionRecordSortKey::new(0, vec![0, 0]), "cpi-0".into());
 
         let ix_slot = buf.drain_instruction_records(42).expect("instruction slot");
-        assert_eq!(ix_slot.records, vec![
-            "main".to_string(),
-            "cpi-0".to_string(),
-            "nested-cpi".to_string(),
-            "cpi-1".to_string(),
-        ]);
+        assert_eq!(
+            ix_slot.records,
+            vec![
+                "main".to_string(),
+                "cpi-0".to_string(),
+                "nested-cpi".to_string(),
+                "cpi-1".to_string(),
+            ]
+        );
     }
 
     #[test]

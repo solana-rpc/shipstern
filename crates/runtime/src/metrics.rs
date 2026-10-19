@@ -101,6 +101,38 @@ pub(crate) static SHIPSTERN_BLOCK_METAS_HANDLER_ERRORS: LazyLock<IntCounter> =
         .unwrap()
     });
 
+// BLOCK FOOTERS COUNTERS
+pub(crate) static SHIPSTERN_BLOCK_FOOTERS_RECEIVED: LazyLock<IntCounter> = LazyLock::new(|| {
+    IntCounter::with_opts(Opts::new(
+        "shipstern_block_footers_received",
+        "Total block footers received",
+    ))
+    .unwrap()
+});
+pub(crate) static SHIPSTERN_BLOCK_FOOTERS_SUCCESSFUL: LazyLock<IntCounter> = LazyLock::new(|| {
+    IntCounter::with_opts(Opts::new(
+        "shipstern_block_footers_successful",
+        "Total successfully processed block footers",
+    ))
+    .unwrap()
+});
+pub(crate) static SHIPSTERN_BLOCK_FOOTERS_PARSING_ERRORS: LazyLock<IntCounter> =
+    LazyLock::new(|| {
+        IntCounter::with_opts(Opts::new(
+            "shipstern_block_footers_parsing_errors",
+            "Total block footers parsing errors",
+        ))
+        .unwrap()
+    });
+pub(crate) static SHIPSTERN_BLOCK_FOOTERS_HANDLER_ERRORS: LazyLock<IntCounter> =
+    LazyLock::new(|| {
+        IntCounter::with_opts(Opts::new(
+            "shipstern_block_footers_handler_errors",
+            "Total block footers handler errors",
+        ))
+        .unwrap()
+    });
+
 // BLOCK COUNTERS
 pub(crate) static SHIPSTERN_BLOCK_RECEIVED: LazyLock<IntCounter> = LazyLock::new(|| {
     IntCounter::with_opts(Opts::new(
@@ -191,6 +223,7 @@ pub(crate) enum UpdateType {
     Account,
     Transaction,
     BlockMeta,
+    BlockFooter,
     Block,
     Instruction,
     Unknown,
@@ -203,6 +236,7 @@ impl From<&UpdateOneof> for UpdateType {
             UpdateOneof::Account(_) => UpdateType::Account,
             UpdateOneof::Transaction(_) => UpdateType::Transaction,
             UpdateOneof::BlockMeta(_) => UpdateType::BlockMeta,
+            UpdateOneof::BlockFooter(_) => UpdateType::BlockFooter,
             UpdateOneof::Block(_) => UpdateType::Block,
             UpdateOneof::Slot(_) => UpdateType::Slot,
             _ => UpdateType::Unknown,
@@ -220,6 +254,7 @@ pub(crate) fn increment_processed_updates(
             UpdateType::Transaction => SHIPSTERN_TRANSACTIONS_SUCCESSFUL.inc(),
             UpdateType::Instruction => SHIPSTERN_INSTRUCTIONS_SUCCESSFUL.inc(),
             UpdateType::BlockMeta => SHIPSTERN_BLOCK_METAS_SUCCESSFUL.inc(),
+            UpdateType::BlockFooter => SHIPSTERN_BLOCK_FOOTERS_SUCCESSFUL.inc(),
             UpdateType::Block => SHIPSTERN_BLOCK_SUCCESSFUL.inc(),
             UpdateType::Slot => SHIPSTERN_SLOTS_SUCCESSFUL.inc(),
             UpdateType::Unknown => (),
@@ -229,6 +264,7 @@ pub(crate) fn increment_processed_updates(
             UpdateType::Transaction => SHIPSTERN_TRANSACTIONS_PARSING_ERRORS.inc(),
             UpdateType::Instruction => SHIPSTERN_INSTRUCTIONS_PARSING_ERRORS.inc(),
             UpdateType::BlockMeta => SHIPSTERN_BLOCK_METAS_PARSING_ERRORS.inc(),
+            UpdateType::BlockFooter => SHIPSTERN_BLOCK_FOOTERS_PARSING_ERRORS.inc(),
             UpdateType::Block => SHIPSTERN_BLOCK_PARSING_ERRORS.inc(),
             UpdateType::Slot => SHIPSTERN_SLOTS_PARSING_ERRORS.inc(),
             UpdateType::Unknown => (),
@@ -238,6 +274,7 @@ pub(crate) fn increment_processed_updates(
             UpdateType::Transaction => SHIPSTERN_TRANSACTIONS_HANDLER_ERRORS.inc(),
             UpdateType::Instruction => SHIPSTERN_INSTRUCTIONS_HANDLER_ERRORS.inc(),
             UpdateType::BlockMeta => SHIPSTERN_BLOCK_METAS_HANDLER_ERRORS.inc(),
+            UpdateType::BlockFooter => SHIPSTERN_BLOCK_FOOTERS_HANDLER_ERRORS.inc(),
             UpdateType::Block => SHIPSTERN_BLOCK_HANDLER_ERRORS.inc(),
             UpdateType::Slot => SHIPSTERN_SLOTS_HANDLER_ERRORS.inc(),
             UpdateType::Unknown => (),
@@ -253,6 +290,7 @@ pub(crate) fn increment_received_updates(update_type: UpdateType) {
         UpdateType::Account => SHIPSTERN_ACCOUNTS_RECEIVED.inc(),
         UpdateType::Transaction => SHIPSTERN_TRANSACTIONS_RECEIVED.inc(),
         UpdateType::BlockMeta => SHIPSTERN_BLOCK_METAS_RECEIVED.inc(),
+        UpdateType::BlockFooter => SHIPSTERN_BLOCK_FOOTERS_RECEIVED.inc(),
         UpdateType::Block => SHIPSTERN_BLOCK_RECEIVED.inc(),
         UpdateType::Slot => SHIPSTERN_SLOTS_RECEIVED.inc(),
         _ => (),
@@ -277,6 +315,10 @@ pub fn register_metrics(registry: &Registry) {
     let _ = registry.register(Box::new(SHIPSTERN_BLOCK_METAS_SUCCESSFUL.clone()));
     let _ = registry.register(Box::new(SHIPSTERN_BLOCK_METAS_PARSING_ERRORS.clone()));
     let _ = registry.register(Box::new(SHIPSTERN_BLOCK_METAS_HANDLER_ERRORS.clone()));
+    let _ = registry.register(Box::new(SHIPSTERN_BLOCK_FOOTERS_RECEIVED.clone()));
+    let _ = registry.register(Box::new(SHIPSTERN_BLOCK_FOOTERS_SUCCESSFUL.clone()));
+    let _ = registry.register(Box::new(SHIPSTERN_BLOCK_FOOTERS_PARSING_ERRORS.clone()));
+    let _ = registry.register(Box::new(SHIPSTERN_BLOCK_FOOTERS_HANDLER_ERRORS.clone()));
 
     let _ = registry.register(Box::new(SHIPSTERN_BLOCK_RECEIVED.clone()));
     let _ = registry.register(Box::new(SHIPSTERN_BLOCK_SUCCESSFUL.clone()));

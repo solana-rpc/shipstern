@@ -5,11 +5,7 @@ members = ["crates/*", "examples/*", "tests/*"]
 # proc-macro-test, changing InstructionParser::Output from Instructions
 # to ProgramEventOutput. Run its tests separately with:
 #   cd tests/proc-macro-events && cargo test
-exclude = [
-  "examples/multi-dex-stream",
-  "tests/idls",
-  "tests/proc-macro-events",
-]
+exclude = ["examples/multi-dex-stream", "tests/idls", "tests/proc-macro-events"]
 resolver = "2"
 
 [workspace.package]
@@ -47,6 +43,7 @@ prost = "^0.14.4"
 prost-types = "^0.14.4"
 protobuf-src = "^1.0.0"
 regex = "^1.11.0"
+semver = "^1.0"
 serde = "^1.0.198"
 serde_json = "^1.0.0"
 sha2 = "^0.10"
@@ -109,10 +106,12 @@ jetstreamer-firehose = { git = "https://github.com/anza-xyz/jetstreamer", branch
 jetstreamer-utils = { git = "https://github.com/anza-xyz/jetstreamer", branch = "main" }
 warp = "0.3"
 
-yellowstone-block-machine = { version = "0.4.0" }
-yellowstone-fumarole-client = "0.4.0+solana.3"
-yellowstone-grpc-client = { version = ">=13.1, <13.3" }
-yellowstone-grpc-proto = { version = "12.6", default-features = false }
+yellowstone-block-machine = { version = "0.11.0" }
+yellowstone-fumarole-client = "0.9.0"
+yellowstone-grpc-client = { version = "15.0.0" }
+# Patch updates only: a new proto minor adds fields, which breaks struct literals here (0.8.0
+# broke on 12.7).
+yellowstone-grpc-proto = { version = "~14.0.1", default-features = false }
 rdkafka = { version = "0.36", features = ["cmake-build", "ssl", "zstd"] }
 reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
 

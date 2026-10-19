@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `shipstern-core`, `shipstern`: `PrefilterBuilder::block_footers` and `RuntimeBuilder::block_footer` subscribe to Alpenglow block footers, with `shipstern_block_footers_*` metrics. `CoordinatorSource` and the jetstreamer source deliver no footers ([#354](https://github.com/solana-rpc/shipstern/pull/354) by @senzenn).
+
+### Changed
+
+- **Breaking** for struct-literal construction and exhaustive matches: `Prefilter` gained `block_footer`, `Builder` gained the public field `block_footer`, and `BuilderError` gained `BlockFooterCollision`. Add `..Default::default()` to a `Prefilter` or `Builder` literal and a wildcard arm to a `BuilderError` match ([#354](https://github.com/solana-rpc/shipstern/pull/354) by @senzenn).
+- **Breaking** all crates: moved to `yellowstone-grpc-proto` ~14.0.1, `yellowstone-grpc-client` 15.0.0, `yellowstone-fumarole-client` 0.9.0 and `yellowstone-block-machine` 0.11.0. Bank-scoped updates carry a `bank_id` ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
+- **Breaking** `shipstern-yellowstone-grpc-source`: a processed stream reconnects through the client's bank replay only with no `from_slot` and no `RuntimeHandle`, and a replay can repeat the cut-off block. A confirmed or finalized stream resumes from the last slot it saw with the newest filter set and drops that slot's repeats; `YellowstoneGrpcConfig::reconnect_mode` and `ReconnectMode` say which applies. A processed stream with a `from_slot` or a `RuntimeHandle` ends the run on a stream loss ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
+- **Breaking** `shipstern-yellowstone-grpc-source`: reconnect needs a server that sends bank IDs (Geyser proto 13 or newer) and stores slots. On a Geyser proto 12.7 or older server, set `auto-reconnect = false`, or the run ends with `FailedPrecondition` at the first account update or reconnect ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
+- **Breaking** `shipstern-yellowstone-grpc-source`: with `auto-reconnect` on, the client adds its own `blocks_meta` and `slots` filters. A server that allows one filter of a kind refuses a run that also has a block-meta or slot pipeline ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
+- **Breaking** `shipstern-yellowstone-grpc-source`: the `reconnect-slot-retention` option, its `reconnect_slot_retention` field and its `RECONNECT_SLOT_RETENTION` env var are removed. A config file that sets it is ignored, and the CLI flag is rejected ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
+- **Breaking** `shipstern-block-coordinator`: the coordinator needs a server that sends bank IDs (Geyser proto 13 or newer). `CoordinatorError` gains `MissingBankId`, for a server that sends none, and `BankInTwoSlots`, for one bank ID in two slots. Add a wildcard arm to a `CoordinatorError` match ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
+- **Breaking** `shipstern-block-coordinator`: a block whose entry or transaction count does not match its BlockMeta is discarded as incomplete ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
+- **Breaking** `shipstern-block-coordinator`: `DiscardReason::Untracked` is removed ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
+- **Breaking** `shipstern-block-coordinator`: `CoordinatorSource` does not reconnect, and it ignores `auto-reconnect` and `reconnect-max-retries` ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
+- `shipstern-block-coordinator`: a malformed BlockMeta or Entry is skipped. A parent that never freezes is discarded when a block more than 64 slots past it freezes. A slot reported forked still flushes when it confirms ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
+- **Breaking** `shipstern-yellowstone-fumarole-source`: fumarole-client 0.9 needs a Fumarole service at minor version 39 or newer. An older or unparsable version ends the run with an error at connect ([#353](https://github.com/solana-rpc/shipstern/pull/353) by @senzenn).
+- **Breaking** `shipstern-block-coordinator`: records are kept per bank (`slot`, `bank_id`), and only the bank that reaches confirmed is flushed, because a slot can have more than one bank. `CoordinatorEvent`, `CoordinatorMessage`, `CoordinatorInput` and the `CoordinatorHandle` senders take a `bank_id`, `CoordinatorEvent::SlotDiscarded` carries `bank_ids`, and `CoordinatorEvent::BankDiscarded` is new. `CoordinatorState::pending_slot_count` is now `pending_bank_count`. `CoordinatorSource` stops with an error at the first account update or bank status that has no bank ID. To migrate, pass the update's `bank_id` to the `CoordinatorHandle` senders ([#345](https://github.com/solana-rpc/shipstern/pull/345) closing [#344](https://github.com/solana-rpc/shipstern/issues/344) by @senzenn).
+- `shipstern-block-coordinator`: the repair bank of a dead slot flushes. A slot with records that the chain skips and that never freezes is discarded like a lost parent, and a frozen losing bank does not hide a lost parent. A frozen parent of a confirmed slot that never gets its own confirm is discarded after 64 slots ([#345](https://github.com/solana-rpc/shipstern/pull/345) by @senzenn).
+- `shipstern-kafka-sink`: `BufferingHandler` skips an account update with no `bank_id` ([#345](https://github.com/solana-rpc/shipstern/pull/345) by @senzenn).
+
 ## [0.12.0] - 2026-10-11
 
 ### Added

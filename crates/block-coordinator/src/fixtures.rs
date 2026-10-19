@@ -40,7 +40,9 @@ impl FixtureWriter {
     /// number of BlockMeta messages has been reached.
     /// Flush any buffered data to disk. Call this when the stream ends
     /// before the target slot count is reached to avoid losing trailing messages.
-    pub fn finish(mut self) -> io::Result<()> { self.writer.flush() }
+    pub fn finish(mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
 
     pub fn write(&mut self, update: &SubscribeUpdate) -> io::Result<bool> {
         let bytes = update.encode_to_vec();
@@ -129,6 +131,7 @@ mod tests {
                     parent: Some(slot.saturating_sub(1)),
                     status: 0,
                     dead_error: None,
+                    bank_id: None,
                 },
             )),
         }

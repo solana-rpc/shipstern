@@ -19,6 +19,13 @@ The [`Source`](https://github.com/solana-rpc/shipstern/blob/main/crates/runtime/
 - Configure filters for data processing
 - Manage source-specific configuration
 
+## Block footers
+
+A block footer pipeline gets one footer per block on an Alpenglow cluster. A
+server on Geyser proto 12.7 or older ignores the footer filter, and a cluster
+without Alpenglow sends no footers. A proto 13 server sends certificates at
+field numbers that proto 14 reserves, so they are dropped.
+
 ## Runtime filter updates
 
 The gRPC source keeps the `SubscribeRequest` sink that `yellowstone-grpc-client`
@@ -78,11 +85,10 @@ entry under `InstructionPipeline::ID` whose prefilter is the union of theirs.
 Naming an individual instruction parser is refused as unknown, and widening
 there widens the whole bundle. `handle.filters().parser_ids()` reports the keys
 that exist. Only the newest set matters: two updates in quick
-succession may reach the source as the second alone, and a set rejected while
-the source is between connections is retried once the stream recovers, but the
-sender is not told either way. With auto-reconnect off there is nothing to
-recover into, so such a set is dropped with a warning while `filters()` still
-reports it.
+succession may reach the source as the second alone, and a set the sink rejects
+is dropped with a warning while `filters()` still reports it. A stream with a
+live `RuntimeHandle` does not reconnect, because the client cannot replay a
+changed request.
 
 The server applies the new set promptly once it has it, but two different lags
 sit in front of that. The source awaits the runtime buffer inside the same
@@ -98,14 +104,7 @@ once. A returned `send` means the request was handed off, not that the
 subscription has changed.
 
 A set the server refuses, by exceeding its configured filter limits for
-example, comes back on the stream rather than on the sink. What happens next
-depends on the code. A code the client treats as terminal ends the run. A
-recoverable one does not: the sink records a request into its reconnect state
-as soon as the local channel takes it, before the server has seen it, so the
-client reconnects and resubscribes with the same refused set, and the loop
-repeats. `ResourceExhausted` is recoverable and is exactly what a "too many
-filters" rejection can carry, so a set the provider will not accept can leave
-the runtime reconnecting indefinitely rather than either applying or stopping.
+example, comes back on the stream rather than on the sink, and it ends the run.
 Validate against the provider's limits before sending one, and read
 `filter_updates_sent` in the stream-error log to tell a refused update apart
 from an unrelated server error.
@@ -117,6 +116,50 @@ take and the mistake is a compile error. An update fails with
 also depends on the provider. Both `yellowstone-grpc-geyser` and `richat` apply
 mid-stream requests to a live subscription, but a deployment can sit behind
 infrastructure that does not forward them.
+
+## Reconnect
+
+With `auto-reconnect` on, a lost stream is recovered in one of two ways, picked
+by the commitment. Both share `reconnect-max-retries` and the backoff, and both
+need a server that stores slots: if it no longer holds the slot to resume from,
+the run ends with `OutOfRange`.
+
+**Confirmed or finalized: resume from the last slot.** The source subscribes
+again from the last slot it saw, with the newest filter set, and drops that
+slot's repeats by signature, pubkey and write version, or status. A slot at
+these commitments never changes once delivered, so nothing is missed and
+nothing repeats. A `from_slot` and a `RuntimeHandle` are both fine here. The
+budget starts over once the new stream delivers an update.
+
+**Processed: the client replays banks.** A slot can have several banks at
+processed, so only the client's bank replay can retract the one that was cut
+off. It takes only a processed stream with no `from_slot` and no
+`RuntimeHandle`, because it cannot verify a changed request. The server must
+send bank IDs (Geyser proto 13 or newer):
+
+- An account update with no `bank_id` ends the run with `FailedPrecondition`.
+- During a reconnect, a finalized slot with no `bank_id` ends the run with
+  `FailedPrecondition`.
+
+The client adds its own `blocks_meta` and `slots` filters. A server that allows
+one filter of a kind refuses a run that also has a block-meta or slot pipeline.
+Set `auto-reconnect = false` for such a server, and for a server on Geyser
+proto 12.7 or older.
+
+A replay repeats the bank that was cut off, so handlers can see its updates
+twice. On a Yellowstone server older than 16.1.2, the bank in progress when the
+client subscribes again can also lose its first updates, with no error
+([rpcpool/yellowstone-grpc#915](https://github.com/rpcpool/yellowstone-grpc/pull/915)).
+A processed stream with a `from_slot` or a `RuntimeHandle` does not reconnect,
+so run it under a supervisor that restarts it.
+
+## Banks at processed
+
+At processed, a slot can have more than one bank, and each update carries its
+`bank_id`. Keep only the bank that reaches confirmed. A `bank_id` is local to
+one server, so do not match two streams on it. At the Alpenglow switch the
+cluster drops some vote-only blocks with no event, and the slot numbers then
+skip ahead.
 
 ## Creating a Custom Source
 
