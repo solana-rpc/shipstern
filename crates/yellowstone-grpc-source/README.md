@@ -21,10 +21,16 @@ The [`Source`](https://github.com/solana-rpc/shipstern/blob/main/crates/runtime/
 
 ## Block footers
 
-A block footer pipeline gets one footer per block on an Alpenglow cluster. A
-server on Geyser proto 12.7 or older ignores the footer filter, and a cluster
-without Alpenglow sends no footers. A proto 13 server sends certificates at
-field numbers that proto 14 reserves, so they are dropped.
+A block footer pipeline gets one footer per bank on an Alpenglow cluster, so a
+fork can give two footers in one slot. A server on Geyser proto 12.7 or older
+ignores the footer filter, and a cluster without Alpenglow sends no footers. A
+proto 13 or 14.0.0 server sends certificates at field numbers that proto 14.0.1
+reserves, so they are dropped.
+
+## Alpenglow switch
+
+At the Alpenglow switch the cluster drops some vote-only blocks with no event,
+and the slot numbers then skip ahead.
 
 ## Runtime filter updates
 

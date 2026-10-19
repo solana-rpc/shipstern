@@ -191,7 +191,7 @@ pub struct Prefilter {
     pub transaction: Option<TransactionPrefilter>,
     /// Filters for block meta updates.
     pub block_meta: Option<BlockMetaPrefilter>,
-    /// Filters for block footer updates.
+    /// Filters for block footer updates. (post Alpenglow)
     pub block_footer: Option<BlockFooterPrefilter>,
     /// Filters for block updates.
     pub block: Option<BlockPrefilter>,
@@ -618,12 +618,13 @@ impl BlockMetaPrefilter {
 /// A prefilter for matching block footer updates. (post Alpenglow)
 #[derive(Debug, Default, Clone, PartialEq, Copy)]
 pub struct BlockFooterPrefilter {
-    /// Also receive the vote certificates of the block.
+    /// Also receive the vote certificates of the block. (post Alpenglow)
     pub include_certificates: bool,
 }
 
 impl BlockFooterPrefilter {
-    /// Merge another block footer prefilter into this one.
+    /// Merge another block footer prefilter into this one. Either side asking for
+    /// certificates wins.
     pub fn merge(lhs: &mut Self, rhs: Self) {
         lhs.include_certificates |= rhs.include_certificates;
     }
@@ -1546,8 +1547,8 @@ impl PrefilterBuilder {
         })
     }
 
-    /// Set prefilter will request block footer updates. `include_certificates` also
-    /// asks for the vote certificates of each block.
+    /// Set prefilter will request block footer updates. (post Alpenglow)
+    /// `include_certificates` also asks for the vote certificates of each block.
     pub fn block_footers(self, include_certificates: bool) -> Self {
         self.mutate(|this| {
             set_opt(
@@ -2100,6 +2101,22 @@ mod tests {
         prefilter.merge(
             Prefilter::builder()
                 .block_footers(true)
+                .build()
+                .expect("prefilter must build"),
+        );
+
+        assert_eq!(
+            one(prefilter).block_footer["p"].include_certificates,
+            Some(true)
+        );
+
+        let mut prefilter = Prefilter::builder()
+            .block_footers(true)
+            .build()
+            .expect("prefilter must build");
+        prefilter.merge(
+            Prefilter::builder()
+                .block_footers(false)
                 .build()
                 .expect("prefilter must build"),
         );

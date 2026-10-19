@@ -69,9 +69,9 @@ pub struct Builder<K: BuilderKind> {
     pub instruction: Vec<BoxPipeline<'static, InstructionUpdate>>,
     /// The block meta pipelines.
     pub block_meta: Vec<BoxPipeline<'static, BlockMetaUpdate>>,
-    /// The block footer pipelines.
+    /// The block footer pipelines. (post Alpenglow)
     pub block_footer: Vec<BoxPipeline<'static, BlockFooterUpdate>>,
-    /// The block meta pipelines.
+    /// The block pipelines.
     pub block: Vec<BoxPipeline<'static, BlockUpdate>>,
     /// The slot pipelines.
     pub slot: Vec<BoxPipeline<'static, SlotUpdate>>,
@@ -175,7 +175,7 @@ impl RuntimeBuilder {
         self.mutate(|s| s.block_meta.push(Box::new(block_meta)))
     }
 
-    /// Add a new block footer pipeline to the builder.
+    /// Add a new block footer pipeline to the builder. (post Alpenglow)
     pub fn block_footer<T: DynPipeline<BlockFooterUpdate> + Send + Sync + 'static>(
         self,
         block_footer: T,
