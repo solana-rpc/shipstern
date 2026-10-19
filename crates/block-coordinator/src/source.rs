@@ -28,9 +28,7 @@ use crate::{fixtures::FixtureWriter, types::CoordinatorInput};
 
 const DEFAULT_STREAM_IDLE_WARN_SECS: u64 = 0;
 
-const fn default_stream_idle_warn_secs() -> u64 {
-    DEFAULT_STREAM_IDLE_WARN_SECS
-}
+const fn default_stream_idle_warn_secs() -> u64 { DEFAULT_STREAM_IDLE_WARN_SECS }
 
 /// Post Alpenglow validation for bank IDs in updates.
 /// The coordinator keys records by bank, so the source stops when the server sends no bank
@@ -157,9 +155,7 @@ pub struct CoordinatorSource {
 impl FromConfig for CoordinatorSource {
     type Config = CoordinatorSourceConfig;
 
-    fn from_config(config: Self::Config) -> Self {
-        Self { config }
-    }
+    fn from_config(config: Self::Config) -> Self { Self { config } }
 }
 
 #[async_trait]

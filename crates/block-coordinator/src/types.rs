@@ -14,14 +14,10 @@ pub(crate) struct BankKey {
 }
 
 impl BankKey {
-    pub(crate) const fn new(slot: Slot, bank_id: BankId) -> Self {
-        Self { slot, bank_id }
-    }
+    pub(crate) const fn new(slot: Slot, bank_id: BankId) -> Self { Self { slot, bank_id } }
 
     /// The lowest key of `slot`, for a range start or a `split_off`.
-    pub(crate) const fn first(slot: Slot) -> Self {
-        Self::new(slot, 0)
-    }
+    pub(crate) const fn first(slot: Slot) -> Self { Self::new(slot, 0) }
 
     /// Every bank of `slot`.
     pub(crate) const fn slot_range(slot: Slot) -> RangeInclusive<Self> {
@@ -279,9 +275,7 @@ pub struct CoordinatorHandle<R> {
 }
 
 impl<R: Send> CoordinatorHandle<R> {
-    pub fn new(tx: tokio::sync::mpsc::Sender<CoordinatorMessage<R>>) -> Self {
-        Self { tx }
-    }
+    pub fn new(tx: tokio::sync::mpsc::Sender<CoordinatorMessage<R>>) -> Self { Self { tx } }
 
     pub async fn send_instruction_parsed(
         &self,
