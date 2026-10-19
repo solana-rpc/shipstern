@@ -29,19 +29,22 @@
 | `dead_slot_spares_sibling` | A dead slot does not discard its sibling |
 | `incomplete_block_discarded` | BlockMeta without entries is discarded as incomplete |
 | `late_block_meta_for_losing_bank_keeps_confirmed_bank` | Only the confirmed bank of a slot flushes |
-| `lost_parent_block_meta_does_not_block_child_forever` | A parent that never freezes is discarded after 64 slots |
+| `lost_parent_block_meta_does_not_block_child_forever` | A parent that never freezes is discarded after 300 slots |
+| `lost_parent_after_far_jump_does_not_block_child_forever` | The same holds after the stream jumps more than 4096 slots |
 | `lost_block_meta_of_winning_bank_does_not_block_child_forever` | A frozen losing bank does not hide a lost parent |
 | `late_parent_block_meta_within_grace_flushes` | A parent BlockMeta that arrives inside the grace window still flushes |
-| `record_for_skipped_slot_does_not_block_forever` | A record for a skipped slot that never freezes is discarded after 64 slots |
+| `two_bank_slot_survives_confirm_lag_inside_grace` | A two-bank slot whose BlockMeta comes only with a late confirm still flushes |
+| `record_for_skipped_slot_does_not_block_forever` | A record for a skipped slot that never freezes is discarded after 300 slots |
 | `late_record_for_skipped_slot_does_not_block_forever` | The same holds when the record arrives after the child froze |
-| `record_below_first_parent_edge_does_not_block_forever` | A record below the first parent edge at stream start is discarded after 64 slots |
-| `frozen_parent_that_never_confirms_does_not_block_forever` | A frozen parent that never confirms is discarded after 64 slots |
+| `record_below_first_parent_edge_does_not_block_forever` | A record below the first parent edge at stream start is discarded after 300 slots |
+| `frozen_parent_that_never_confirms_does_not_block_forever` | A frozen parent that never confirms is discarded after 300 slots |
 | `far_bank_on_other_branch_keeps_slot_with_records` | A slot with records that nothing skips is not discarded |
 | `alpenglow_switch_skips_vote_only_slots` | Vote-only slots of the Alpenglow switch never block, and the last Tower block flushes on Finalized alone |
 | `child_of_repaired_dead_slot_flushes` | A forked report does not stop a confirmed child of a repaired slot |
 | `forked_report_after_confirm_keeps_confirmed_bank` | A forked report after the confirm keeps the confirmed bank |
-| `child_confirm_before_forked_parent_keeps_parent` | A child confirm before its fork-reported parent's confirm keeps the parent |
-| `fork_report_after_child_confirm_keeps_parent` | A fork report that comes with the parent's late BlockMeta keeps the parent |
+| `parent_freezes_before_child_confirm_keeps_parent` | A child confirm before its fork-reported parent's confirm keeps the parent |
+| `parent_freezes_after_child_confirm_keeps_parent` | A fork report that comes with the parent's late BlockMeta keeps the parent |
+| `fork_report_before_freeze_keeps_parent_first` | A confirmed child does not flush before its fork-reported parent that has not frozen |
 | `dead_bank_record_does_not_block_after_repair_loses` | A record of a dead bank does not block later slots |
 | `unfrozen_bank_of_forked_slot_can_still_win` | A bank that has not frozen survives a fork report and can win |
 | `bank_frozen_after_fork_report_does_not_block` | A bank that freezes after a fork report does not block later slots |

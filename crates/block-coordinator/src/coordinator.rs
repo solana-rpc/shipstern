@@ -51,8 +51,8 @@ pub struct BlockMachineCoordinator<R> {
 /// How far back `frozen_banks` reaches. A parent older than this is not checked.
 const FROZEN_SLOT_WINDOW: Slot = 4096;
 
-/// A parent can arrive after its child, so wait this many slots before discarding it.
-/// Yellowstone drops a slot that does not resolve within the same 300 slots.
+/// A parent, a record slot or a confirm can come late, so wait this many slots before
+/// discarding the slot. Yellowstone itself drops a slot that does not resolve in 300 slots.
 const MISSING_PARENT_GRACE_SLOTS: Slot = 300;
 
 /// Banks per generation of `bank_slots`.
@@ -141,7 +141,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
             };
 
             for event in events {
-                self.state.apply(event)?;
+                self.state.apply(event);
             }
 
             if let Some(ref instruction_tx) = self.instruction_output_tx {
@@ -308,10 +308,9 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                         bank_ids: dead.bank_ids,
                     });
                 },
+                // A fork report drops nothing, so the grace bound still discards a slot that never
+                // freezes.
                 BlockStateMachineOutput::ForksDetected(fork) => {
-                    self.missing_parents.remove(&fork.slot);
-                    self.named_parents.remove(&fork.slot);
-                    self.record_slots.remove(&fork.slot);
                     events.push(CoordinatorEvent::SlotDiscarded {
                         slot: fork.slot,
                         reason: DiscardReason::Forked,
@@ -401,8 +400,9 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         self.record_slots.insert(slot);
     }
 
-    /// A confirmed bank puts its parent on the chain. A frozen parent whose confirm never comes
-    /// would block every later slot, so note it for `discard_lost_parents`.
+    /// A confirmed bank puts its parent on the chain. Yellowstone sends the parent's confirm right
+    /// after the child's, unless a repair bank that never seals took it. That parent would block
+    /// every later slot, so note it for `discard_lost_parents`.
     fn note_confirm(&mut self, slot: Slot, bank_id: u64) {
         self.confirmed_slots.insert(slot);
         self.unconfirmed_parents.remove(&slot);
@@ -414,8 +414,10 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         }
     }
 
-    /// Block machine 0.11 never freezes a bank whose BlockMeta is lost, and the child then
-    /// waits on it forever. Discard such a parent once the stream is well past it.
+    /// Yellowstone sends no BlockMeta for a bank that never seals, so block machine 0.11 never
+    /// freezes it, and its child waits forever. A slot with records that never freezes and a
+    /// frozen parent that never confirms block the same way. Discard such a slot once the stream
+    /// is well past it.
     fn discard_lost_parents(
         &mut self,
         slot: Slot,
@@ -432,10 +434,14 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
             self.missing_parents.insert(parent);
         }
 
+        // Record a far slot too, or every slot after a real jump counts as far.
         self.frozen_banks.insert((slot, bank_id), parent);
         self.named_parents.insert(parent);
         self.missing_parents.remove(&slot);
         self.record_slots.remove(&slot);
+        if far_ahead {
+            return Vec::new();
+        }
 
         // A slot with records must freeze if it is below every frozen bank, or if this parent
         // edge names or skips it.

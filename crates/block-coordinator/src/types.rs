@@ -17,7 +17,8 @@ pub struct BlockMetadata {
 }
 
 /// Reason the coordinator discarded a slot or a bank.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DiscardReason {
     Dead,
     Forked,
@@ -41,17 +42,13 @@ impl fmt::Display for DiscardReason {
 pub enum CoordinatorError {
     /// The server sent one bank ID in two slots, which block machine 0.11 cannot handle.
     BankInTwoSlots {
-        bank_id: u64,
+        bank_id: BankId,
         slot: Slot,
         other_slot: Slot,
     },
     /// The server sends no bank IDs, for example Geyser proto 12.7 or older.
     MissingBankId {
         slot: Slot,
-    },
-    TwoGateInvariantViolation {
-        slot: Slot,
-        last_flushed: Option<Slot>,
     },
     ReadySlotMissingMetadata {
         slot: Slot,
@@ -75,10 +72,6 @@ impl fmt::Display for CoordinatorError {
             Self::MissingBankId { slot } => write!(
                 f,
                 "Slot {slot} has no bank ID. The server likely runs Geyser proto 12.7 or older"
-            ),
-            Self::TwoGateInvariantViolation { slot, last_flushed } => write!(
-                f,
-                "Two-gate invariant violated: slot {slot} <= last_flushed {last_flushed:?}"
             ),
             Self::ReadySlotMissingMetadata { slot } => {
                 write!(f, "Ready slot missing metadata: slot {slot}")
@@ -119,24 +112,24 @@ pub enum CoordinatorMessage<R> {
     /// A parsed instruction record ready to buffer (sorted by tx_index, ix_path).
     InstructionParsed {
         slot: Slot,
-        bank_id: u64,
+        bank_id: BankId,
         key: InstructionRecordSortKey,
         record: R,
     },
     /// A parsed account record ready to buffer, sorted by ingress_seq:pubkey.
     AccountParsed {
         slot: Slot,
-        bank_id: u64,
+        bank_id: BankId,
         key: AccountRecordSortKey,
         record: R,
     },
     /// Signal that a transaction has been fully parsed by the handler.
-    /// Coordinator counts these to determine when a slot is fully parsed.
-    TransactionParsed { slot: Slot, bank_id: u64 },
+    /// Coordinator counts these to determine when a bank is fully parsed.
+    TransactionParsed { slot: Slot, bank_id: BankId },
     /// A parse stat event (filtered or error) for aggregate tracking.
     ParseStats {
         slot: Slot,
-        bank_id: u64,
+        bank_id: BankId,
         kind: ParseStatsKind,
     },
 }
@@ -198,7 +191,7 @@ pub enum CoordinatorInput {
     GeyserUpdate(Box<SubscribeUpdate>),
     /// A raw Account event was seen on the geyser stream for this bank.
     /// Lightweight signal: only the slot and bank, no protobuf payload.
-    AccountEventSeen { slot: Slot, bank_id: u64 },
+    AccountEventSeen { slot: Slot, bank_id: BankId },
 }
 
 /// Wraps a slot number with a deterministic ANSI color for log readability.
@@ -274,7 +267,7 @@ impl<R: Send> CoordinatorHandle<R> {
     pub async fn send_instruction_parsed(
         &self,
         slot: Slot,
-        bank_id: u64,
+        bank_id: BankId,
         key: InstructionRecordSortKey,
         record: R,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<CoordinatorMessage<R>>> {
@@ -291,7 +284,7 @@ impl<R: Send> CoordinatorHandle<R> {
     pub async fn send_account_parsed(
         &self,
         slot: Slot,
-        bank_id: u64,
+        bank_id: BankId,
         key: AccountRecordSortKey,
         record: R,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<CoordinatorMessage<R>>> {
@@ -308,7 +301,7 @@ impl<R: Send> CoordinatorHandle<R> {
     pub async fn send_transaction_parsed(
         &self,
         slot: Slot,
-        bank_id: u64,
+        bank_id: BankId,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<CoordinatorMessage<R>>> {
         self.tx
             .send(CoordinatorMessage::TransactionParsed { slot, bank_id })
@@ -318,7 +311,7 @@ impl<R: Send> CoordinatorHandle<R> {
     pub async fn send_parse_stats(
         &self,
         slot: Slot,
-        bank_id: u64,
+        bank_id: BankId,
         kind: ParseStatsKind,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<CoordinatorMessage<R>>> {
         self.tx

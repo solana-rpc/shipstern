@@ -339,6 +339,57 @@ async fn send_to_bank(harness: &TestHarness, update: SubscribeUpdate, bank_id: u
         .unwrap();
 }
 
+/// Slot 42 never gets its BlockMeta, so it never freezes. Its confirmed child 43 must
+/// flush once the stream is well past slot 42, not wait forever.
+#[tokio::test]
+async fn lost_parent_block_meta_does_not_block_child_forever() {
+    let mut harness = TestHarness::spawn();
+    let parent = harness.slot(41).parent(40).empty().await;
+    parent.confirm().await;
+    harness.expect_flush(41).await;
+
+    send_to_bank(
+        &harness,
+        make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
+        42,
+    )
+    .await;
+    let child = harness.slot(43).parent(42).empty().await;
+    child.confirm().await;
+    harness.expect_no_flush().await;
+
+    for slot in 44..=43 + MISSING_PARENT_GRACE_SLOTS {
+        harness.slot(slot).parent(slot - 1).empty().await;
+    }
+    harness.expect_flush(43).await;
+}
+
+/// The stream jumps more than 4096 slots past every frozen bank. A parent lost after the
+/// jump must still be discarded, or its child waits forever.
+#[tokio::test]
+async fn lost_parent_after_far_jump_does_not_block_child_forever() {
+    let mut harness = TestHarness::spawn();
+    let parent = harness.slot(41).parent(40).empty().await;
+    parent.confirm().await;
+    harness.expect_flush(41).await;
+
+    let far = 41 + 5_000;
+    send_to_bank(
+        &harness,
+        make_slot_update(far - 1, far - 2, SlotStatus::SlotCreatedBank),
+        far - 1,
+    )
+    .await;
+    let child = harness.slot(far).parent(far - 1).empty().await;
+    child.confirm().await;
+    harness.expect_no_flush().await;
+
+    for slot in far + 1..=far + MISSING_PARENT_GRACE_SLOTS {
+        harness.slot(slot).parent(slot - 1).empty().await;
+    }
+    harness.expect_flush(far).await;
+}
+
 fn with_bank_id(mut update: SubscribeUpdate, bank_id: u64) -> SubscribeUpdate {
     match update.update_oneof.as_mut().unwrap() {
         UpdateOneof::Slot(slot) => slot.bank_id = Some(bank_id),
@@ -1331,31 +1382,6 @@ async fn bank_frozen_after_fork_report_does_not_block() {
     harness.expect_flush(31).await;
 }
 
-/// Slot 42 never gets its BlockMeta, so it never freezes. Its confirmed child 43 must
-/// flush once the stream is well past slot 42, not wait forever.
-#[tokio::test]
-async fn lost_parent_block_meta_does_not_block_child_forever() {
-    let mut harness = TestHarness::spawn();
-    let parent = harness.slot(41).parent(40).empty().await;
-    parent.confirm().await;
-    harness.expect_flush(41).await;
-
-    send_to_bank(
-        &harness,
-        make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
-        42,
-    )
-    .await;
-    let child = harness.slot(43).parent(42).empty().await;
-    child.confirm().await;
-    harness.expect_no_flush().await;
-
-    for slot in 44..=43 + 64 {
-        harness.slot(slot).parent(slot - 1).empty().await;
-    }
-    harness.expect_flush(43).await;
-}
-
 /// Slot 42's bank 1 froze but lost. The confirmed bank 2 never gets its BlockMeta, so
 /// the frozen loser must not hide the lost parent from its child 43.
 #[tokio::test]
@@ -1388,7 +1414,7 @@ async fn lost_block_meta_of_winning_bank_does_not_block_child_forever() {
     .await;
     harness.expect_no_flush().await;
 
-    for slot in 44..=43 + 64 {
+    for slot in 44..=43 + MISSING_PARENT_GRACE_SLOTS {
         harness.slot(slot).parent(slot - 1).empty().await;
     }
     harness.expect_flush(43).await;
@@ -1562,7 +1588,7 @@ async fn late_record_for_skipped_slot_does_not_block_forever() {
     next.confirm().await;
     harness.expect_no_flush().await;
 
-    for slot in 44..=43 + 64 {
+    for slot in 44..=43 + MISSING_PARENT_GRACE_SLOTS {
         harness.slot(slot).parent(slot - 1).empty().await;
     }
     harness.expect_flush(43).await;
@@ -1578,7 +1604,7 @@ async fn record_below_first_parent_edge_does_not_block_forever() {
     first.confirm().await;
     harness.expect_no_flush().await;
 
-    for slot in 100..=99 + 64 {
+    for slot in 100..=99 + MISSING_PARENT_GRACE_SLOTS {
         harness.slot(slot).parent(slot - 1).empty().await;
     }
     harness.expect_flush(99).await;
@@ -1610,13 +1636,13 @@ async fn frozen_parent_that_never_confirms_does_not_block_forever() {
     child.confirm().await;
     harness.expect_no_flush().await;
 
-    for slot in 45..=44 + 65 {
+    for slot in 45..=44 + MISSING_PARENT_GRACE_SLOTS + 1 {
         harness.slot(slot).parent(slot - 1).empty().await;
     }
     harness.expect_flush(44).await;
 }
 
-/// The devnet Alpenglow switch: vote-only slots 100..=107 freeze on G = 99 and never confirm.
+/// The devnet Alpenglow switch: vote-only slots 100..=107 chain on G = 99 and never confirm.
 /// The first Alpenglow block 108 builds on G, and G gets Finalized with no Confirmed.
 #[tokio::test]
 async fn alpenglow_switch_skips_vote_only_slots() {
@@ -1741,7 +1767,7 @@ async fn forked_report_after_confirm_keeps_confirmed_bank() {
 /// Child 44 confirms before its parent 43 freezes. The block machine sends 43's fork report
 /// with the late BlockMeta, so 43 must still flush when it confirms.
 #[tokio::test]
-async fn fork_report_after_child_confirm_keeps_parent() {
+async fn parent_freezes_after_child_confirm_keeps_parent() {
     let mut harness = TestHarness::spawn();
     flush_repaired_dead_slot_42(&mut harness).await;
 
@@ -1767,7 +1793,7 @@ async fn fork_report_after_child_confirm_keeps_parent() {
 /// Slot 43 freezes with a fork report, and its child 44 confirms first. That is the order when
 /// 43 gets no direct confirm and the server fills one in, so 43 must still flush.
 #[tokio::test]
-async fn child_confirm_before_forked_parent_keeps_parent() {
+async fn parent_freezes_before_child_confirm_keeps_parent() {
     let mut harness = TestHarness::spawn();
     flush_repaired_dead_slot_42(&mut harness).await;
 
@@ -1789,4 +1815,98 @@ async fn child_confirm_before_forked_parent_keeps_parent() {
 
     harness.expect_flush(43).await;
     harness.expect_flush(44).await;
+}
+
+/// 43 is fork-reported at Processed, before its BlockMeta. Its confirmed child 44 must not
+/// flush first, or 43 is lost when it confirms.
+#[tokio::test]
+async fn fork_report_before_freeze_keeps_parent_first() {
+    let mut harness = TestHarness::spawn();
+    flush_repaired_dead_slot_42(&mut harness).await;
+    harness.expect_account_flush(41).await;
+    harness.expect_account_flush(42).await;
+
+    for update in [
+        make_slot_update(43, 42, SlotStatus::SlotCreatedBank),
+        make_entry_update(43, 0, 1),
+        make_slot_update(43, 42, SlotStatus::SlotProcessed),
+    ] {
+        send_to_bank(&harness, update, 4300).await;
+    }
+    for message in [
+        CoordinatorMessage::InstructionParsed {
+            slot: 43,
+            bank_id: 4300,
+            key: InstructionRecordSortKey::new(0, vec![0]),
+            record: "parent".to_string(),
+        },
+        CoordinatorMessage::TransactionParsed {
+            slot: 43,
+            bank_id: 4300,
+        },
+    ] {
+        harness.parsed_tx.send(message).await.unwrap();
+    }
+    let child = harness.slot(44).parent(43).empty().await;
+    child.confirm().await;
+    harness.expect_no_flush().await;
+    harness.expect_no_account_flush().await;
+
+    for update in [
+        make_block_meta_update(43, 42, 1, &Hash::new_unique()),
+        make_slot_update(43, 42, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 4300).await;
+    }
+    harness.expect_flush(43).await.records(&["parent"]);
+    harness.expect_flush(44).await;
+    harness.expect_account_flush(43).await;
+    harness.expect_account_flush(44).await;
+}
+
+/// Slot 42 has two banks, so a seal-gated server sends its BlockMeta only with the confirm. A
+/// confirm lag of 70 slots is inside the grace window, so it must not discard the slot.
+#[tokio::test]
+async fn two_bank_slot_survives_confirm_lag_inside_grace() {
+    let mut harness = TestHarness::spawn();
+    let parent = harness.slot(41).parent(40).empty().await;
+    parent.confirm().await;
+    harness.expect_flush(41).await;
+
+    for bank_id in [4200, 4201] {
+        for update in [
+            make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
+            make_entry_update(42, 0, 1),
+        ] {
+            send_to_bank(&harness, update, bank_id).await;
+        }
+    }
+    for message in [
+        CoordinatorMessage::InstructionParsed {
+            slot: 42,
+            bank_id: 4201,
+            key: InstructionRecordSortKey::new(0, vec![0]),
+            record: "winner".to_string(),
+        },
+        CoordinatorMessage::TransactionParsed {
+            slot: 42,
+            bank_id: 4201,
+        },
+    ] {
+        harness.parsed_tx.send(message).await.unwrap();
+    }
+    let child = harness.slot(43).parent(42).empty().await;
+    for slot in 44..=43 + 70 {
+        harness.slot(slot).parent(slot - 1).empty().await;
+    }
+    for update in [
+        make_block_meta_update(42, 41, 1, &Hash::new_unique()),
+        make_slot_update(42, 41, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 4201).await;
+    }
+    child.confirm().await;
+
+    harness.expect_flush(42).await.records(&["winner"]);
+    harness.expect_flush(43).await;
 }
