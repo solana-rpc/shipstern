@@ -14,8 +14,8 @@ use tonic::{
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ConnectError {
-    /// The config names no harmonic region.
-    #[error("the config names no harmonic region")]
+    /// The config names no region on either feed.
+    #[error("the config names no harmonic or bam region")]
     NoRegion,
     /// The endpoint scheme is neither `https` nor `http`.
     #[error(
