@@ -71,6 +71,14 @@ impl From<FumaroleConfig> for yellowstone_fumarole_client::config::FumaroleConfi
     }
 }
 
+/// fumarole-client 0.9 panics below its SHARDED_DOWNLOAD_MINIMUM_MINOR_VERSION.
+const MIN_SERVICE_MINOR_VERSION: u64 = 39;
+
+/// The client checks only the minor version, so the major version is ignored here too.
+fn is_supported_service_version(version: &str) -> bool {
+    semver::Version::parse(version).is_ok_and(|v| v.minor >= MIN_SERVICE_MINOR_VERSION)
+}
+
 /// Keep the gRPC code of a stream error, so an auth failure does not read as an internal one.
 fn status_of(error: &(dyn std::error::Error + 'static)) -> Status {
     let mut source = Some(error);
@@ -109,16 +117,18 @@ impl SourceTrait for YellowstoneFumaroleSource {
             },
         };
 
-        // fumarole-client 0.9 panics below its SHARDED_DOWNLOAD_MINIMUM_MINOR_VERSION.
-        const MIN_SERVICE_MINOR_VERSION: u64 = 39;
         let version = fumarole_client
             .version()
             .await
             .map_err(ShipsternError::YellowstoneStatus)?
             .version;
-        if !semver::Version::parse(&version).is_ok_and(|v| v.minor >= MIN_SERVICE_MINOR_VERSION) {
+        if !is_supported_service_version(&version) {
             return Err(ShipsternError::Other(
-                format!("Fumarole service version {version} is not supported").into(),
+                format!(
+                    "Fumarole service version {version} is not supported; fumarole-client 0.9 \
+                     needs minor version {MIN_SERVICE_MINOR_VERSION} or newer"
+                )
+                .into(),
             ));
         }
 
@@ -183,7 +193,15 @@ mod tests {
     use shipstern_core::Filters;
     use tokio::sync::mpsc;
 
-    use super::{FumaroleConfig, YellowstoneFumaroleSource};
+    use super::{is_supported_service_version, FumaroleConfig, YellowstoneFumaroleSource};
+
+    /// The 0.4 client had this check backwards, so pin both sides of the minimum.
+    #[test]
+    fn service_version_check_needs_minor_39() {
+        assert!(!is_supported_service_version("0.38.0"));
+        assert!(is_supported_service_version("0.39.0"));
+        assert!(!is_supported_service_version("not a version"));
+    }
 
     #[test]
     fn connect_reports_connection_errors_instead_of_panicking() {

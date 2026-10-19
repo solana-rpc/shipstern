@@ -12,7 +12,7 @@ use tokio::sync::watch;
 use yellowstone_grpc_client::{Backoff, GeyserGrpcClient, ReconnectConfig, ReconnectEvent};
 use yellowstone_grpc_proto::{
     geyser::{SubscribeRequest, SubscribeUpdate},
-    tonic::{codec::CompressionEncoding, transport::ClientTlsConfig, Code, Status},
+    tonic::{codec::CompressionEncoding, transport::ClientTlsConfig, Status},
 };
 
 #[derive(Default, Copy, Debug, serde::Deserialize, Clone, ValueEnum)]
@@ -319,7 +319,7 @@ impl SourceTrait for YellowstoneGrpcSource {
         // update can arrive and the client may reconnect the stream.
         let has_handle = filter_updates.has_changed().is_ok();
 
-        // A closed slot can still hold one set that the runtime did not read.
+        // A closed channel can still hold one set that the runtime did not read.
         let filters = if has_handle {
             filters
         } else {
@@ -335,7 +335,7 @@ impl SourceTrait for YellowstoneGrpcSource {
                 tracing::debug!(?reconnect_config, "Auto-reconnect enabled");
                 builder = builder.set_reconnect_config(reconnect_config);
             },
-            Some(_) => tracing::info!(
+            Some(_) => tracing::warn!(
                 commitment = ?config.commitment_level,
                 from_slot = ?config.from_slot,
                 has_handle,
@@ -404,14 +404,6 @@ impl SourceTrait for YellowstoneGrpcSource {
                             filter_updates_sent,
                             "Received error status from stream"
                         );
-
-                        // Only an older server makes the reconnect stream fail on a missing bank_id.
-                        if reconnect
-                            && status.code() == Code::FailedPrecondition
-                            && status.message().contains("bank_id")
-                        {
-                            tracing::warn!("The server sends no bank_id; set auto-reconnect = false");
-                        }
 
                         let code = status.code();
                         let message = status.message().to_string();

@@ -180,6 +180,9 @@ use yellowstone_grpc_proto::{
     prelude::{BlockHeight, UnixTimestamp},
 };
 
+/// The coordinator discards a parent that never freezes once a bank this far past it freezes.
+const MISSING_PARENT_GRACE_SLOTS: u64 = 300;
+
 // =============================================================================
 // Test Harness
 // =============================================================================
@@ -1242,14 +1245,41 @@ async fn lost_parent_block_meta_does_not_block_child_forever() {
     child.confirm().await;
     harness.expect_no_flush().await;
 
-    for slot in 44..=43 + 64 {
+    for slot in 44..=43 + MISSING_PARENT_GRACE_SLOTS {
         harness.slot(slot).parent(slot - 1).empty().await;
     }
     harness.expect_flush(43).await;
 }
 
+/// The stream jumps more than 4096 slots past every frozen bank. A parent lost after the
+/// jump must still be discarded, or its child waits forever.
+#[tokio::test]
+async fn lost_parent_after_far_jump_does_not_block_child_forever() {
+    let mut harness = TestHarness::spawn();
+    let parent = harness.slot(41).parent(40).empty().await;
+    parent.confirm().await;
+    harness.expect_flush(41).await;
+
+    let far = 41 + 5_000;
+    send_to_bank(
+        &harness,
+        make_slot_update(far - 1, far - 2, SlotStatus::SlotCreatedBank),
+        far - 1,
+    )
+    .await;
+    let child = harness.slot(far).parent(far - 1).empty().await;
+    child.confirm().await;
+    harness.expect_no_flush().await;
+
+    for slot in far + 1..=far + MISSING_PARENT_GRACE_SLOTS {
+        harness.slot(slot).parent(slot - 1).empty().await;
+    }
+    harness.expect_flush(far).await;
+}
+
 /// Bank 10 of slot 42 dies and repair bank 11 wins. The block machine then reports every
-/// child of 42 as forked, so a forked report must not stop the confirmed child 43.
+/// child of 42 as forked, so a forked report must not stop the confirmed child 43. Records
+/// are kept per slot, so slot 42 itself does not flush until #345 keys them per bank.
 #[tokio::test]
 async fn child_of_repaired_dead_slot_flushes() {
     let mut harness = TestHarness::spawn();

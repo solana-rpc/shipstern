@@ -116,6 +116,7 @@ impl<R> CoordinatorState<R> {
                     return Ok(());
                 }
                 // Records are kept per slot, so a repair bank of a discarded slot cannot flush.
+                // #345 keys them per bank.
                 if self.discarded_slots.contains(&slot) {
                     self.log_discarded_slot_drop(slot, "BlockFrozen");
                     return Ok(());

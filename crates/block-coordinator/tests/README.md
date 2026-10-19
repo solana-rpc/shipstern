@@ -28,7 +28,8 @@
 | `dead_slot_discarded` | Dead slot removed, no output |
 | `dead_slot_spares_sibling` | A dead slot does not discard its sibling |
 | `incomplete_block_discarded` | BlockMeta without entries is discarded as incomplete |
-| `lost_parent_block_meta_does_not_block_child_forever` | A parent that never freezes is discarded after 64 slots |
+| `lost_parent_block_meta_does_not_block_child_forever` | A parent that never freezes is discarded after 300 slots |
+| `lost_parent_after_far_jump_does_not_block_child_forever` | The same holds after the stream jumps more than 4096 slots |
 | `child_of_repaired_dead_slot_flushes` | A forked report does not stop a confirmed child of a repaired slot |
 | `discarded_slot_ignores_parsed_messages` | Messages for discarded slot dropped |
 

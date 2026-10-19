@@ -138,9 +138,7 @@ supervisor that restarts it.
 
 At processed, a slot can have more than one bank, and each update carries its
 `bank_id`. Keep only the bank that reaches confirmed. A `bank_id` is local to
-one server, so do not match two streams on it. At the Alpenglow switch the
-cluster drops some vote-only blocks with no event, and the slot numbers then
-skip ahead.
+one server, so do not match two streams on it.
 
 ## Creating a Custom Source
 

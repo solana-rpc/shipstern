@@ -14,7 +14,8 @@ pub struct BlockMetadata {
 }
 
 /// Reason a slot was discarded by the coordinator.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DiscardReason {
     Dead,
     Forked,
@@ -34,12 +35,15 @@ impl fmt::Display for DiscardReason {
 
 /// Coordinator invariants and unrecoverable errors.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum CoordinatorError {
+    /// The server sent one bank ID in two slots, which block machine 0.11 cannot handle.
     BankInTwoSlots {
         bank_id: u64,
         slot: Slot,
         other_slot: Slot,
     },
+    /// The server sends no bank IDs, for example Geyser proto 12.7 or older.
     MissingBankId {
         slot: Slot,
     },

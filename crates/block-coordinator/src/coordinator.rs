@@ -41,7 +41,8 @@ pub struct BlockMachineCoordinator<R> {
 const FROZEN_SLOT_WINDOW: Slot = 4096;
 
 /// A parent can arrive after its child, so wait this many slots before discarding it.
-const MISSING_PARENT_GRACE_SLOTS: Slot = 64;
+/// Yellowstone drops a slot that does not resolve within the same 300 slots.
+const MISSING_PARENT_GRACE_SLOTS: Slot = 300;
 
 /// Banks per generation of `bank_slots`.
 const BANK_SLOT_CAPACITY: usize = 8192;
@@ -320,17 +321,16 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         Ok(())
     }
 
-    /// Block machine 0.11 never freezes a bank whose BlockMeta is lost, and the child then
-    /// waits on it forever. Discard such a parent once the stream is well past it.
+    /// Yellowstone sends no BlockMeta for a bank that never seals, so block machine 0.11
+    /// never freezes it, and its child waits forever. Discard such a parent once the stream
+    /// is well past it.
     fn discard_lost_parents(
         &mut self,
         slot: Slot,
         bank_id: u64,
         parent: Slot,
     ) -> Vec<CoordinatorEvent<R>> {
-        if self.is_far_ahead(slot) {
-            return Vec::new();
-        }
+        let far_ahead = self.is_far_ahead(slot);
         if self
             .frozen_banks
             .first()
@@ -340,8 +340,12 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
             self.missing_parents.insert(parent);
         }
 
+        // Record a far slot too, or every slot after a real jump counts as far.
         self.frozen_banks.insert((slot, bank_id));
         self.missing_parents.remove(&slot);
+        if far_ahead {
+            return Vec::new();
+        }
 
         let window_start = slot.saturating_sub(FROZEN_SLOT_WINDOW);
         self.frozen_banks = self.frozen_banks.split_off(&(window_start, 0));
@@ -361,7 +365,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
             .collect()
     }
 
-    /// A slot this far past every frozen bank is bogus. It must not age out the slots in grace.
+    /// A slot this far past every frozen bank must not age out the slots in grace.
     fn is_far_ahead(&self, slot: Slot) -> bool {
         self.frozen_banks
             .last()

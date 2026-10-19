@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex, PoisonError,
+        Arc, Mutex, PoisonError,
     },
     time::Duration,
 };
@@ -787,6 +787,49 @@ async fn test_standalone_context_has_a_closed_update_slot() {
     let mut ctx = SourceContext::new(Filters::new(HashMap::new()), tx);
 
     assert!(ctx.filter_updates.changed().await.is_err());
+}
+
+/// Records whether the filter update channel is open when the source connects.
+#[derive(Debug)]
+struct MockUpdateChannelProbeSource {
+    open: Arc<Mutex<Option<bool>>>,
+}
+
+#[async_trait]
+impl SourceTrait for MockUpdateChannelProbeSource {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext { filter_updates, .. } = ctx;
+        let open = filter_updates.has_changed().is_ok();
+        *self.open.lock().unwrap_or_else(PoisonError::into_inner) = Some(open);
+
+        Ok(SourceExitStatus::StreamEnded)
+    }
+}
+
+impl FilterUpdateSource for MockUpdateChannelProbeSource {}
+
+/// The gRPC source reconnects only when no handle can send a filter update, and it reads
+/// that from this channel at connect.
+#[tokio::test]
+async fn test_update_channel_is_open_only_while_a_handle_exists() {
+    for keep_handle in [false, true] {
+        let open = Arc::new(Mutex::new(None));
+        let runtime = Runtime::builder()
+            .try_build_with(
+                MockUpdateChannelProbeSource {
+                    open: Arc::clone(&open),
+                },
+                default_buffer_config(),
+            )
+            .unwrap();
+        let handle = keep_handle.then(|| runtime.handle());
+
+        assert_server_hangup(runtime.try_run_async().await);
+        drop(handle);
+
+        let open = *open.lock().unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(open, Some(keep_handle), "keep_handle = {keep_handle}");
+    }
 }
 
 #[tokio::test]
