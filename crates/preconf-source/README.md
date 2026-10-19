@@ -221,10 +221,61 @@ reconnect.
 
 ## Manual run
 
-1. Get the feeds enabled on a Triton token.
-2. Set `x-token` and one or two nearby regions per feed.
-3. Run a pipeline with a narrow transaction prefilter, for example one pool, wallet or mint. A
-   whole-program filter reaches the coverage share (see Coverage share).
-4. Compare the signatures with a Dragon's Mouth stream at processed commitment. Triton states
-   that about 99% of Harmonic and 91% of BAM preconfs arrive before Geyser. Landing rates are not
-   measured yet.
+1. Ask Triton to enable the feeds on your token. Preconfs are not self-serve. Check the token
+   before you run anything:
+
+   ```sh
+   # preconfs.proto is in github.com/rpcpool/preconfs-client (preconfs-proto/proto/)
+   grpcurl -H "x-token: $TOKEN" -proto preconfs.proto preconfs.rpcpool.com:443 preconfs.Harmonic/GetVersion
+   ```
+
+   A token with no feed answers `Unauthenticated` with a message like `x-token not entitled to
+   preconfs`. A token with at least one feed answers with the server version and the region that
+   took the call. The check does not say which feed is enabled: a configured feed the token lacks
+   fails at subscribe with `UNAUTHENTICATED`.
+2. Copy `examples/preconf/Shipstern.example.toml` to `Shipstern.toml` in the same directory. Put
+   the token in it and set the regions near you (see Configuration). The repo ignores
+   `Shipstern.toml`. The example config streams Harmonic `fra`, so the token needs the Harmonic
+   feed. For a BAM-only token, replace `harmonic-regions` with `bam-regions = ["fra"]`.
+3. Run the example:
+
+   ```sh
+   cd examples/preconf
+   RUST_LOG=info cargo run -p shipstern-example-preconf -- --config Shipstern.toml
+   ```
+
+   The example adds one required key, the Whirlpool program, with `FilterPipeline`. So the SPL
+   Token parser gets only the transactions that also name that program, and the stream stays
+   under the coverage share. A whole-program filter alone, such as SPL Token, reaches the share
+   within a minute (see Coverage share). Then expect clip warnings, `RESOURCE_EXHAUSTED` after
+   30 s over the share, and a resubscribe about 63 s after the drop (see Reconnect).
+4. Compare the signatures with a Dragon's Mouth stream at processed commitment and the same
+   filter. Triton states that about 99% of Harmonic and 91% of BAM preconfs arrive before Geyser.
+   The share depends on where the client runs. In one 5 min BAM fra run on mainnet (Whirlpool
+   program), all 169 preconfs in the measured window landed in the slot they named, with the
+   same result. Harmonic landing is not measured yet.
+
+## Log lines
+
+| Level | Message | When |
+|---|---|---|
+| `info` | `Preconf source subscribed` | once per stream at connect |
+| `error` | `Preconf source subscription failed` | a first subscribe that fails, with `feed`, `code` and `message`; the run stops |
+| `warn` | `This parser has no transaction prefilter, so the preconf source gives it nothing` | once per such parser at connect |
+| `info` | `preconfirmed token instruction` | from the example, once per SPL Token instruction, with `slot`, `index`, `signature` and `instruction` |
+| `error` | `Handler failed` | once per v0 transaction whose instructions use an account from a lookup table, with `Invalid account key index` in `err` (see Consequences) |
+| `warn` | `The feed withheld transactions: the account is over its coverage share` | each clip, with the `withheld` count |
+| `warn` | `A stream dropped, resubscribing` | each retry, with `feed`, `code`, `attempt` and `wait` |
+| `info` | `A stream subscribed again` | each resubscribe that succeeds |
+| `warn` | `A slot started again; the feed can resend or omit earlier transactions` | a new Harmonic slot start for a slot that ended. Triton reports a restart in about 0.25% of slots |
+| `warn` | `The feed sent a transaction with no result; ...` | the first transaction with no result on each stream |
+| `warn` | `The feed sent a transaction that does not decode; skipping it` | each such transaction |
+| `info` | `A stream ended, exiting` | a stream that ends with no status and does not resubscribe; the run stops |
+| `error` | `A stream failed, exiting` | a status that stops the source, see Exit |
+| `info` | `Receiver dropped, stopping source` | once at exit when the runtime drops the receiver, with `; the update in hand is lost` when a send was in progress. After Ctrl-C the process can exit before the source writes it |
+| `info` | `Preconf stream stopped` | once per stream at exit. After Ctrl-C the process can exit before the source writes it |
+
+Each `Preconf stream stopped` line has the `feed` and the counts `delivered`, `unknown_result`,
+`vote_rule_dropped`, `undecodable`, `out_of_frame`, `unknown_payload`, `clipped`, `restarts` and
+`reconnects`. At the `debug` level the source also logs dropped transactions, out-of-frame
+transactions, unknown payloads, and each delivered transaction with its feed fields.
