@@ -1,0 +1,107 @@
+# shipstern-preconf-source
+
+A source for Triton preconfirmations (preconfs). The Harmonic block builder reports a
+transaction the moment it executes it into the slot under construction, before any shred exists.
+This source streams those reports into a Shipstern pipeline through the same `SubscribeUpdate`
+that the other sources deliver, so existing transaction and instruction parsers work unchanged.
+
+## What a preconfirmation is not
+
+A preconf is the block producer's statement, not the cluster's. Slots get skipped, blocks land on
+abandoned forks, and a builder can restart a slot. Treat a preconf as the earliest signal and
+check settlement elsewhere. Handlers must be idempotent per signature: a restarted slot delivers
+its transactions again, and fast leader handover can send one transaction twice.
+
+## Configuration
+
+```toml
+[source]
+endpoint = "https://preconfs.rpcpool.com"   # default
+x-token = "<token with the preconf feed enabled>"
+harmonic-regions = ["fra", "ams"]           # one stream per region, nearby regions only
+timeout = 10                                # seconds for the TCP connect, and again for TLS
+```
+
+Regions: `ams`, `ewr`, `fra`, `lon`, `tyo`, `sgp`, `slc`. Regional streams carry different slots,
+so a far region adds latency, not coverage. A region named twice opens one stream. The feed must
+be enabled on the token by Triton; a token without it gets `UNAUTHENTICATED` at subscribe.
+
+```rust,ignore
+let runtime = Runtime::builder()
+    .instruction(Pipeline::new(MyParser, [handler]))
+    .build::<shipstern_preconf_source::PreconfSource>(config);
+```
+
+## How a preconf maps to a `SubscribeUpdateTransaction`
+
+| Field | Value |
+|---|---|
+| `filters` | the filter names the feed matched, which are the parser IDs |
+| `slot` | the slot the builder is filling |
+| `bank_id` | `0`, the feed has none |
+| `transaction` | decoded from the bytes the block will carry; legacy, v0 and v1 messages |
+| `is_vote` | computed from the message, the feed has no vote flag |
+| `index` | arrival order inside the slot, from 0, not the block position |
+| `meta.err` | `None` for a success; `Some` with empty bytes for a failure, the cause is unknown |
+| other `meta` fields | absent: no fee, balances, logs, inner instructions or loaded addresses |
+| `created_at` | unset, the feed sends no time |
+
+Consequences:
+
+- Log events and self-CPI events never fire, because there are no logs. Top-level instructions
+  parse.
+- A v0 transaction that uses an address lookup table fails every instruction parser, because the
+  loaded addresses are unknown before execution.
+- A transaction whose result the feed does not know is dropped, because `err: None` would read as
+  a success. The first drop logs a warning, and the count is logged when the source stops.
+- A transaction that does not decode is skipped with a warning and counted. It does not stop the
+  source.
+- The source sends no slot updates. Harmonic slot framing drives only the `index` counter and
+  the restart count.
+
+## How a prefilter maps to the feed filter
+
+| Prefilter | Feed filter |
+|---|---|
+| `accounts_include` and the cuckoo set | `account_include` |
+| `accounts_required` | `account_required` |
+| `accounts_exclude` | `account_exclude` |
+| `signature` | `signature` |
+| `failed: Some(false)` (the default) | `execution_results = [SUCCESS]` |
+| `failed: Some(true)` | `execution_results = [EXECUTION_FAILURE, FEES_ONLY]` |
+| `failed: None` | no result filter; unknown results are dropped by the source |
+| `vote` | applied by the source per parser, after decoding |
+| `token_accounts` | refused, the feed matches account keys only |
+
+The feed matches the static account keys of a transaction. A key that a v0 transaction loads
+from a lookup table never matches, unlike on Dragon's Mouth.
+
+The feed refuses a filter with no include, required or signature list, the full feed cannot be
+subscribed, and the limits are 64 filters per stream, 64 bytes per filter name and 10000 accounts
+per list. The source checks these before it dials and names the parser at fault, or the count.
+A parser with no transaction prefilter gets nothing from this source; the source logs a warning
+for each one at connect.
+
+## Exit
+
+A connect or subscribe failure stops the runtime with the gRPC code: `UNAUTHENTICATED` for a
+token without the feed, `INVALID_ARGUMENT` for a filter the feed refuses, `FAILED_PRECONDITION`
+for a region it does not serve. A status on a running stream ends the source with
+`SourceExitStatus::StreamError`, for example `PERMISSION_DENIED` when the feed is disabled under
+a live stream, `RESOURCE_EXHAUSTED` when the account is over its coverage share for 30 s or when
+the consumer falls behind, `DATA_LOSS` when the server dropped the stream's position, or
+`UNAVAILABLE` when the point of presence restarts. A region stream that ends or errors stops the
+source, so a run never continues on a partial feed. The source does not reconnect. There is no
+resume: the feed has no `from_slot`.
+
+Over the coverage share (33% of the feed per account and region over 60 s) the feed withholds
+transactions and sends a clip count, which the source logs at warn.
+
+## Manual run
+
+1. Get the preconf feed enabled on a Triton token.
+2. Set `x-token` and one or two nearby `harmonic-regions`.
+3. Run a pipeline with a narrow transaction prefilter, for example one program. A broad filter
+   hits the coverage share within a minute.
+4. Compare the signatures with a Dragon's Mouth stream at processed commitment. The landing
+   rates and lead times are not measured yet.

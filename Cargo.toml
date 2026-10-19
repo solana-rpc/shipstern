@@ -94,6 +94,7 @@ tonic = "^0.14.0"
 tonic-reflection = "^0.14.0"
 tonic-prost = "^0.14.0"
 tonic-prost-build = "^0.14.0"
+triton-preconfs-proto = "^0.3.0"
 toml = "^0.8.0"
 tokio = "^1.48.0"
 tracing = "^0.1.40"
@@ -138,6 +139,7 @@ shipstern-yellowstone-grpc-source = { path = "crates/yellowstone-grpc-source", v
 shipstern-yellowstone-fumarole-source = { path = "crates/yellowstone-fumarole-source", version = "0.12.0" }
 shipstern-solana-snapshot-source = { path = "crates/solana-snapshot-source", version = "0.12.0" }
 shipstern-jetstream-source = { path = "crates/jetstreamer-source", version = "0.12.0" }
+shipstern-preconf-source = { path = "crates/preconf-source", version = "0.12.0" }
 
 # Coordinators
 shipstern-block-coordinator = { path = "crates/block-coordinator", version = "0.12.0" }
