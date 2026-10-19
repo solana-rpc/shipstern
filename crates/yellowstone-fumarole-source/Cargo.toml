@@ -21,6 +21,7 @@ yellowstone-fumarole-client = { workspace = true, features = [
   "prometheus",
 ] }
 bytesize = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tonic = { workspace = true, features = ["gzip", "zstd"] }
 clap = { workspace = true, features = ["derive", "cargo", "wrap_help"] }
