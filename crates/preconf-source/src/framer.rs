@@ -45,6 +45,23 @@ pub(crate) enum FeedUpdate {
     Bam(BamUpdate),
 }
 
+impl FeedUpdate {
+    /// A transaction or a slot start proves the stream delivers. A ping or a clip does not, so
+    /// a point of presence that drops after each ping still backs off.
+    pub(crate) fn is_progress(&self) -> bool {
+        match self {
+            Self::Harmonic(update) => matches!(
+                update.payload,
+                Some(harmonic_update::Payload::Transaction(_))
+                    | Some(harmonic_update::Payload::SlotStart(_))
+            ),
+            Self::Bam(update) => {
+                matches!(update.payload, Some(bam_update::Payload::Transaction(_)))
+            },
+        }
+    }
+}
+
 /// What a stream dropped or saw, reported when the source exits.
 #[derive(Default, Clone, Copy)]
 pub(crate) struct Counts {
@@ -55,6 +72,7 @@ pub(crate) struct Counts {
     pub unknown_payload: u64,
     pub clipped: u64,
     pub restarts: u64,
+    pub reconnects: u64,
 }
 
 impl Counts {
@@ -69,6 +87,7 @@ impl Counts {
             unknown_payload: self.unknown_payload.saturating_add(other.unknown_payload),
             clipped: self.clipped.saturating_add(other.clipped),
             restarts: self.restarts.saturating_add(other.restarts),
+            reconnects: self.reconnects.saturating_add(other.reconnects),
         }
     }
 }
@@ -165,6 +184,18 @@ impl Framer {
             None => self.unknown_payload(),
         }
     }
+
+    /// The stream subscribed again. Harmonic joins at the next slot start, so its open slots get
+    /// no end. BAM resumes the slot in progress, so its indexes keep counting.
+    pub(crate) fn reconnected(&mut self) {
+        if matches!(self.feed, Feed::Harmonic(_)) {
+            self.open.clear();
+        }
+        self.counts.reconnects = self.counts.reconnects.saturating_add(1);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_slots(&self) -> Vec<u64> { self.open.keys().copied().collect() }
 
     /// A payload this crate does not know: the server schema moved ahead of the proto crate.
     fn unknown_payload(&mut self) -> Option<SubscribeUpdate> {

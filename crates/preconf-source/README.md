@@ -23,6 +23,8 @@ x-token = "<token with the feeds enabled>"
 harmonic-regions = ["fra", "ams"]           # one stream per region, nearby regions only
 bam-regions = ["fra", "ams"]                # same rule; either list may be empty, not both
 timeout = 10                                # seconds for the TCP connect, and again for TLS
+auto-reconnect = true                       # default; resubscribe a dropped stream
+# reconnect-max-retries = 10                # unset never gives up
 ```
 
 Harmonic regions: `ams`, `ewr`, `fra`, `lon`, `tyo`, `sgp`, `slc`. BAM regions: `ams`, `dfw`,
@@ -98,16 +100,35 @@ for each one at connect.
 
 A connect or subscribe failure stops the runtime with the gRPC code: `UNAUTHENTICATED` for a
 token without the feed, `INVALID_ARGUMENT` for a filter the feed refuses, `FAILED_PRECONDITION`
-for a region it does not serve. A status on a running stream ends the source with
-`SourceExitStatus::StreamError`, for example `PERMISSION_DENIED` when the feed is disabled under
-a live stream, `RESOURCE_EXHAUSTED` when the account is over its coverage share for 30 s or when
-the consumer falls behind, `DATA_LOSS` when the server dropped the stream's position, or
-`UNAVAILABLE` when the point of presence restarts. A stream of either feed that ends or errors
-stops the source, so a run never continues on a partial feed. The source does not reconnect.
-There is no resume: the feed has no `from_slot`.
+for a region it does not serve. A status outside the retry set below ends the source with
+`SourceExitStatus::StreamError`, for example `PERMISSION_DENIED` when the feed is disabled
+under a live stream, or `NOT_FOUND` and `UNIMPLEMENTED`. A stream that fails for good stops
+the source. While a stream resubscribes, the other streams keep delivering, so the run is
+partial until it returns. There is no resume: the feed has no `from_slot`.
 
 Over the coverage share (33% of the feed per account and region over 60 s) the feed withholds
 transactions and sends a clip count, which the source logs at warn.
+
+## Reconnect
+
+With `auto-reconnect` on (the default), a stream that ends or fails with `UNAVAILABLE`,
+`DATA_LOSS`, `RESOURCE_EXHAUSTED`, `INTERNAL`, `UNKNOWN`, `ABORTED`, `CANCELLED` or
+`DEADLINE_EXCEEDED` is subscribed again on the same channel. The wait starts at 100 ms,
+doubles after each failed attempt and stays at 10 s; a delivered transaction or slot start
+starts it over, a ping or a clip does not. A subscribe that does not answer within `timeout`
+seconds counts as `DEADLINE_EXCEEDED`. `reconnect-max-retries` bounds the consecutive failed
+attempts. Ten attempts end 42.7 s after the drop, inside the 60 s coverage cooloff, so a bound
+under 12 cannot survive one. Unset never gives up, because the feed has no resume and a late
+reconnect is as good as an early one; Triton's own client defaults to the same. The first
+subscribe at connect is never retried.
+
+What a reconnect loses: the transactions between the drop and the new stream, and on Harmonic
+the open slots of that stream, which get no end; framing restarts at the next slot start. BAM
+resumes the slot in progress, so its indexes keep counting. Each attempt logs a warning with
+the feed, the code, the attempt and the wait. The exit summary counts the subscribes that
+succeeded. Reconnect state is log-only until source metrics land. An outage of minutes, for
+example the Alpenglow switch on mainnet (Triton blog, 2026-10-14: both feeds off during the
+switch), is bridged when the feeds return.
 
 ## Manual run
 

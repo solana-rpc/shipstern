@@ -145,10 +145,10 @@ fn transaction_filter(
     // Unset means unknown on the feed, so only an explicit list excludes it server-side.
     let execution_results = match prefilter.failed {
         None => vec![],
-        Some(false) => vec![ExecutionResult::Success as i32],
+        Some(false) => vec![ExecutionResult::Success.into()],
         Some(true) => vec![
-            ExecutionResult::ExecutionFailure as i32,
-            ExecutionResult::FeesOnly as i32,
+            ExecutionResult::ExecutionFailure.into(),
+            ExecutionResult::FeesOnly.into(),
         ],
     };
 
