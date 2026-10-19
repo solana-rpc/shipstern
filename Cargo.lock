@@ -7114,6 +7114,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "shipstern-preconf-source"
+version = "0.12.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "clap 4.6.6",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "shipstern",
+ "shipstern-core",
+ "solana-message 4.4.1",
+ "solana-pubkey 4.2.1",
+ "solana-transaction",
+ "thiserror 1.0.69",
+ "tokio",
+ "tonic 0.14.6",
+ "tracing",
+ "triton-preconfs-proto",
+ "wincode",
+ "yellowstone-grpc-proto",
+]
+
+[[package]]
 name = "shipstern-proc-macro"
 version = "0.12.0"
 dependencies = [
@@ -13594,6 +13618,19 @@ dependencies = [
  "rusb",
  "thiserror 2.0.20",
  "tracing",
+]
+
+[[package]]
+name = "triton-preconfs-proto"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e37240ebc8bcbd76c815cbd76a066191d6f47eca7ce8a031063284a2c8b030e"
+dependencies = [
+ "prost 0.14.4",
+ "protoc-bin-vendored",
+ "tonic 0.14.6",
+ "tonic-prost",
+ "tonic-prost-build",
 ]
 
 [[package]]
