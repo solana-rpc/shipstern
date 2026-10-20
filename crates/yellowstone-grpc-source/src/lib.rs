@@ -82,7 +82,7 @@ impl YellowstoneGrpcConfig {
 }
 
 /// Updates from one connection.
-type UpdateStream = BoxStream<'static, Result<SubscribeUpdate, Status>>;
+pub type UpdateStream = BoxStream<'static, Result<SubscribeUpdate, Status>>;
 
 /// Hand a terminal status to the runtime and turn it into the exit status.
 async fn stream_error(
@@ -95,11 +95,26 @@ async fn stream_error(
     SourceExitStatus::StreamError { code, message }
 }
 
-/// Dial the server and subscribe with `request`.
-async fn open_stream(
+///
+/// Check `config`, dial the server and subscribe with `request`.
+///
+/// The server refuses out-of-order or overlapping data-slice windows and answers
+/// with an error instead of a stream, so the config is checked before dialing,
+/// where the error can say which window is at fault.
+///
+/// # Errors
+///
+/// Returns an error when [`YellowstoneGrpcConfig::validate`] fails, or when the
+/// client cannot connect or subscribe.
+///
+pub async fn open_stream(
     config: &YellowstoneGrpcConfig,
     request: SubscribeRequest,
 ) -> Result<(SubscribeRequestSink, UpdateStream), ShipsternError> {
+    config
+        .validate()
+        .map_err(|err| ShipsternError::Other(Box::new(err)))?;
+
     let timeout = Duration::from_secs(config.timeout);
     let builder = GeyserGrpcClient::build_from_shared(config.endpoint.clone())?
         .x_token(config.x_token.clone())?
@@ -136,8 +151,9 @@ pub struct YellowstoneGrpcSource {
     config: YellowstoneGrpcConfig,
 }
 
-/// Build the wire subscription for `filters`, layering on the commitment the
-/// `From<Filters>` conversion leaves unset.
+///
+/// Build the wire subscription for `filters`, layering on the commitment and
+/// the accounts data slice that the `From<Filters>` conversion leaves unset.
 ///
 /// `from_slot` is deliberately not applied here. It is a one-time start
 /// position rather than a steady-state setting, and repeating it on a
@@ -147,7 +163,10 @@ pub struct YellowstoneGrpcSource {
 /// richat rejects the request outright if the set contains blocks. Only the
 /// initial subscribe sets it.
 ///
-fn build_subscribe_request(filters: Filters, config: &YellowstoneGrpcConfig) -> SubscribeRequest {
+pub fn build_subscribe_request(
+    filters: Filters,
+    config: &YellowstoneGrpcConfig,
+) -> SubscribeRequest {
     let mut request: SubscribeRequest = filters.into();
 
     if let Some(commitment_level) = config.commitment_level {
@@ -250,13 +269,6 @@ impl SourceTrait for YellowstoneGrpcSource {
         } = ctx;
 
         let config = &self.config;
-
-        // The server refuses out-of-order or overlapping windows and answers
-        // with an error instead of a stream, so check before dialing and say
-        // which window is at fault.
-        config
-            .validate()
-            .map_err(|err| ShipsternError::Other(Box::new(err)))?;
 
         // A closed filter channel means no RuntimeHandle can publish more updates.
         let has_handle = filter_updates.has_changed().is_ok();

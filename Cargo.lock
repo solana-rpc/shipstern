@@ -6851,7 +6851,6 @@ dependencies = [
  "tokio",
  "tracing",
  "yellowstone-block-machine",
- "yellowstone-grpc-client",
  "yellowstone-grpc-proto",
 ]
 

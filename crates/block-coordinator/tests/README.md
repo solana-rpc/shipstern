@@ -88,6 +88,8 @@
 | Test | Verifies |
 |------|----------|
 | `unknown_slot_status_is_skipped` | A slot status the proto does not know is skipped, not read as processed or as missing its bank ID |
+| `subscription_carries_the_config_data_slice` | The subscription carries the config's data slice, at processed |
+| `invalid_data_slice_fails_before_dialing` | A data slice the server would refuse fails the run before it subscribes |
 
 ## Fixture File
 

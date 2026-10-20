@@ -14,7 +14,6 @@ yellowstone-block-machine = { workspace = true, features = [
   "dragonsmouth-thin",
 ] }
 yellowstone-grpc-proto = { workspace = true }
-yellowstone-grpc-client = { workspace = true }
 shipstern = { workspace = true }
 shipstern-core = { workspace = true }
 shipstern-yellowstone-grpc-source = { workspace = true }

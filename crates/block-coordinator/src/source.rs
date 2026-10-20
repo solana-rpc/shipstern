@@ -13,15 +13,13 @@ use shipstern::{
     Error as ShipsternError,
 };
 use shipstern_core::CommitmentLevel;
-use shipstern_yellowstone_grpc_source::YellowstoneGrpcConfig;
+use shipstern_yellowstone_grpc_source::{
+    build_subscribe_request, open_stream, YellowstoneGrpcConfig,
+};
 use tokio::sync::mpsc::Sender;
-use yellowstone_grpc_client::GeyserGrpcClient;
-use yellowstone_grpc_proto::{
-    geyser::{
-        subscribe_update::UpdateOneof, SlotStatus, SubscribeRequest,
-        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry, SubscribeUpdate,
-    },
-    tonic::transport::ClientTlsConfig,
+use yellowstone_grpc_proto::geyser::{
+    subscribe_update::UpdateOneof, SlotStatus, SubscribeRequest, SubscribeRequestFilterBlocksMeta,
+    SubscribeRequestFilterEntry, SubscribeUpdate,
 };
 
 use crate::{fixtures::FixtureWriter, types::CoordinatorInput};
@@ -183,19 +181,10 @@ impl SourceTrait for CoordinatorSource {
             .source_label
             .as_deref()
             .unwrap_or("CoordinatorSource");
-        let timeout = Duration::from_secs(config.timeout);
 
-        let builder = GeyserGrpcClient::build_from_shared(config.endpoint.clone())?
-            .x_token(config.x_token.clone())?
-            .max_decoding_message_size(config.max_decoding_message_size.unwrap_or(usize::MAX))
-            .accept_compressed(config.accept_compression.unwrap_or_default().into())
-            .connect_timeout(timeout)
-            .timeout(timeout)
-            .tls_config(ClientTlsConfig::new().with_native_roots())?;
-
-        let mut client = builder.connect().await?;
-
-        let subscribe_request = SubscribeRequest::from(filters)
+        // The gRPC source's builder applies the config's data slice. Its commitment is
+        // replaced below, since the coordinator needs every bank.
+        let subscribe_request = build_subscribe_request(filters, config)
             .with_coordinator_subscriptions()
             .with_from_slot(config.from_slot)
             .with_commitment_processed();
@@ -211,11 +200,8 @@ impl SourceTrait for CoordinatorSource {
             "subscribing to gRPC stream"
         );
 
-        let (_sub_tx, stream) = client
-            .subscribe_with_request(Some(subscribe_request))
-            .await?;
-
-        let mut stream = std::pin::pin!(stream);
+        // Checks the config before dialing. The sink stays open for the whole run.
+        let (_sink, mut stream) = open_stream(config, subscribe_request).await?;
 
         tracing::info!(source_label, "gRPC stream started");
 
