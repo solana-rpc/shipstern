@@ -32,8 +32,7 @@ Harmonic regions: `ams`, `ewr`, `fra`, `lon`, `tyo`, `sgp`, `slc`. BAM regions: 
 Regional streams carry different slots, so a far region adds latency, not coverage. A region named
 twice in one list opens one stream; the same region in both lists opens one stream per feed. Each
 feed covers only the slots whose leader runs that client, so both feeds together give the most
-coverage. Triton enables each feed on the token separately. A region of a feed the token lacks
-gets `UNAUTHENTICATED` at subscribe, which stops the source before any stream runs.
+coverage. Triton enables each feed on the token separately.
 
 ```rust,ignore
 let runtime = Runtime::builder()
@@ -132,9 +131,43 @@ switch), is bridged when the feeds return.
 
 ## Manual run
 
-1. Get the feeds enabled on a Triton token.
-2. Set `x-token` and one or two nearby regions per feed.
-3. Run a pipeline with a narrow transaction prefilter, for example one program. A broad filter
-   hits the coverage share within a minute.
-4. Compare the signatures with a Dragon's Mouth stream at processed commitment. The landing
-   rates and lead times are not measured yet.
+1. Ask Triton to enable the feeds on your token. Preconfs are not self-serve. Check the token
+   before you run anything:
+
+   ```sh
+   # preconfs.proto is in github.com/rpcpool/preconfs-client (preconfs-proto/proto/)
+   grpcurl -H "x-token: $TOKEN" -proto preconfs.proto preconfs.rpcpool.com:443 preconfs.Harmonic/GetVersion
+   ```
+
+   A token with no feed answers `Unauthenticated` with a message like `x-token not entitled to
+   preconfs`. A token with at least one feed answers with the server version and the region that
+   took the call. The check does not say which feed is enabled: a configured feed the token lacks
+   fails at subscribe with `UNAUTHENTICATED`.
+2. Copy `examples/preconf/Shipstern.example.toml` to `Shipstern.toml` in the same directory. Put
+   the token in it and set the regions near you (see Configuration). The repo ignores
+   `Shipstern.toml`.
+3. Run. The example subscribes to the SPL Token program only. The feed clips a filter that
+   matches over 33% of a region's transactions over 60 s (see Exit). If `The feed withheld
+   transactions` appears, narrow the filter, for example to one mint.
+
+   ```sh
+   cd examples/preconf
+   RUST_LOG=info cargo run -p shipstern-example-preconf -- --config Shipstern.toml
+   ```
+
+A healthy run logs:
+
+- the example's `info` line per SPL Token instruction with `slot`, `index` (from 0 in each
+  slot), the signature and the instruction; the source logs nothing at `info` while the streams
+  are healthy;
+- `warn` lines that are normal: `The builder restarted a slot; its earlier transactions stay
+  delivered`, `The feed withheld transactions: the account is over its coverage share`, and
+  `A stream dropped, resubscribing`. The `info` line `A stream subscribed again` follows the
+  last one;
+- at exit, one `Preconf source stopped` line with the drop counts.
+
+A terminal status stops the run with its gRPC code; see Exit.
+
+Landing rates and lead times are not measured yet. To measure them, run a Dragon's Mouth
+stream at processed commitment with the same filter next to the example and compare the
+signatures per slot.
