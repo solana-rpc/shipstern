@@ -178,7 +178,7 @@ use tokio::sync::mpsc;
 use yellowstone_grpc_proto::{
     geyser::{
         subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate, SubscribeUpdateBlockMeta,
-        SubscribeUpdateEntry, SubscribeUpdateSlot,
+        SubscribeUpdateEntry, SubscribeUpdateEntryUpdateParent, SubscribeUpdateSlot,
     },
     prelude::{BlockHeight, UnixTimestamp},
 };
@@ -1812,4 +1812,90 @@ async fn child_confirm_before_forked_parent_keeps_parent() {
 
     harness.expect_flush(43).await;
     harness.expect_flush(44).await;
+}
+
+#[tokio::test]
+async fn cleared_banks_release_payloads_and_ignore_late_callbacks() {
+    let mut harness = TestHarness::spawn();
+    // Cleared candidate banks release records immediately. Their parser callbacks and
+    // raw lifecycle messages can arrive after invalidation.
+    for bank_id in 1000..1003 {
+        send_to_bank(
+            &harness,
+            make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
+            bank_id,
+        )
+        .await;
+        for record in ["before-clear", "late-callback"] {
+            if record == "late-callback" {
+                drop(
+                    harness
+                        .parsed_tx
+                        .reserve_many(harness.parsed_tx.max_capacity())
+                        .await
+                        .unwrap(),
+                );
+                harness
+                    .input_tx
+                    .send(CoordinatorInput::GeyserUpdate(Box::new(SubscribeUpdate {
+                        update_oneof: Some(UpdateOneof::EntryUpdateParent(
+                            SubscribeUpdateEntryUpdateParent {
+                                slot: 42,
+                                cleared_bank_id: bank_id,
+                                parent_slot: 40,
+                                ..Default::default()
+                            },
+                        )),
+                        ..Default::default()
+                    })))
+                    .await
+                    .unwrap();
+                drop(
+                    harness
+                        .input_tx
+                        .reserve_many(harness.input_tx.max_capacity())
+                        .await
+                        .unwrap(),
+                );
+            }
+            for message in [
+                CoordinatorMessage::InstructionParsed {
+                    slot: 42,
+                    bank_id,
+                    key: InstructionRecordSortKey::new(0, vec![0]),
+                    record: record.to_string(),
+                },
+                CoordinatorMessage::AccountParsed {
+                    slot: 42,
+                    bank_id,
+                    key: AccountRecordSortKey::new(1, [1; 32]),
+                    record: record.to_string(),
+                },
+                CoordinatorMessage::TransactionParsed { slot: 42, bank_id },
+            ] {
+                harness.parsed_tx.send(message).await.unwrap();
+            }
+        }
+        // Raw lifecycle delivery can also lag the invalidation. It must not revive A
+        // inside the block machine or let A's late commitment select the slot's winner.
+        for update in [
+            make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
+            make_entry_update(42, 0, 0),
+            make_block_meta_update(42, 41, 0, &Hash::new_unique()),
+            make_slot_update(42, 41, SlotStatus::SlotConfirmed),
+        ] {
+            send_to_bank(&harness, update, bank_id).await;
+        }
+    }
+
+    let replacement = harness.slot(42).parent(40).record("winner").parsed().await;
+    replacement.confirm().await;
+    harness.expect_flush(42).await.records(&["winner"]);
+    harness.expect_account_flush(42).await.records(&[]);
+    let child = harness.slot(43).parent(42).empty().await;
+    child.confirm().await;
+    harness.expect_flush(43).await.empty();
+    harness.expect_account_flush(43).await.records(&[]);
+    harness.expect_no_flush().await;
+    harness.expect_no_account_flush().await;
 }

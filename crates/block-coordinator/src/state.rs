@@ -114,6 +114,15 @@ impl<R> CoordinatorState<R> {
 
     pub fn discarded_slot_count(&self) -> usize { self.discarded_slots.len() }
 
+    /// Reject delayed events for cleared or losing banks. Incomplete banks still need
+    /// their commitment event to discard the incomplete slot.
+    pub(crate) fn is_invalidated_bank(&self, key: BankKey) -> bool {
+        matches!(
+            self.discarded_banks.get(&key),
+            Some(DiscardReason::Dead | DiscardReason::Forked)
+        )
+    }
+
     pub(crate) fn is_slot_discarded(&self, slot: Slot) -> bool {
         self.discarded_slots.contains_key(&slot)
     }

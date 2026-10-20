@@ -95,7 +95,7 @@ pub struct CoordinatorSourceConfig {
 
 trait CoordinatorSubscription {
     /// Add all subscriptions required by the BlockSM coordinator:
-    /// - entries (block reconstruction)
+    /// - entries and bank invalidations (block reconstruction)
     /// - blocks_meta (BlockSummary)
     /// - slot lifecycle (FirstShredReceived, CreatedBank, Completed, Dead).
     fn with_coordinator_subscriptions(self) -> Self;
@@ -110,10 +110,10 @@ trait CoordinatorSubscription {
 
 impl CoordinatorSubscription for SubscribeRequest {
     fn with_coordinator_subscriptions(mut self) -> Self {
-        self.entry.insert(
-            "coordinator".to_string(),
-            SubscribeRequestFilterEntry::default(),
-        );
+        self.entry
+            .insert("coordinator".to_string(), SubscribeRequestFilterEntry {
+                include_update_parent: Some(true),
+            });
         self.blocks_meta.insert(
             "coordinator".to_string(),
             SubscribeRequestFilterBlocksMeta {},
@@ -325,11 +325,12 @@ impl SourceTrait for CoordinatorSource {
                     }
 
                     // Forward BlockSM-relevant events to the coordinator.
-                    // Entry, Slot, and BlockMeta events are needed for block reconstruction.
+                    // Parent updates also release records from the bank that was cleared.
                     let is_block_sm_event = matches!(
                         subscribe_update.update_oneof,
                         Some(
                             UpdateOneof::Entry(_)
+                                | UpdateOneof::EntryUpdateParent(_)
                                 | UpdateOneof::Slot(_)
                                 | UpdateOneof::BlockMeta(_)
                         )
@@ -393,7 +394,17 @@ mod tests {
         SubscribeUpdateSlot,
     };
 
-    use super::validate_bank_id;
+    use super::{validate_bank_id, CoordinatorSubscription};
+
+    #[test]
+    fn coordinator_subscription_requests_cleared_bank_updates() {
+        let request = yellowstone_grpc_proto::geyser::SubscribeRequest::default()
+            .with_coordinator_subscriptions();
+        assert_eq!(
+            request.entry["coordinator"].include_update_parent,
+            Some(true)
+        );
+    }
 
     #[test]
     fn missing_bank_id_fails_closed() {

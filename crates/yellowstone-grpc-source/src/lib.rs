@@ -11,9 +11,7 @@ use shipstern::{
 };
 use shipstern_core::{AccountsDataSlice, Filters, PrefilterError};
 use tokio::sync::{mpsc, watch};
-use yellowstone_grpc_client::{
-    Backoff, GeyserGrpcClient, ReconnectConfig, ReconnectEvent, SubscribeRequestSink,
-};
+use yellowstone_grpc_client::{Backoff, GeyserGrpcClient, ReconnectConfig, SubscribeRequestSink};
 use yellowstone_grpc_proto::{
     geyser::{SlotStatus, SubscribeRequest, SubscribeUpdate},
     tonic::{codec::CompressionEncoding, transport::ClientTlsConfig, Code, Status},
@@ -43,8 +41,7 @@ const fn default_auto_reconnect() -> bool { true }
 /// Reconnect defaults, deliberately sturdier than the client library's
 /// (3 retries / 10ms base), which gives up in under ~100ms. `SlotResume` doubles
 /// from 500ms and caps each wait at 10s, so 10 retries span about 65s
-/// (500ms, 1s, 2s, 4s, 8s, then 10s each). `BankReplay` hands the client the same
-/// budget without the cap, so there it spans about 8.5 minutes. Recovery also needs
+/// (500ms, 1s, 2s, 4s, 8s, then 10s each). Recovery also needs
 /// the server to still hold the missed slots, or the run ends with `OutOfRange`.
 const DEFAULT_RECONNECT_MAX_RETRIES: u32 = 10;
 const DEFAULT_RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
@@ -92,10 +89,9 @@ pub struct YellowstoneGrpcConfig {
     ///
     /// At confirmed or finalized the source subscribes again from the last slot it saw, and
     /// adds a `slots` filter so a slot is on record even before the first matching update. At
-    /// processed the client replays the cut-off banks, which needs no `from_slot` and no
-    /// `RuntimeHandle`, holds replayed updates in memory until they finalize, can repeat the
-    /// cut-off block, and adds its own `blocks_meta` and `slots` filters. Set it to `false` for
-    /// a server on Geyser proto 12.7 or older, or one without stored slots.
+    /// processed the stream stops on loss: handlers cannot retract an invalidated bank or
+    /// verify complete replacement delivery. Set this to `false` for a server without
+    /// stored slots.
     ///
     #[arg(long, env, default_value_t = true)]
     #[serde(default = "default_auto_reconnect")]
@@ -103,7 +99,8 @@ pub struct YellowstoneGrpcConfig {
 
     /// Max reconnect attempts before the stream gives up.
     ///
-    /// Only applies when `auto_reconnect` is set. Defaults to 10 when unset.
+    /// Only applies to confirmed/finalized streams with `auto_reconnect` set.
+    /// Defaults to 10 when unset.
     #[arg(long, env)]
     pub reconnect_max_retries: Option<u32>,
 }
@@ -164,9 +161,9 @@ impl YellowstoneGrpcConfig {
         ))
     }
 
-    /// How a lost stream is recovered. `has_handle` says a `RuntimeHandle` can change the
-    /// request mid-stream, which the client's bank replay cannot follow.
-    pub fn reconnect_mode(&self, has_handle: bool) -> ReconnectMode {
+    /// How a lost stream is recovered. Processed streams stop on loss. The handle argument
+    /// is retained for compatibility.
+    pub fn reconnect_mode(&self, _has_handle: bool) -> ReconnectMode {
         if self.backoff().is_none() {
             return ReconnectMode::Off;
         }
@@ -174,7 +171,6 @@ impl YellowstoneGrpcConfig {
             Some(CommitmentLevel::Confirmed | CommitmentLevel::Finalized) => {
                 ReconnectMode::SlotResume
             },
-            _ if self.from_slot.is_none() && !has_handle => ReconnectMode::BankReplay,
             _ => ReconnectMode::Off,
         }
     }
@@ -183,9 +179,8 @@ impl YellowstoneGrpcConfig {
 /// How the source recovers a lost stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReconnectMode {
-    /// The client replays the cut-off banks. Only a processed stream from the tip with a
-    /// fixed request, since a slot can have several banks there and only the client's replay
-    /// can retract one.
+    /// Retained for compatibility. The source does not select bank replay because handlers
+    /// cannot retract invalidated banks or verify complete replacement delivery.
     BankReplay,
     /// The source subscribes again from the last slot it saw and drops that slot's repeats.
     /// A confirmed or finalized slot never changes once delivered, so this is exact. It adds
@@ -270,26 +265,19 @@ async fn stream_error(
     SourceExitStatus::StreamError { code, message }
 }
 
-/// Dial the server and subscribe. `BankReplay` arms the client's own reconnect.
+/// Dial the server and subscribe. Recovery, when enabled, is managed by the source.
 async fn open_stream(
     config: &YellowstoneGrpcConfig,
-    mode: ReconnectMode,
     request: SubscribeRequest,
 ) -> Result<(SubscribeRequestSink, UpdateStream), ShipsternError> {
     let timeout = Duration::from_secs(config.timeout);
-    let mut builder = GeyserGrpcClient::build_from_shared(config.endpoint.clone())?
+    let builder = GeyserGrpcClient::build_from_shared(config.endpoint.clone())?
         .x_token(config.x_token.clone())?
         .max_decoding_message_size(config.max_decoding_message_size.unwrap_or(usize::MAX))
         .accept_compressed(config.accept_compression.unwrap_or_default().into())
         .connect_timeout(timeout)
         .timeout(timeout)
         .tls_config(ClientTlsConfig::new().with_native_roots())?;
-
-    if mode == ReconnectMode::BankReplay
-        && let Some(reconnect_config) = config.reconnect_config()
-    {
-        builder = builder.set_reconnect_config(reconnect_config);
-    }
 
     let mut client = builder.connect().await?;
 
@@ -307,11 +295,6 @@ async fn open_stream(
         commitment = ?request.commitment,
         "Subscribing to gRPC stream"
     );
-
-    if mode == ReconnectMode::BankReplay {
-        let (sink, stream) = client.subscribe_with_reconnect(Some(request)).await?;
-        return Ok((sink, stream.filter_map(reconnect_update).boxed()));
-    }
 
     let (sink, stream) = client.subscribe_with_request(Some(request)).await?;
     Ok((sink, stream.boxed()))
@@ -431,29 +414,6 @@ async fn send_filter_update<S>(
     *filter_updates_sent += 1;
 }
 
-///
-/// Unwrap a reconnect event into the update the runtime takes.
-///
-/// After a reconnect the client names the banks that were cut off, then replays them.
-/// Updates already sent cannot be taken back, so handlers can see them twice.
-///
-async fn reconnect_update(
-    event: Result<ReconnectEvent, Status>,
-) -> Option<Result<SubscribeUpdate, Status>> {
-    match event {
-        Ok(ReconnectEvent::Update { update, .. }) => Some(Ok(update)),
-        Ok(ReconnectEvent::DiscardBanks { banks, reason, .. }) => {
-            tracing::warn!(
-                bank_count = banks.len(),
-                ?reason,
-                "Reconnect replays banks that were cut off; handlers can see their updates twice"
-            );
-            None
-        },
-        Err(status) => Some(Err(status)),
-    }
-}
-
 #[async_trait]
 impl SourceTrait for YellowstoneGrpcSource {
     /// Open the subscription and pump updates until the stream ends, sending
@@ -478,8 +438,7 @@ impl SourceTrait for YellowstoneGrpcSource {
             .validate()
             .map_err(|err| ShipsternError::Other(Box::new(err)))?;
 
-        // With no RuntimeHandle the update channel is already closed, so no filter
-        // update can arrive and the client may reconnect the stream.
+        // A closed filter channel means no RuntimeHandle can publish more updates.
         let has_handle = filter_updates.has_changed().is_ok();
 
         // A closed slot can still hold one set that the runtime did not read.
@@ -492,13 +451,21 @@ impl SourceTrait for YellowstoneGrpcSource {
 
         let mode = config.reconnect_mode(has_handle);
         match mode {
-            ReconnectMode::Off if config.auto_reconnect => tracing::info!(
-                commitment = ?config.commitment_level,
-                from_slot = ?config.from_slot,
-                has_handle,
-                "Auto-reconnect at processed needs no from_slot and no RuntimeHandle; this \
-                 stream stops on stream loss"
-            ),
+            ReconnectMode::Off
+                if config.auto_reconnect
+                    && matches!(
+                        config.commitment_level,
+                        None | Some(CommitmentLevel::Processed)
+                    ) =>
+            {
+                tracing::info!(
+                    commitment = ?config.commitment_level,
+                    from_slot = ?config.from_slot,
+                    has_handle,
+                    "Processed streams stop on loss; bank replay requires handler invalidation \
+                     and complete replacement delivery"
+                )
+            },
             mode => tracing::debug!(?mode, "Auto-reconnect mode"),
         }
         let backoff = (mode == ReconnectMode::SlotResume)
@@ -520,7 +487,7 @@ impl SourceTrait for YellowstoneGrpcSource {
             let mut request = build_subscribe_request(filters.clone(), &config, mode);
             request.from_slot = from_slot;
 
-            let (mut sink, mut stream) = match open_stream(&config, mode, request).await {
+            let (mut sink, mut stream) = match open_stream(&config, request).await {
                 Ok(opened) => opened,
                 Err(err) => {
                     // A failed reopen counts like a loss. A failed first connect is the caller's.
@@ -573,14 +540,6 @@ impl SourceTrait for YellowstoneGrpcSource {
                                 filter_updates_sent,
                                 "Received error status from stream"
                             );
-
-                            // Only an older server makes the reconnect stream fail on a missing bank_id.
-                            if mode == ReconnectMode::BankReplay
-                                && status.code() == Code::FailedPrecondition
-                                && status.message().contains("bank_id")
-                            {
-                                tracing::warn!("The server sends no bank_id; set auto-reconnect = false");
-                            }
 
                             if mode == ReconnectMode::SlotResume && is_recoverable(&status) {
                                 break StreamStop::Lost(Some(status));
@@ -805,8 +764,7 @@ mod tests {
         assert!(sink.sent.is_empty());
     }
 
-    /// The client's bank replay takes only a processed stream from the tip with a fixed
-    /// request. Confirmed and finalized resume from the last slot whatever the request.
+    /// Processed streams stop on loss for every request; committed streams can resume.
     #[test]
     fn reconnect_mode_follows_commitment_and_request() {
         let config = |extra: &str| {
@@ -815,7 +773,7 @@ mod tests {
             ))
         };
 
-        assert_eq!(config("").reconnect_mode(false), ReconnectMode::BankReplay);
+        assert_eq!(config("").reconnect_mode(false), ReconnectMode::Off);
         assert_eq!(config("").reconnect_mode(true), ReconnectMode::Off);
         assert_eq!(
             config("from-slot = 10").reconnect_mode(false),

@@ -124,8 +124,18 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                     }
                 }
                 Some(msg) = self.parsed_rx.recv() => {
-                    self.expect_slot(msg.slot());
-                    Self::convert_parsed_message(msg)
+                    let bank_id = match &msg {
+                        CoordinatorMessage::InstructionParsed { bank_id, .. }
+                        | CoordinatorMessage::AccountParsed { bank_id, .. }
+                        | CoordinatorMessage::TransactionParsed { bank_id, .. }
+                        | CoordinatorMessage::ParseStats { bank_id, .. } => *bank_id,
+                    };
+                    if self.state.is_invalidated_bank(BankKey::new(msg.slot(), bank_id)) {
+                        Vec::new()
+                    } else {
+                        self.expect_slot(msg.slot());
+                        Self::convert_parsed_message(msg)
+                    }
                 }
                 else => {
                     tracing::warn!("Coordinator channels closed, shutting down");
@@ -203,11 +213,27 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         let bank = match &update.update_oneof {
             Some(UpdateOneof::Entry(entry)) => Some((entry.slot, entry.bank_id)),
             Some(UpdateOneof::BlockMeta(meta)) => Some((meta.slot, meta.bank_id)),
+            Some(UpdateOneof::EntryUpdateParent(parent)) => {
+                Some((parent.slot, parent.cleared_bank_id))
+            },
             Some(UpdateOneof::Slot(status)) => status.bank_id.map(|bank_id| (status.slot, bank_id)),
             _ => None,
         };
         if let Some((slot, bank_id)) = bank {
             self.check_bank_slot(slot, bank_id)?;
+            if self.state.is_invalidated_bank(BankKey::new(slot, bank_id)) {
+                return Ok(events);
+            }
+        }
+
+        // UpdateParent invalidates one bank, not the slot's replacement. Block machine 0.11
+        // ignores this event, so release its parsed records here and reject late callbacks.
+        if let Some(UpdateOneof::EntryUpdateParent(parent)) = &update.update_oneof {
+            return Ok(vec![CoordinatorEvent::BankDiscarded {
+                slot: parent.slot,
+                bank_id: parent.cleared_bank_id,
+                reason: DiscardReason::Forked,
+            }]);
         }
 
         let Some(info) = <SubscribeUpdate as GeyserEventAdapter>::extract_geyser_ev_info(update)

@@ -47,6 +47,7 @@
 | `unfrozen_bank_of_forked_slot_can_still_win` | A bank that has not frozen survives a fork report and can win |
 | `bank_frozen_after_fork_report_does_not_block` | A bank that freezes after a fork report does not block later slots |
 | `discarded_slot_ignores_parsed_messages` | Messages for discarded slot dropped |
+| `cleared_banks_release_payloads_and_ignore_late_callbacks` | Explicit invalidations release records immediately and preserve replacement banks |
 
 ### Fork Handling
 | Test | Verifies |
