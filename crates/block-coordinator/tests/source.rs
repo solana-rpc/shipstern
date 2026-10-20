@@ -326,3 +326,45 @@ async fn invalid_data_slice_fails_before_dialing() {
     );
     assert!(run.requests.is_empty(), "the source must not subscribe");
 }
+
+/// An UpdateParent is the only notice that a bank was cleared, and the coordinator
+/// releases that bank's records on it. The source asks for it and forwards it as is.
+#[tokio::test]
+async fn entry_update_parent_reaches_the_coordinator() {
+    let cleared = SubscribeUpdateEntryUpdateParent {
+        slot: 42,
+        cleared_bank_id: 7,
+        parent_slot: 40,
+        parent_block_id: vec![1; 32],
+    };
+    let run = run(|_| {}, vec![SubscribeUpdate {
+        update_oneof: Some(UpdateOneof::EntryUpdateParent(cleared.clone())),
+        ..Default::default()
+    }])
+    .await;
+
+    assert!(
+        matches!(run.exit, Ok(SourceExitStatus::StreamEnded)),
+        "got {:?}",
+        run.exit
+    );
+
+    let [request] = run.requests.as_slice() else {
+        panic!("expected one subscription, got {}", run.requests.len());
+    };
+    assert_eq!(
+        request.entry["coordinator"].include_update_parent,
+        Some(true)
+    );
+
+    let forwarded: Vec<_> = run
+        .coordinator
+        .iter()
+        .filter_map(|update| match &update.update_oneof {
+            Some(UpdateOneof::EntryUpdateParent(parent)) => Some(parent.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(forwarded, [cleared]);
+    assert!(run.runtime.is_empty(), "no runtime pipeline takes it");
+}
