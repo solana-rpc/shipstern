@@ -29,14 +29,15 @@
 | `dead_slot_spares_sibling` | A dead slot does not discard its sibling |
 | `incomplete_block_discarded` | BlockMeta without entries is discarded as incomplete |
 | `late_block_meta_for_losing_bank_keeps_confirmed_bank` | Only the confirmed bank of a slot flushes |
-| `lost_parent_block_meta_does_not_block_child_forever` | A parent that never freezes is discarded after 300 slots |
-| `lost_parent_after_a_jump_does_not_block_child_forever` | The first bank after a jump past the frozen window still reports its lost parent |
-| `lost_block_meta_of_winning_bank_does_not_block_child_forever` | A frozen losing bank does not hide a lost parent |
-| `late_parent_block_meta_within_grace_flushes` | A parent BlockMeta that arrives inside the grace window still flushes |
-| `record_for_skipped_slot_does_not_block_forever` | A record for a skipped slot that never freezes is discarded after 300 slots |
-| `late_record_for_skipped_slot_does_not_block_forever` | The same holds when the record arrives after the child froze |
-| `record_below_first_parent_edge_does_not_block_forever` | A record below the first parent edge at stream start is discarded after 300 slots |
-| `frozen_parent_that_never_confirms_does_not_block_forever` | A frozen parent that never confirms is discarded after 300 slots |
+| `lost_parent_block_meta_stops_coordinator` | A parent that never freezes stops the coordinator with `TooManyPendingBanks` instead of a silent stall |
+| `lost_parent_after_a_jump_stops_coordinator` | The same holds for the first bank after a jump |
+| `lost_block_meta_of_winning_bank_stops_coordinator` | A winning bank whose BlockMeta never comes stops the coordinator behind its child |
+| `late_parent_block_meta_flushes` | A parent BlockMeta that arrives under the pending limit still flushes, parent first |
+| `record_for_a_seen_skipped_slot_does_not_block` | A skipped slot whose bank the block machine saw is discarded when its child confirms |
+| `record_for_an_unseen_skipped_slot_stops_coordinator` | A record for a slot the block machine never saw stops the coordinator |
+| `late_record_for_an_unseen_skipped_slot_stops_coordinator` | The same holds when the record arrives after the child froze |
+| `record_below_first_parent_edge_stops_coordinator` | A record below the first parent edge at stream start stops the coordinator |
+| `frozen_parent_that_never_confirms_stops_coordinator` | A frozen parent that never confirms stops the coordinator |
 | `far_bank_on_other_branch_keeps_slot_with_records` | A slot with records that nothing skips is not discarded |
 | `alpenglow_switch_skips_vote_only_slots` | Vote-only slots of the Alpenglow switch never block, and the last Tower block flushes on Finalized alone |
 | `child_of_repaired_dead_slot_flushes` | A forked report does not stop a confirmed child of a repaired slot |

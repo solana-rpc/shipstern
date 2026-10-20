@@ -39,6 +39,9 @@ pub enum DiscardReason {
     Dead,
     Forked,
     Incomplete,
+    /// An UpdateParent abandoned the bank, and its slot replays under a new bank ID. Bank-scoped
+    /// only: the slot itself stays live.
+    Cleared,
 }
 
 impl fmt::Display for DiscardReason {
@@ -47,6 +50,7 @@ impl fmt::Display for DiscardReason {
             Self::Dead => "dead",
             Self::Forked => "forked",
             Self::Incomplete => "incomplete",
+            Self::Cleared => "cleared",
         };
         f.write_str(label)
     }
@@ -71,6 +75,20 @@ pub enum CoordinatorError {
     },
     AccountOutputChannelClosed {
         slot: Slot,
+    },
+    /// More banks wait to flush than the limit allows, so output stopped behind a slot that
+    /// never resolves: a lost BlockMeta, a missing commitment, or records for a slot the block
+    /// machine never saw. Restart from the last checkpoint to replay it.
+    TooManyPendingBanks {
+        pending: usize,
+        limit: usize,
+        oldest_slot: Option<Slot>,
+    },
+    /// An UpdateParent cleared a bank that had already frozen or confirmed. Agave clears only a
+    /// bank still replaying, so the stream is inconsistent.
+    ClearedCommittedBank {
+        slot: Slot,
+        bank_id: u64,
     },
 }
 
@@ -98,6 +116,20 @@ impl fmt::Display for CoordinatorError {
             Self::AccountOutputChannelClosed { slot } => {
                 write!(f, "Account output channel closed while sending slot {slot}")
             },
+            Self::TooManyPendingBanks {
+                pending,
+                limit,
+                oldest_slot,
+            } => write!(
+                f,
+                "{pending} banks are pending, over the limit of {limit}; output stopped behind \
+                 slot {oldest_slot:?}"
+            ),
+            Self::ClearedCommittedBank { slot, bank_id } => write!(
+                f,
+                "UpdateParent cleared bank {bank_id} of slot {slot}, which had already frozen or \
+                 confirmed"
+            ),
         }
     }
 }

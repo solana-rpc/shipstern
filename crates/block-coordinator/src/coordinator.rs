@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use solana_clock::Slot;
 use solana_commitment_config::CommitmentLevel;
@@ -19,9 +19,14 @@ use crate::{
     },
 };
 
-/// Core orchestrator that owns a `BlocksStateMachineWrapper` and delegates
-/// ordering/flush decisions to the pure-ish `CoordinatorState`. It also discards a slot that
-/// never freezes or never confirms, because only the wrapper outputs show that.
+///
+/// Core orchestrator that owns a `BlocksStateMachineWrapper` and delegates ordering and flush
+/// decisions to the pure-ish `CoordinatorState`.
+///
+/// A slot that never resolves, such as one whose BlockMeta was lost, holds back every later slot.
+/// Rather than guess which records to drop, the coordinator stops with `TooManyPendingBanks` once
+/// more banks wait than the limit allows, so the caller restarts from its checkpoint and replays.
+///
 pub struct BlockMachineCoordinator<R> {
     wrapper: BlocksStateMachineWrapper,
     state: CoordinatorState<R>,
@@ -31,25 +36,15 @@ pub struct BlockMachineCoordinator<R> {
     account_output_tx: Option<mpsc::Sender<AccountSlot<R>>>,
     /// When false, Gate 1 is disabled by forcing expected_tx_count to 0.
     require_tx_gate: bool,
-    /// Recent frozen banks and their parents, to find a slot whose BlockMeta never came.
-    frozen_banks: BTreeMap<BankKey, Slot>,
-    /// Slots that must still freeze or confirm, with the slot whose age bounds the wait: the
-    /// slot itself for a freeze, the confirmed child for a confirm.
-    pending_slots: BTreeMap<Slot, Slot>,
-    /// Recent slots with records and no frozen bank, that no frozen bank names or skips yet.
-    record_slots: BTreeSet<Slot>,
-    /// The last slot that `expect_slot` checked, to skip repeated records.
-    last_expected_slot: Option<Slot>,
+    /// Stop once more banks than this wait to flush.
+    max_pending_banks: usize,
     /// The slot of each recent bank, in two generations so that memory stays bounded.
     bank_slots: [HashMap<u64, Slot>; 2],
 }
 
-/// How far back `frozen_banks` reaches. A parent older than this is not checked.
-const FROZEN_SLOT_WINDOW: Slot = 4096;
-
-/// A parent can arrive after its child, and a confirm can lag well behind the freeze, so wait
-/// this many slots (about two minutes) before discarding it.
-pub const MISSING_PARENT_GRACE_SLOTS: Slot = 300;
+/// About 25 seconds of 400 ms slots behind a slot that never resolves. Accounts committed at
+/// finalized trail confirmation by about 32 slots on TowerBFT, so such a consumer may want more.
+pub const DEFAULT_MAX_PENDING_BANKS: usize = 64;
 
 /// Banks per generation of `bank_slots`.
 const BANK_SLOT_CAPACITY: usize = 8192;
@@ -62,6 +57,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         account_output_tx: Option<mpsc::Sender<AccountSlot<R>>>,
         account_commit_at: AccountCommitAt,
         require_tx_gate: bool,
+        max_pending_banks: usize,
     ) -> Self {
         Self {
             // Freeze on BlockMeta: the coordinator does not use footer data, and mainnet has
@@ -75,15 +71,13 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
             instruction_output_tx,
             account_output_tx,
             require_tx_gate,
-            frozen_banks: BTreeMap::new(),
-            pending_slots: BTreeMap::new(),
-            record_slots: BTreeSet::new(),
-            last_expected_slot: None,
+            max_pending_banks,
             bank_slots: Default::default(),
         }
     }
 
-    /// Main event loop. Any CoordinatorError terminates the coordinator.
+    /// Main event loop. Any CoordinatorError terminates the coordinator. Pass
+    /// `DEFAULT_MAX_PENDING_BANKS` unless accounts commit at finalized on a slow-finality cluster.
     pub async fn run(
         input_rx: mpsc::Receiver<CoordinatorInput>,
         parsed_rx: mpsc::Receiver<CoordinatorMessage<R>>,
@@ -91,6 +85,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         account_output_tx: Option<mpsc::Sender<AccountSlot<R>>>,
         account_commit_at: AccountCommitAt,
         require_tx_gate: bool,
+        max_pending_banks: usize,
     ) -> Result<(), CoordinatorError> {
         Self::new(
             input_rx,
@@ -99,6 +94,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
             account_output_tx,
             account_commit_at,
             require_tx_gate,
+            max_pending_banks,
         )
         .run_inner()
         .await
@@ -119,23 +115,15 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                             self.convert_geyser_update(update.as_ref())?
                         }
                         CoordinatorInput::AccountEventSeen { slot, bank_id } => {
-                            vec![CoordinatorEvent::AccountEventSeen { slot, bank_id }]
+                            self.state.apply(CoordinatorEvent::AccountEventSeen { slot, bank_id })?;
+                            Vec::new()
                         }
                     }
                 }
+                // The state drops a parsed message for a discarded bank on its own.
                 Some(msg) = self.parsed_rx.recv() => {
-                    let bank_id = match &msg {
-                        CoordinatorMessage::InstructionParsed { bank_id, .. }
-                        | CoordinatorMessage::AccountParsed { bank_id, .. }
-                        | CoordinatorMessage::TransactionParsed { bank_id, .. }
-                        | CoordinatorMessage::ParseStats { bank_id, .. } => *bank_id,
-                    };
-                    if self.state.is_invalidated_bank(BankKey::new(msg.slot(), bank_id)) {
-                        Vec::new()
-                    } else {
-                        self.expect_slot(msg.slot());
-                        Self::convert_parsed_message(msg)
-                    }
+                    self.state.apply(Self::convert_parsed_message(msg))?;
+                    Vec::new()
                 }
                 else => {
                     tracing::warn!("Coordinator channels closed, shutting down");
@@ -181,6 +169,15 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                 // No account output channel — still drain to release buffer entries.
                 let _ = self.state.drain_account_flushable();
             }
+
+            let pending = self.state.pending_bank_count();
+            if pending > self.max_pending_banks {
+                return Err(CoordinatorError::TooManyPendingBanks {
+                    pending,
+                    limit: self.max_pending_banks,
+                    oldest_slot: self.state.oldest_pending_slot(),
+                });
+            }
         }
         Ok(())
     }
@@ -210,36 +207,23 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
             return Ok(events);
         }
 
-        let bank = match &update.update_oneof {
-            Some(UpdateOneof::Entry(entry)) => Some((entry.slot, entry.bank_id)),
-            Some(UpdateOneof::BlockMeta(meta)) => Some((meta.slot, meta.bank_id)),
-            Some(UpdateOneof::EntryUpdateParent(parent)) => {
-                Some((parent.slot, parent.cleared_bank_id))
-            },
-            Some(UpdateOneof::Slot(status)) => status.bank_id.map(|bank_id| (status.slot, bank_id)),
-            _ => None,
-        };
-        if let Some((slot, bank_id)) = bank {
-            self.check_bank_slot(slot, bank_id)?;
-            if self.state.is_invalidated_bank(BankKey::new(slot, bank_id)) {
-                return Ok(events);
-            }
-        }
-
-        // UpdateParent invalidates one bank, not the slot's replacement. Block machine 0.11
-        // ignores this event, so release its parsed records here and reject late callbacks.
         if let Some(UpdateOneof::EntryUpdateParent(parent)) = &update.update_oneof {
-            return Ok(vec![CoordinatorEvent::BankDiscarded {
-                slot: parent.slot,
-                bank_id: parent.cleared_bank_id,
-                reason: DiscardReason::Forked,
-            }]);
+            return self.clear_bank(parent.slot, parent.cleared_bank_id);
         }
 
         let Some(info) = <SubscribeUpdate as GeyserEventAdapter>::extract_geyser_ev_info(update)
         else {
             return Ok(events);
         };
+        if let Some(bank_id) = info.bank_id() {
+            let slot = info.slot();
+            self.check_bank_slot(slot, bank_id)?;
+            // A late event must not revive a cleared, dead or losing bank in the wrapper.
+            if self.state.is_invalidated_bank(BankKey::new(slot, bank_id)) {
+                tracing::debug!(slot, bank_id, "Event for an invalidated bank; dropping it");
+                return Ok(events);
+            }
+        }
         // The wrapper rejects only an event for a discarded or already frozen bank, or a
         // commitment with no bank ID. None removes the slot, so do not discard its other banks.
         if self.wrapper.handle_new_geyser_event(info).is_err() {
@@ -249,12 +233,6 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         while let Some(output) = self.wrapper.pop_next_state_machine_output() {
             match output {
                 BlockStateMachineOutput::FrozenBlock(frozen) => {
-                    events.extend(self.discard_lost_parents(
-                        frozen.slot,
-                        frozen.bank_id,
-                        frozen.parent_slot,
-                    ));
-
                     // The counts come from the server, so an overflow counts as a mismatch.
                     let observed_tx_count = frozen.entries.iter().try_fold(0_u64, |sum, entry| {
                         sum.checked_add(entry.executed_txn_count)
@@ -299,7 +277,6 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                 },
                 BlockStateMachineOutput::SlotStatus(status) => match status.commitment {
                     CommitmentLevel::Confirmed => {
-                        self.note_confirm(status.slot, status.bank_id);
                         events.push(CoordinatorEvent::SlotConfirmed {
                             slot: status.slot,
                             bank_id: status.bank_id,
@@ -314,8 +291,6 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                     CommitmentLevel::Processed => {},
                 },
                 BlockStateMachineOutput::DeadSlotDetected(dead) => {
-                    self.pending_slots.remove(&dead.slot);
-                    self.record_slots.remove(&dead.slot);
                     events.push(CoordinatorEvent::SlotDiscarded {
                         slot: dead.slot,
                         reason: DiscardReason::Dead,
@@ -323,8 +298,6 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                     });
                 },
                 BlockStateMachineOutput::ForksDetected(fork) => {
-                    self.pending_slots.remove(&fork.slot);
-                    self.record_slots.remove(&fork.slot);
                     events.push(CoordinatorEvent::SlotDiscarded {
                         slot: fork.slot,
                         reason: DiscardReason::Forked,
@@ -332,16 +305,6 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                     });
                 },
                 BlockStateMachineOutput::BankDiscarded(discarded) => {
-                    // A frozen loser can be the slot's only frozen bank, which hides a
-                    // winner whose BlockMeta never comes.
-                    if self
-                        .frozen_banks
-                        .remove(&BankKey::new(discarded.slot, discarded.bank_id))
-                        .is_some()
-                        && !self.has_frozen_bank(discarded.slot)
-                    {
-                        self.pending_slots.insert(discarded.slot, discarded.slot);
-                    }
                     events.push(CoordinatorEvent::BankDiscarded {
                         slot: discarded.slot,
                         bank_id: discarded.bank_id,
@@ -382,192 +345,172 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         Ok(())
     }
 
-    /// A record for a slot that the chain skips would block every later slot. Note the slot, so
-    /// that `discard_lost_parents` can treat it like a parent that never froze.
-    fn expect_slot(&mut self, slot: Slot) {
-        if self.last_expected_slot.replace(slot) == Some(slot)
-            || self
-                .state
-                .last_flushed_slot()
-                .is_some_and(|last| slot <= last)
-            || self.state.is_slot_discarded(slot)
-            || self.is_far_ahead(slot)
-            || self.has_frozen_bank(slot)
-        {
-            return;
-        }
-        // A frozen bank above can already name or skip the slot. No later edge reaches a slot
-        // below every frozen bank.
-        if self
-            .frozen_banks
-            .first_key_value()
-            .is_some_and(|(low, _)| slot < low.slot)
-            || self
-                .frozen_banks
-                .range(BankKey::first(slot.saturating_add(1))..)
-                .any(|(_, &parent)| parent <= slot)
-        {
-            self.pending_slots.insert(slot, slot);
-            return;
-        }
-        self.record_slots.insert(slot);
-    }
-
-    /// A confirmed bank puts its parent on the chain. A frozen parent whose confirm never comes
-    /// would block every later slot, so note it for `discard_lost_parents`. The state applies
-    /// this batch later, so `discard_lost_parents` checks the confirm again at the deadline.
-    fn note_confirm(&mut self, slot: Slot, bank_id: u64) {
-        self.pending_slots.remove(&slot);
-        if let Some(&parent) = self.frozen_banks.get(&BankKey::new(slot, bank_id))
-            && self.has_frozen_bank(parent)
-            && !self.is_confirmed_or_flushed(parent)
-        {
-            self.pending_slots.entry(parent).or_insert(slot);
-        }
-    }
-
-    /// The state prunes old confirms, so a slot at or behind the instruction frontier counts too.
-    fn is_confirmed_or_flushed(&self, slot: Slot) -> bool {
-        self.state.is_slot_confirmed(slot)
-            || self
-                .state
-                .last_instruction_flushed_slot()
-                .is_some_and(|last| slot <= last)
-    }
-
-    /// Block machine 0.11 never freezes a bank whose BlockMeta is lost, and the child then
-    /// waits on it forever. Discard such a parent once the stream is well past it.
-    fn discard_lost_parents(
+    ///
+    /// UpdateParent abandons one bank and replays its slot under a new bank ID. Block machine 0.11
+    /// ignores the event, so release the bank's records here; its late events are rejected after.
+    /// Agave clears only a bank still replaying, so clearing one that froze or confirmed stops the
+    /// coordinator instead of stranding the bank's children.
+    ///
+    fn clear_bank(
         &mut self,
         slot: Slot,
         bank_id: u64,
-        parent: Slot,
-    ) -> Vec<CoordinatorEvent<R>> {
-        // A slot this far past every frozen bank is bogus, or the first after a jump. Either way
-        // it is recorded, so a lost parent of its own is still found, but it must not age out
-        // the slots in grace or prune the window.
-        let far_ahead = self.is_far_ahead(slot);
-        if self
-            .frozen_banks
-            .first_key_value()
-            .is_some_and(|(low, _)| parent >= low.slot)
-            && !self.has_frozen_bank(parent)
-        {
-            self.pending_slots.insert(parent, parent);
+    ) -> Result<Vec<CoordinatorEvent<R>>, CoordinatorError> {
+        self.check_bank_slot(slot, bank_id)?;
+        let key = BankKey::new(slot, bank_id);
+        if self.state.is_invalidated_bank(key) {
+            return Ok(Vec::new());
         }
-
-        self.frozen_banks
-            .insert(BankKey::new(slot, bank_id), parent);
-        // Only a wait for a freeze ends here; a wait for a confirm outlives a second bank's freeze.
-        if self.pending_slots.get(&slot) == Some(&slot) {
-            self.pending_slots.remove(&slot);
+        if self.state.is_bank_frozen_or_confirmed(key) {
+            return Err(CoordinatorError::ClearedCommittedBank { slot, bank_id });
         }
-        self.record_slots.remove(&slot);
-
-        // A slot with records must freeze if it is below every frozen bank, or if this parent
-        // edge names or skips it.
-        let low = self
-            .frozen_banks
-            .first_key_value()
-            .map_or(slot, |(low, _)| low.slot);
-        while let Some(&passed) = self
-            .record_slots
-            .range(..low)
-            .chain(self.record_slots.range(parent..slot))
-            .next()
-        {
-            self.record_slots.remove(&passed);
-            self.pending_slots.insert(passed, passed);
-        }
-        if far_ahead {
-            return Vec::new();
-        }
-
-        let window_start = slot.saturating_sub(FROZEN_SLOT_WINDOW);
-        self.frozen_banks = self.frozen_banks.split_off(&BankKey::first(window_start));
-        self.record_slots = self.record_slots.split_off(&window_start);
-
-        let cutoff = slot.saturating_sub(MISSING_PARENT_GRACE_SLOTS);
-        let due: Vec<Slot> = self
-            .pending_slots
-            .iter()
-            .filter(|(_, bound)| **bound < cutoff)
-            .map(|(&pending, _)| pending)
-            .collect();
-        let mut lost = Vec::new();
-        for pending in due {
-            let bound = self.pending_slots.remove(&pending).unwrap_or(pending);
-            // A confirm that the state applied after `note_confirm` ran ends the wait for it.
-            if bound == pending || !self.is_confirmed_or_flushed(pending) {
-                lost.push(pending);
-            }
-        }
-        lost.into_iter()
-            .map(|lost_slot| {
-                tracing::warn!(
-                    slot,
-                    lost_slot,
-                    "Slot never froze or confirmed; discarding it"
-                );
-                CoordinatorEvent::SlotDiscarded {
-                    slot: lost_slot,
-                    reason: DiscardReason::Incomplete,
-                    bank_ids: Vec::new(),
-                }
-            })
-            .collect()
+        Ok(vec![CoordinatorEvent::BankDiscarded {
+            slot,
+            bank_id,
+            reason: DiscardReason::Cleared,
+        }])
     }
 
-    /// A slot this far past every frozen bank is bogus. It must not age out the slots in grace.
-    fn is_far_ahead(&self, slot: Slot) -> bool {
-        self.frozen_banks
-            .last_key_value()
-            .is_some_and(|(high, _)| slot > high.slot.saturating_add(FROZEN_SLOT_WINDOW))
-    }
-
-    fn has_frozen_bank(&self, slot: Slot) -> bool {
-        self.frozen_banks
-            .range(BankKey::slot_range(slot))
-            .next()
-            .is_some()
-    }
-
-    fn convert_parsed_message(msg: CoordinatorMessage<R>) -> Vec<CoordinatorEvent<R>> {
+    fn convert_parsed_message(msg: CoordinatorMessage<R>) -> CoordinatorEvent<R> {
         match msg {
             CoordinatorMessage::InstructionParsed {
                 slot,
                 bank_id,
                 key,
                 record,
-            } => vec![CoordinatorEvent::InstructionRecordParsed {
+            } => CoordinatorEvent::InstructionRecordParsed {
                 slot,
                 bank_id,
                 key,
                 record,
-            }],
+            },
             CoordinatorMessage::AccountParsed {
                 slot,
                 bank_id,
                 key,
                 record,
-            } => vec![CoordinatorEvent::AccountRecordParsed {
+            } => CoordinatorEvent::AccountRecordParsed {
                 slot,
                 bank_id,
                 key,
                 record,
-            }],
+            },
             CoordinatorMessage::TransactionParsed { slot, bank_id } => {
-                vec![CoordinatorEvent::TransactionParsed { slot, bank_id }]
+                CoordinatorEvent::TransactionParsed { slot, bank_id }
             },
             CoordinatorMessage::ParseStats {
                 slot,
                 bank_id,
                 kind,
-            } => vec![CoordinatorEvent::ParseStats {
+            } => CoordinatorEvent::ParseStats {
                 slot,
                 bank_id,
                 kind,
-            }],
+            },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use yellowstone_grpc_proto::geyser::SubscribeUpdateEntryUpdateParent;
+
+    use super::*;
+    use crate::types::InstructionRecordSortKey;
+
+    fn coordinator() -> BlockMachineCoordinator<String> {
+        let (_input_tx, input_rx) = mpsc::channel(1);
+        let (_parsed_tx, parsed_rx) = mpsc::channel(1);
+        BlockMachineCoordinator::new(
+            input_rx,
+            parsed_rx,
+            None,
+            None,
+            AccountCommitAt::Confirmed,
+            true,
+            DEFAULT_MAX_PENDING_BANKS,
+        )
+    }
+
+    fn feed(
+        coordinator: &mut BlockMachineCoordinator<String>,
+        update: SubscribeUpdate,
+    ) -> Result<(), CoordinatorError> {
+        for event in coordinator.convert_geyser_update(&update)? {
+            coordinator.state.apply(event)?;
+        }
+        Ok(())
+    }
+
+    fn clear(slot: Slot, cleared_bank_id: u64) -> SubscribeUpdate {
+        SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::EntryUpdateParent(
+                SubscribeUpdateEntryUpdateParent {
+                    slot,
+                    cleared_bank_id,
+                    parent_slot: slot - 2,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn record(coordinator: &mut BlockMachineCoordinator<String>, slot: Slot, bank_id: u64) {
+        coordinator
+            .state
+            .apply(BlockMachineCoordinator::convert_parsed_message(
+                CoordinatorMessage::InstructionParsed {
+                    slot,
+                    bank_id,
+                    key: InstructionRecordSortKey::new(0, vec![0]),
+                    record: format!("{slot}/{bank_id}"),
+                },
+            ))
+            .unwrap();
+    }
+
+    /// The real order: records of the abandoned bank, then the clear, before any replacement.
+    #[test]
+    fn update_parent_releases_the_cleared_banks_records_at_once() {
+        let mut coordinator = coordinator();
+        record(&mut coordinator, 42, 7);
+        assert_eq!(coordinator.state.pending_bank_count(), 1);
+
+        feed(&mut coordinator, clear(42, 7)).unwrap();
+        assert_eq!(coordinator.state.pending_bank_count(), 0);
+
+        // A late record or a repeated clear cannot bring the bank back.
+        record(&mut coordinator, 42, 7);
+        feed(&mut coordinator, clear(42, 7)).unwrap();
+        assert_eq!(coordinator.state.pending_bank_count(), 0);
+    }
+
+    /// Agave clears only a bank still replaying. Clearing one that froze stops the coordinator
+    /// instead of stranding its children.
+    #[test]
+    fn update_parent_for_a_frozen_bank_stops_the_coordinator() {
+        let mut coordinator = coordinator();
+        coordinator
+            .state
+            .apply(CoordinatorEvent::BlockFrozen {
+                slot: 42,
+                bank_id: 7,
+                metadata: BlockMetadata {
+                    parent_slot: 41,
+                    blockhash: Hash::new_unique(),
+                    expected_tx_count: 0,
+                },
+            })
+            .unwrap();
+
+        let result = feed(&mut coordinator, clear(42, 7));
+        assert!(matches!(
+            result,
+            Err(CoordinatorError::ClearedCommittedBank {
+                slot: 42,
+                bank_id: 7
+            })
+        ));
     }
 }
