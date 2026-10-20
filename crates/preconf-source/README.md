@@ -1,9 +1,11 @@
 # shipstern-preconf-source
 
-A source for Triton preconfirmations (preconfs). The Harmonic block builder reports a
-transaction the moment it executes it into the slot under construction, before any shred exists.
-This source streams those reports into a Shipstern pipeline through the same `SubscribeUpdate`
-that the other sources deliver, so existing transaction and instruction parsers work unchanged.
+A source for Triton preconfirmations (preconfs) from two feeds. The Harmonic block builder
+reports a transaction the moment it executes it into the slot under construction, before any shred
+exists. A Jito BAM node reports a transaction after the leader executed and committed it, so its
+result is the leader's. This source streams both into a Shipstern pipeline through the same
+`SubscribeUpdate` that the other sources deliver, so existing transaction and instruction parsers
+work unchanged.
 
 ## What a preconfirmation is not
 
@@ -17,14 +19,19 @@ its transactions again, and fast leader handover can send one transaction twice.
 ```toml
 [source]
 endpoint = "https://preconfs.rpcpool.com"   # default
-x-token = "<token with the preconf feed enabled>"
+x-token = "<token with the feeds enabled>"
 harmonic-regions = ["fra", "ams"]           # one stream per region, nearby regions only
+bam-regions = ["fra", "ams"]                # same rule; either list may be empty, not both
 timeout = 10                                # seconds for the TCP connect, and again for TLS
 ```
 
-Regions: `ams`, `ewr`, `fra`, `lon`, `tyo`, `sgp`, `slc`. Regional streams carry different slots,
-so a far region adds latency, not coverage. A region named twice opens one stream. The feed must
-be enabled on the token by Triton; a token without it gets `UNAUTHENTICATED` at subscribe.
+Harmonic regions: `ams`, `ewr`, `fra`, `lon`, `tyo`, `sgp`, `slc`. BAM regions: `ams`, `dfw`,
+`dub`, `ewr`, `fra`, `hkg`, `iad`, `lax`, `lon`, `pit`, `sea`, `sin`, `slc`, `sqq`, `tyo`.
+Regional streams carry different slots, so a far region adds latency, not coverage. A region named
+twice in one list opens one stream; the same region in both lists opens one stream per feed. Each
+feed covers only the slots whose leader runs that client, so both feeds together give the most
+coverage. Triton enables each feed on the token separately. A region of a feed the token lacks
+gets `UNAUTHENTICATED` at subscribe, which stops the source before any stream runs.
 
 ```rust,ignore
 let runtime = Runtime::builder()
@@ -56,8 +63,13 @@ Consequences:
   a success. The first drop logs a warning, and the count is logged when the source stops.
 - A transaction that does not decode is skipped with a warning and counted. It does not stop the
   source.
+- A payload the crate does not know is ignored and counted, so a newer server schema shows in
+  the exit summary.
 - The source sends no slot updates. Harmonic slot framing drives only the `index` counter and
-  the restart count.
+  the restart count. BAM has no framing: each transaction names its slot, and the `index` counts
+  from 0 at the first transaction of a slot.
+- The BAM fields `node`, `sequence`, `bundle_position` and `is_revert_on_error` have no place in a
+  `SubscribeUpdateTransaction`. The source logs them at debug.
 
 ## How a prefilter maps to the feed filter
 
@@ -90,17 +102,17 @@ for a region it does not serve. A status on a running stream ends the source wit
 `SourceExitStatus::StreamError`, for example `PERMISSION_DENIED` when the feed is disabled under
 a live stream, `RESOURCE_EXHAUSTED` when the account is over its coverage share for 30 s or when
 the consumer falls behind, `DATA_LOSS` when the server dropped the stream's position, or
-`UNAVAILABLE` when the point of presence restarts. A region stream that ends or errors stops the
-source, so a run never continues on a partial feed. The source does not reconnect. There is no
-resume: the feed has no `from_slot`.
+`UNAVAILABLE` when the point of presence restarts. A stream of either feed that ends or errors
+stops the source, so a run never continues on a partial feed. The source does not reconnect.
+There is no resume: the feed has no `from_slot`.
 
 Over the coverage share (33% of the feed per account and region over 60 s) the feed withholds
 transactions and sends a clip count, which the source logs at warn.
 
 ## Manual run
 
-1. Get the preconf feed enabled on a Triton token.
-2. Set `x-token` and one or two nearby `harmonic-regions`.
+1. Get the feeds enabled on a Triton token.
+2. Set `x-token` and one or two nearby regions per feed.
 3. Run a pipeline with a narrow transaction prefilter, for example one program. A broad filter
    hits the coverage share within a minute.
 4. Compare the signatures with a Dragon's Mouth stream at processed commitment. The landing

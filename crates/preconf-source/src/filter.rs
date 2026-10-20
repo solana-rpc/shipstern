@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use shipstern_core::{Filters, Pubkey, TransactionPrefilter};
 use triton_preconfs_proto::preconfs::{
-    subscribe_request::Region, ExecutionResult, HarmonicRegion, SubscribeRequest, TransactionFilter,
+    subscribe_request::Region, ExecutionResult, SubscribeRequest, TransactionFilter,
 };
 
 /// Server limits from the Triton docs. A request over them is refused at subscribe.
@@ -67,14 +67,14 @@ pub(crate) fn transactions(
     Ok(transactions)
 }
 
-/// One request per region, all with the same filters.
+/// One request per feed and region, all with the same filters.
 pub(crate) fn request(
     transactions: &HashMap<String, TransactionFilter>,
-    region: HarmonicRegion,
+    region: Region,
 ) -> SubscribeRequest {
     SubscribeRequest {
         transactions: transactions.clone(),
-        region: Some(Region::HarmonicRegion(region as i32)),
+        region: Some(region),
     }
 }
 
@@ -210,7 +210,8 @@ mod tests {
             ..Default::default()
         });
 
-        let request = request(&transactions(&filters).unwrap(), HarmonicRegion::Fra);
+        let region = Region::HarmonicRegion(HarmonicRegion::Fra as i32);
+        let request = request(&transactions(&filters).unwrap(), region);
 
         let filter = &request.transactions["p"];
         let mut include = filter.account_include.clone();
@@ -219,10 +220,7 @@ mod tests {
         assert_eq!(filter.account_required, [key(3).to_string()]);
         assert_eq!(filter.account_exclude, [key(4).to_string()]);
         assert_eq!(filter.signature, ["sig"]);
-        assert_eq!(
-            request.region,
-            Some(Region::HarmonicRegion(HarmonicRegion::Fra as i32))
-        );
+        assert_eq!(request.region, Some(region));
     }
 
     /// `failed` becomes the server's result filter, so an unknown result never reads as success.
