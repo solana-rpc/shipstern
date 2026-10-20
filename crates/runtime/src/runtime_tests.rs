@@ -21,7 +21,7 @@ use yellowstone_grpc_proto::{
 use crate::{
     config::BufferConfig,
     instruction::InstructionPipeline,
-    sources::{FilterUpdateSource, SourceContext, SourceExitStatus, SourceTrait},
+    sources::{stream_error, FilterUpdateSource, SourceContext, SourceExitStatus, SourceTrait},
     Error, FilterUpdateError, Handler, HandlerResult, Pipeline, Runtime,
 };
 
@@ -680,6 +680,37 @@ async fn test_error_status_returns_error() {
         .unwrap();
 
     assert_other_error(runtime.try_run_async().await);
+}
+
+/// `stream_error` hands the status to the runtime and reports it, and still
+/// reports it once the runtime has stopped.
+#[tokio::test]
+async fn test_stream_error_sends_the_status_and_reports_it() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+    let exit = stream_error(&tx, tonic::Status::unavailable("node is restarting")).await;
+
+    assert!(
+        matches!(&exit, SourceExitStatus::StreamError { code: tonic::Code::Unavailable, message }
+            if message == "node is restarting"),
+        "got {exit:?}"
+    );
+    let sent = rx.recv().await.expect("the status reaches the runtime");
+    assert_eq!(
+        sent.expect_err("it arrives as an error").code(),
+        tonic::Code::Unavailable
+    );
+
+    drop(rx);
+    let exit = stream_error(&tx, tonic::Status::internal("late")).await;
+
+    assert!(
+        matches!(exit, SourceExitStatus::StreamError {
+            code: tonic::Code::Internal,
+            ..
+        }),
+        "got {exit:?}"
+    );
 }
 
 /// Fails before streaming anything, the way a source does when it cannot

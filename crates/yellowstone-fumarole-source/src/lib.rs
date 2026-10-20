@@ -5,7 +5,7 @@ use bytesize::ByteSize;
 use clap::ValueEnum;
 use futures_util::StreamExt;
 use shipstern::{
-    sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
+    sources::{stream_error, FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     CommitmentLevel, Error as ShipsternError,
 };
 use yellowstone_fumarole_client::{
@@ -156,14 +156,7 @@ impl SourceTrait for YellowstoneFumaroleSource {
                     }
                 },
                 Some(Ok(FumaroleEvent::SlotEnded { .. })) => {},
-                Some(Err(error)) => {
-                    let status = status_of(&error);
-                    let _ = tx.send(Err(status.clone())).await;
-                    break SourceExitStatus::StreamError {
-                        code: status.code(),
-                        message: status.message().to_string(),
-                    };
-                },
+                Some(Err(error)) => break stream_error(&tx, status_of(&error)).await,
                 None => {
                     tracing::info!("Source returned None, exiting");
                     break SourceExitStatus::StreamEnded;

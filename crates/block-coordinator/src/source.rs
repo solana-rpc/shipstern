@@ -9,7 +9,7 @@ use std::{path::PathBuf, time::Duration};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use shipstern::{
-    sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
+    sources::{stream_error, FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     Error as ShipsternError,
 };
 use shipstern_core::CommitmentLevel;
@@ -351,10 +351,7 @@ impl SourceTrait for CoordinatorSource {
                 },
                 Err(status) => {
                     tracing::warn!(code = ?status.code(), message = %status.message(), "Received error status from stream");
-                    let code = status.code();
-                    let message = status.message().to_string();
-                    let _ = tx.send(Err(status.clone())).await;
-                    break SourceExitStatus::StreamError { code, message };
+                    break stream_error(&tx, status.clone()).await;
                 },
             }
 

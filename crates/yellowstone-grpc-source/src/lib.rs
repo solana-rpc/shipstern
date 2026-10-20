@@ -4,11 +4,13 @@ use async_trait::async_trait;
 use clap::ValueEnum;
 use futures_util::{stream::BoxStream, SinkExt, StreamExt};
 use shipstern::{
-    sources::{FilterUpdateSource, FromConfig, SourceContext, SourceExitStatus, SourceTrait},
+    sources::{
+        stream_error, FilterUpdateSource, FromConfig, SourceContext, SourceExitStatus, SourceTrait,
+    },
     CommitmentLevel, Error as ShipsternError,
 };
 use shipstern_core::{AccountsDataSlice, Filters, PrefilterError};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use yellowstone_grpc_client::{GeyserGrpcClient, SubscribeRequestSink};
 use yellowstone_grpc_proto::{
     geyser::{SubscribeRequest, SubscribeUpdate},
@@ -83,17 +85,6 @@ impl YellowstoneGrpcConfig {
 
 /// Updates from one connection.
 pub type UpdateStream = BoxStream<'static, Result<SubscribeUpdate, Status>>;
-
-/// Hand a terminal status to the runtime and turn it into the exit status.
-async fn stream_error(
-    tx: &mpsc::Sender<Result<SubscribeUpdate, Status>>,
-    status: Status,
-) -> SourceExitStatus {
-    let code = status.code();
-    let message = status.message().to_string();
-    let _ = tx.send(Err(status)).await;
-    SourceExitStatus::StreamError { code, message }
-}
 
 ///
 /// Check `config`, dial the server and subscribe with `request`.

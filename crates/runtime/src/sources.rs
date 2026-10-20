@@ -18,7 +18,8 @@ pub enum SourceExitStatus {
     Completed,
     /// Server closed connection unexpectedly (streaming sources).
     StreamEnded,
-    /// The server ended a running stream with a gRPC status.
+    /// The server ended a running stream with a gRPC status. Build it with
+    /// [`stream_error`], which also hands the status to the runtime.
     StreamError {
         /// gRPC status code.
         code: tonic::Code,
@@ -32,6 +33,29 @@ pub enum SourceExitStatus {
     /// [`SourceTrait::connect`], which keeps the error's type. The runtime
     /// stops with an error either way.
     Error(String),
+}
+
+///
+/// Hand the status that ended a running stream to the runtime, and return the
+/// [`SourceExitStatus::StreamError`] that reports it.
+///
+/// The status goes down `tx` first, so the runtime stops on the same error. A
+/// closed channel means the runtime has already stopped, and the status is
+/// dropped.
+///
+/// ```rust, ignore
+/// Some(Err(status)) => break stream_error(&tx, status).await,
+/// ```
+///
+pub async fn stream_error(
+    tx: &Sender<Result<SubscribeUpdate, tonic::Status>>,
+    status: tonic::Status,
+) -> SourceExitStatus {
+    let code = status.code();
+    let message = status.message().to_owned();
+    let _ = tx.send(Err(status)).await;
+
+    SourceExitStatus::StreamError { code, message }
 }
 
 /// Everything the runtime hands a source when it connects.
