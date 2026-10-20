@@ -6,7 +6,35 @@
 
 use std::collections::HashSet;
 
-use yellowstone_grpc_proto::geyser::{subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate};
+use yellowstone_grpc_proto::geyser::{
+    subscribe_update::UpdateOneof, SlotStatus, SubscribeRequest, SubscribeRequestFilterSlots,
+    SubscribeUpdate,
+};
+
+/// The `slots` filter `SlotResume` adds under its own key, so the checkpoint moves with every
+/// slot at the stream's commitment even before the first update matches the user's filters.
+pub(crate) const RESUME_FILTER_KEY: &str = "__shipstern_slot_resume";
+
+/// Ask for the slot status at the stream's commitment under [`RESUME_FILTER_KEY`]. The user's
+/// own `slots` filters stay as they are.
+pub(crate) fn add_resume_filter(request: &mut SubscribeRequest) {
+    request
+        .slots
+        .insert(RESUME_FILTER_KEY.to_owned(), SubscribeRequestFilterSlots {
+            filter_by_commitment: Some(true),
+            interslot_updates: Some(false),
+        });
+}
+
+/// Take the resume key off an update's matched filters. False when only the resume filter
+/// matched, so the runtime never sees a slot status it did not ask for.
+pub(crate) fn strip_resume_filter(update: &mut SubscribeUpdate) -> bool {
+    if update.filters.is_empty() {
+        return true;
+    }
+    update.filters.retain(|name| name != RESUME_FILTER_KEY);
+    !update.filters.is_empty()
+}
 
 /// What tells two updates of one slot apart.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -166,6 +194,23 @@ mod tests {
         assert!(resume.deliver(&transaction(11, 1)));
         assert_eq!(resume.checkpoint(), Some(11));
         assert!(resume.deliver(&transaction(10, 1)));
+    }
+
+    /// A status that only the resume filter matched is tracked but not delivered. One the user
+    /// also asked for is delivered under the user's key alone.
+    #[test]
+    fn resume_only_slot_status_is_tracked_and_dropped() {
+        let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
+        let mut update = slot_status(10, SlotStatus::SlotConfirmed);
+        update.filters = vec![RESUME_FILTER_KEY.to_owned()];
+        assert!(resume.deliver(&update));
+        assert!(!strip_resume_filter(&mut update));
+        assert_eq!(resume.checkpoint(), Some(10));
+
+        let mut update = slot_status(11, SlotStatus::SlotConfirmed);
+        update.filters = vec!["user".to_owned(), RESUME_FILTER_KEY.to_owned()];
+        assert!(strip_resume_filter(&mut update));
+        assert_eq!(update.filters, ["user"]);
     }
 
     /// An interslot status for a slot ahead must not move the checkpoint past content that has

@@ -47,8 +47,9 @@ pub struct BlockMachineCoordinator<R> {
 /// How far back `frozen_banks` reaches. A parent older than this is not checked.
 const FROZEN_SLOT_WINDOW: Slot = 4096;
 
-/// A parent can arrive after its child, so wait this many slots before discarding it.
-const MISSING_PARENT_GRACE_SLOTS: Slot = 64;
+/// A parent can arrive after its child, and a confirm can lag well behind the freeze, so wait
+/// this many slots (about two minutes) before discarding it.
+pub const MISSING_PARENT_GRACE_SLOTS: Slot = 300;
 
 /// Banks per generation of `bank_slots`.
 const BANK_SLOT_CAPACITY: usize = 8192;
@@ -416,9 +417,10 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         bank_id: u64,
         parent: Slot,
     ) -> Vec<CoordinatorEvent<R>> {
-        if self.is_far_ahead(slot) {
-            return Vec::new();
-        }
+        // A slot this far past every frozen bank is bogus, or the first after a jump. Either way
+        // it is recorded, so a lost parent of its own is still found, but it must not age out
+        // the slots in grace or prune the window.
+        let far_ahead = self.is_far_ahead(slot);
         if self
             .frozen_banks
             .first_key_value()
@@ -450,6 +452,9 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         {
             self.record_slots.remove(&passed);
             self.pending_slots.insert(passed, passed);
+        }
+        if far_ahead {
+            return Vec::new();
         }
 
         let window_start = slot.saturating_sub(FROZEN_SLOT_WINDOW);

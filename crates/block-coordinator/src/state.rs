@@ -72,7 +72,8 @@ pub enum CoordinatorEvent<R> {
 pub struct CoordinatorState<R> {
     buffer: BTreeMap<BankKey, SlotRecordBuffer<R>>,
     /// Slots off the chain, with why. A new frozen bank clears a dead or incomplete slot. A forked
-    /// slot waits for a confirm of itself or of a child, because no dead report follows a fork report.
+    /// slot waits for a confirm of itself or of a child, or for the coordinator to report it
+    /// incomplete, because no dead report follows a fork report.
     discarded_slots: BTreeMap<Slot, DiscardReason>,
     discarded_banks: BTreeMap<BankKey, DiscardReason>,
     confirmed_banks: BTreeMap<Slot, u64>,
@@ -330,10 +331,15 @@ impl<R> CoordinatorState<R> {
                 .ok_or(CoordinatorError::ReadySlotMissingMetadata { slot })?;
 
             let is_first = self.last_instruction_flushed_slot.is_none();
+            // A fork-reported parent is on the chain once a child confirms, and its own confirm
+            // follows the child's, so the child waits for it.
             let parent_ok = self
                 .last_instruction_flushed_slot
                 .is_some_and(|last| parent_slot <= last)
-                || self.discarded_slots.contains_key(&parent_slot);
+                || matches!(
+                    self.discarded_slots.get(&parent_slot),
+                    Some(DiscardReason::Dead | DiscardReason::Incomplete)
+                );
 
             if !is_first && !parent_ok {
                 break;
@@ -579,7 +585,7 @@ impl<R> CoordinatorState<R> {
             self.discarded_banks.get(&key),
             Some(DiscardReason::Incomplete)
         ) {
-            if !self.discarded_slots.contains_key(&slot) {
+            if self.is_forked(slot) || !self.discarded_slots.contains_key(&slot) {
                 self.discard_slot(slot, DiscardReason::Incomplete, &[bank_id]);
             }
             return false;
@@ -671,9 +677,10 @@ impl<R> CoordinatorState<R> {
             return;
         }
         let was_known_discarded = self.discarded_slots.contains_key(&slot);
-        // Forked sticks, since no dead report follows a fork report. Any other reason is replaced.
+        // Forked sticks over a dead report, since none follows a fork report. Incomplete is the
+        // coordinator's own verdict that the slot never resolved, so it ends the fork wait.
         let stored = self.discarded_slots.entry(slot).or_insert(reason);
-        if !matches!(stored, DiscardReason::Forked) {
+        if !matches!(stored, DiscardReason::Forked) || matches!(reason, DiscardReason::Incomplete) {
             *stored = reason;
         }
 
@@ -884,6 +891,81 @@ mod tests {
             })
             .unwrap();
         assert!(state.drain_instruction_flushable().unwrap().is_empty());
+    }
+
+    /// Slot 42 is fork-reported, and its child 43 confirms before 42's BlockMeta arrives. The
+    /// confirm puts 42 on the chain, so 43 waits for 42's own confirm, which comes later.
+    #[test]
+    fn child_waits_for_a_fork_reported_parent() {
+        let mut state = CoordinatorState::<String>::default();
+        apply_ready_slot(&mut state, 41, 40, 0);
+        state
+            .apply(CoordinatorEvent::SlotDiscarded {
+                slot: 42,
+                reason: DiscardReason::Forked,
+                bank_ids: vec![],
+            })
+            .unwrap();
+        apply_ready_slot(&mut state, 43, 42, 0);
+        let slots: Vec<_> = drain_both(&mut state)
+            .unwrap()
+            .iter()
+            .map(|s| s.slot)
+            .collect();
+        assert_eq!(slots, [41]);
+
+        state
+            .apply(CoordinatorEvent::BlockFrozen {
+                slot: 42,
+                bank_id: 0,
+                metadata: metadata(41, 0),
+            })
+            .unwrap();
+        assert!(drain_both(&mut state).unwrap().is_empty());
+
+        state
+            .apply(CoordinatorEvent::SlotConfirmed {
+                slot: 42,
+                bank_id: 0,
+            })
+            .unwrap();
+        let slots: Vec<_> = drain_both(&mut state)
+            .unwrap()
+            .iter()
+            .map(|s| s.slot)
+            .collect();
+        assert_eq!(slots, [42, 43]);
+    }
+
+    /// The coordinator reports a fork-reported parent incomplete once its confirm is overdue.
+    /// That ends the child's wait, or the pipeline would stall on it forever.
+    #[test]
+    fn incomplete_report_ends_the_wait_for_a_fork_reported_parent() {
+        let mut state = CoordinatorState::<String>::default();
+        apply_ready_slot(&mut state, 41, 40, 0);
+        state
+            .apply(CoordinatorEvent::SlotDiscarded {
+                slot: 42,
+                reason: DiscardReason::Forked,
+                bank_ids: vec![],
+            })
+            .unwrap();
+        apply_ready_slot(&mut state, 43, 42, 0);
+        assert_eq!(drain_both(&mut state).unwrap().len(), 1);
+
+        state
+            .apply(CoordinatorEvent::SlotDiscarded {
+                slot: 42,
+                reason: DiscardReason::Incomplete,
+                bank_ids: vec![],
+            })
+            .unwrap();
+        let slots: Vec<_> = drain_both(&mut state)
+            .unwrap()
+            .iter()
+            .map(|s| s.slot)
+            .collect();
+        assert_eq!(slots, [43]);
     }
 
     /// In finalized account mode the confirmed bank's accounts wait for finalized, and
