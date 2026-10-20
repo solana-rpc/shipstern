@@ -284,8 +284,7 @@ impl SourceTrait for YellowstoneGrpcSource {
                     Some(Ok(update)) => {
                         if tx.send(Ok(update)).await.is_err() {
                             tracing::info!("Receiver dropped, stopping source");
-                            // Defensive only - normally unreachable because Signal/Buffer
-                            // branch wins first when receiver drops.
+                            // The buffer stopped, so the runtime ends the run with its result.
                             break SourceExitStatus::ReceiverDropped;
                         }
                     },

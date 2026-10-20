@@ -52,6 +52,7 @@ use yellowstone_grpc_proto::geyser::SubscribeUpdate;
 use crate::{
     builder::RuntimeBuilder,
     sources::{FilterUpdateSource, SourceTrait},
+    stop::StopCode,
 };
 
 /// An error thrown by the Shipstern runtime.
@@ -274,8 +275,9 @@ impl<S: SourceTrait> Runtime<S> {
     /// │   drain -> Ok    ServerHangup     ServerHangup     Other            │
     /// │                                                                     │
     /// │    ┌──────────────────────────────────────────────────────────┐     │
-    /// │    │ ReceiverDropped: defensive only - normally unreachable   │     │
-    /// │    │ because Signal/Buffer branch wins first when rx drops    │     │
+    /// │    │ ReceiverDropped: the buffer stopped and dropped rx, so   │     │
+    /// │    │ join it and return its result: Ok(()) when it stopped    │     │
+    /// │    │ cleanly, its error when it failed                        │     │
     /// │    └──────────────────────────────────────────────────────────┘     │
     /// └─────────────────────────────────────────────────────────────────────┘
     /// ```
@@ -402,8 +404,9 @@ impl<S: SourceTrait> Runtime<S> {
             StopType::SourceExit(Ok(Ok(status))) => match status {
                 SourceExitStatus::ReceiverDropped => {
                     tracing::info!("Source stopped: receiver dropped (shutdown)");
-                    Self::force_stop_buffer(buffer).await;
-                    Ok(())
+                    // The buffer drops the receiver when it stops, so it may have stopped on
+                    // a failure. Its result is the run's: `Ok(())` for a clean stop.
+                    buffer.join().await.map(StopCode::as_unit)
                 },
                 SourceExitStatus::Completed => {
                     tracing::info!("Source completed successfully; draining runtime buffer");
