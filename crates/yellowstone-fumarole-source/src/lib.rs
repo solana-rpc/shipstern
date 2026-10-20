@@ -71,18 +71,6 @@ impl From<FumaroleConfig> for yellowstone_fumarole_client::config::FumaroleConfi
     }
 }
 
-/// Keep the gRPC code of a stream error, so an auth failure does not read as an internal one.
-fn status_of(error: &(dyn std::error::Error + 'static)) -> Status {
-    let mut source = Some(error);
-    while let Some(err) = source {
-        if let Some(status) = err.downcast_ref::<Status>() {
-            return status.clone();
-        }
-        source = err.source();
-    }
-    Status::internal(error.to_string())
-}
-
 impl FromConfig for YellowstoneFumaroleSource {
     type Config = FumaroleConfig;
 
@@ -156,7 +144,14 @@ impl SourceTrait for YellowstoneFumaroleSource {
                     }
                 },
                 Some(Ok(FumaroleEvent::SlotEnded { .. })) => {},
-                Some(Err(error)) => break stream_error(&tx, status_of(&error)).await,
+                Some(Err(error)) => {
+                    // Keep the gRPC code of a stream error, so an auth failure does not read
+                    // as an internal one.
+                    let status = Status::try_from_error(Box::new(error))
+                        .unwrap_or_else(|error| Status::internal(error.to_string()));
+
+                    break stream_error(&tx, status).await;
+                },
                 None => {
                     tracing::info!("Source returned None, exiting");
                     break SourceExitStatus::StreamEnded;
