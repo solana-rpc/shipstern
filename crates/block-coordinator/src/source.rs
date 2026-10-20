@@ -91,47 +91,26 @@ pub struct CoordinatorSourceConfig {
     pub fixture_slots: Option<usize>,
 }
 
-trait CoordinatorSubscription {
-    /// Add all subscriptions required by the BlockSM coordinator:
-    /// - entries and bank invalidations (block reconstruction)
-    /// - blocks_meta (BlockSummary)
-    /// - slot lifecycle (FirstShredReceived, CreatedBank, Completed, Dead).
-    fn with_coordinator_subscriptions(self) -> Self;
-
-    /// Set the starting slot for the gRPC stream.
-    fn with_from_slot(self, from_slot: Option<u64>) -> Self;
-
-    /// Set commitment to Processed — required for the two-gate flush pattern
-    /// so the coordinator sees all transactions before confirmation.
-    fn with_commitment_processed(self) -> Self;
-}
-
-impl CoordinatorSubscription for SubscribeRequest {
-    fn with_coordinator_subscriptions(mut self) -> Self {
-        self.entry
-            .insert("coordinator".to_string(), SubscribeRequestFilterEntry {
-                include_update_parent: Some(true),
-            });
-        self.blocks_meta.insert(
-            "coordinator".to_string(),
-            SubscribeRequestFilterBlocksMeta {},
-        );
-        self.slots.entry("coordinator".to_string()).or_default();
-        for filter in self.slots.values_mut() {
-            filter.interslot_updates = Some(true);
-            filter.filter_by_commitment = None;
-        }
-        self
-    }
-
-    fn with_from_slot(mut self, from_slot: Option<u64>) -> Self {
-        self.from_slot = from_slot.or(self.from_slot);
-        self
-    }
-
-    fn with_commitment_processed(mut self) -> Self {
-        self.commitment = Some(CommitmentLevel::Processed as i32);
-        self
+///
+/// Add all subscriptions required by the BlockSM coordinator:
+/// - entries and bank invalidations (block reconstruction)
+/// - blocks_meta (BlockSummary)
+/// - slot lifecycle (FirstShredReceived, CreatedBank, Completed, Dead).
+///
+fn add_coordinator_subscriptions(request: &mut SubscribeRequest) {
+    request
+        .entry
+        .insert("coordinator".to_string(), SubscribeRequestFilterEntry {
+            include_update_parent: Some(true),
+        });
+    request.blocks_meta.insert(
+        "coordinator".to_string(),
+        SubscribeRequestFilterBlocksMeta {},
+    );
+    request.slots.entry("coordinator".to_string()).or_default();
+    for filter in request.slots.values_mut() {
+        filter.interslot_updates = Some(true);
+        filter.filter_by_commitment = None;
     }
 }
 
@@ -182,12 +161,14 @@ impl SourceTrait for CoordinatorSource {
             .as_deref()
             .unwrap_or("CoordinatorSource");
 
-        // The gRPC source's builder applies the config's data slice. Its commitment is
-        // replaced below, since the coordinator needs every bank.
-        let subscribe_request = build_subscribe_request(filters, config)
-            .with_coordinator_subscriptions()
-            .with_from_slot(config.from_slot)
-            .with_commitment_processed();
+        // The gRPC source's builder applies the config's data slice.
+        let mut subscribe_request = build_subscribe_request(filters, config);
+        add_coordinator_subscriptions(&mut subscribe_request);
+        subscribe_request.from_slot = config.from_slot;
+
+        // Processed whatever the config says: the two-gate flush needs every
+        // transaction before the confirmation.
+        subscribe_request.commitment = Some(CommitmentLevel::Processed as i32);
 
         tracing::info!(
             source_label,
@@ -380,12 +361,12 @@ mod tests {
         SubscribeUpdateSlot,
     };
 
-    use super::{validate_bank_id, CoordinatorSubscription};
+    use super::{add_coordinator_subscriptions, validate_bank_id};
 
     #[test]
     fn coordinator_subscription_requests_cleared_bank_updates() {
-        let request = yellowstone_grpc_proto::geyser::SubscribeRequest::default()
-            .with_coordinator_subscriptions();
+        let mut request = yellowstone_grpc_proto::geyser::SubscribeRequest::default();
+        add_coordinator_subscriptions(&mut request);
         assert_eq!(
             request.entry["coordinator"].include_update_parent,
             Some(true)
