@@ -193,16 +193,6 @@ impl SourceTrait for CoordinatorSource {
             .timeout(timeout)
             .tls_config(ClientTlsConfig::new().with_native_roots())?;
 
-        // Neither reconnect mode fits. Slot resume needs confirmed or finalized, but the
-        // coordinator runs at processed where a slot can have several banks. The client's
-        // bank replay rejects a from_slot and re-sends banks the coordinator already froze.
-        if config.auto_reconnect {
-            tracing::info!(
-                source_label,
-                "Coordinator source does not reconnect; it stops on stream loss"
-            );
-        }
-
         let mut client = builder.connect().await?;
 
         let subscribe_request = SubscribeRequest::from(filters)

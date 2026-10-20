@@ -1,10 +1,10 @@
+//! A lost stream ends the run at every commitment, after one subscription, with the
+//! records delivered before the loss intact.
+
 use std::{
     collections::{HashMap, HashSet},
     pin::Pin,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
 
@@ -26,9 +26,11 @@ enum Loss {
     Eof,
 }
 
+/// Sends one account on every subscription, then loses the stream. It records the
+/// commitment each subscription asked for, so a test sees how many there were too.
 #[derive(Clone)]
 struct Server {
-    connections: Arc<AtomicUsize>,
+    commitments: Arc<Mutex<Vec<Option<i32>>>>,
     loss: Loss,
 }
 
@@ -61,54 +63,20 @@ impl Geyser for Server {
         &self,
         request: Request<Streaming<SubscribeRequest>>,
     ) -> Result<Response<Self::SubscribeStream>, Status> {
-        let connection = self.connections.fetch_add(1, Ordering::SeqCst);
         let request = request.into_inner().message().await?.unwrap();
-        assert_eq!(
-            request.commitment.unwrap_or_default(),
-            CommitmentLevel::Processed as i32
-        );
+        self.commitments
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request.commitment);
+
         let (tx, rx) = mpsc::channel(4);
         let loss = self.loss;
         tokio::spawn(async move {
-            if connection == 0 {
-                tx.send(Ok(account(1))).await.unwrap();
-                if matches!(loss, Loss::Status) {
-                    let _ = tx
-                        .send(Err(Status::unavailable("reconstruction has not caught up")))
-                        .await;
-                }
-            } else {
-                // Reconstruction had not seen bank 7 when replay selected its held banks.
-                // The replacement only sees the later live account, not account 1.
-                let _ = tx.send(Ok(account(2))).await;
+            tx.send(Ok(account(1))).await.unwrap();
+            if matches!(loss, Loss::Status) {
                 let _ = tx
-                    .send(Ok(SubscribeUpdate {
-                        filters: vec!["__autoreconnect".into()],
-                        update_oneof: Some(UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
-                            slot: 42,
-                            parent_slot: 41,
-                            bank_id: 7,
-                            blockhash: "3qbR1eZRqXUWroWKKYhbDmR3FfqTHfqSU8zZSxtANzYh".into(),
-                            parent_blockhash: "3ntrLnnU8tH1YMDro3SNgqbcTf5C7inbKpFbv7SN8wTp".into(),
-                            ..Default::default()
-                        })),
-                        ..Default::default()
-                    }))
+                    .send(Err(Status::unavailable("node is restarting")))
                     .await;
-                let _ = tx
-                    .send(Ok(SubscribeUpdate {
-                        filters: vec!["__autoreconnect".into()],
-                        update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
-                            slot: 42,
-                            parent: Some(41),
-                            bank_id: Some(7),
-                            status: SlotStatus::SlotFinalized as i32,
-                            ..Default::default()
-                        })),
-                        ..Default::default()
-                    }))
-                    .await;
-                let _ = tx.send(Err(Status::invalid_argument("replacement"))).await;
             }
         });
         Ok(Response::new(Box::pin(stream::unfold(
@@ -178,7 +146,9 @@ impl Geyser for Server {
     }
 }
 
-async fn assert_processed_loss_preserves_delivered_records(loss: Loss) {
+/// Run the source against a server that loses the stream after one account, and check
+/// that the run ends after one subscription with that account delivered once.
+async fn assert_loss_ends_the_run(commitment: Option<CommitmentLevel>, loss: Loss) {
     let _ = rustls::crypto::ring::default_provider().install_default();
     tokio::time::timeout(Duration::from_secs(10), async {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -186,9 +156,9 @@ async fn assert_processed_loss_preserves_delivered_records(loss: Loss) {
         let incoming = stream::unfold(listener, |listener| async {
             Some((listener.accept().await.map(|(socket, _)| socket), listener))
         });
-        let connections = Arc::new(AtomicUsize::new(0));
+        let commitments = Arc::new(Mutex::new(Vec::new()));
         let service = Server {
-            connections: Arc::clone(&connections),
+            commitments: Arc::clone(&commitments),
             loss,
         };
         let server = tokio::spawn(async move {
@@ -198,9 +168,16 @@ async fn assert_processed_loss_preserves_delivered_records(loss: Loss) {
                 .await
                 .unwrap();
         });
+        let commitment_key = commitment
+            .map(|level| {
+                format!(
+                    "commitment-level = \"{}\"",
+                    level.as_str_name().to_lowercase()
+                )
+            })
+            .unwrap_or_default();
         let config: YellowstoneGrpcConfig = toml::from_str(&format!(
-            "endpoint = \"http://{address}\"\ntimeout = 3\ncommitment-level = \
-             \"processed\"\nreconnect-max-retries = 2"
+            "endpoint = \"http://{address}\"\ntimeout = 3\n{commitment_key}"
         ))
         .unwrap();
         let filters = Filters::new(HashMap::from([("accounts".into(), Prefilter {
@@ -228,10 +205,15 @@ async fn assert_processed_loss_preserves_delivered_records(loss: Loss) {
         }
         let result = task.await.unwrap();
         server.abort();
+
+        let commitments = commitments
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         assert_eq!(
-            (connections.load(Ordering::SeqCst), keys),
-            (1, vec![1]),
-            "{loss:?}: preserve the original record without invalidating or replacing its bank"
+            (commitments, keys),
+            (vec![commitment.map(|level| level as i32)], vec![1]),
+            "{commitment:?} {loss:?}: one subscription, and the delivered record once"
         );
         match loss {
             Loss::Status => {
@@ -248,15 +230,33 @@ async fn assert_processed_loss_preserves_delivered_records(loss: Loss) {
         }
     })
     .await
-    .expect("processed stream loss timed out");
+    .expect("stream loss timed out");
 }
 
 #[tokio::test]
-async fn processed_stream_error_preserves_delivered_accounts_without_reconnecting() {
-    assert_processed_loss_preserves_delivered_records(Loss::Status).await;
+async fn default_commitment_stops_on_loss() {
+    for loss in [Loss::Status, Loss::Eof] {
+        assert_loss_ends_the_run(None, loss).await;
+    }
 }
 
 #[tokio::test]
-async fn processed_eof_preserves_delivered_accounts_without_reconnecting() {
-    assert_processed_loss_preserves_delivered_records(Loss::Eof).await;
+async fn processed_stream_stops_on_loss() {
+    for loss in [Loss::Status, Loss::Eof] {
+        assert_loss_ends_the_run(Some(CommitmentLevel::Processed), loss).await;
+    }
+}
+
+#[tokio::test]
+async fn confirmed_stream_stops_on_loss() {
+    for loss in [Loss::Status, Loss::Eof] {
+        assert_loss_ends_the_run(Some(CommitmentLevel::Confirmed), loss).await;
+    }
+}
+
+#[tokio::test]
+async fn finalized_stream_stops_on_loss() {
+    for loss in [Loss::Status, Loss::Eof] {
+        assert_loss_ends_the_run(Some(CommitmentLevel::Finalized), loss).await;
+    }
 }

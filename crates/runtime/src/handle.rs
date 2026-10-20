@@ -96,9 +96,8 @@ impl FilterState {
 /// - `Ok(())` means the source has the set, not that the server applied it.
 ///   Handlers see the old set until the queued backlog drains.
 /// - Only the newest set is sent. A set the sink rejects is dropped with a warning.
-/// - A confirmed or finalized stream reconnects with the newest set. A processed
-///   stream that can take filter updates does not reconnect, so a refusal on the
-///   stream or a lost connection ends its run.
+/// - The gRPC source never reconnects, so a refusal on the stream or a lost
+///   connection ends its run at every commitment.
 #[derive(Debug, Clone)]
 pub struct RuntimeHandle {
     state: Arc<FilterState>,

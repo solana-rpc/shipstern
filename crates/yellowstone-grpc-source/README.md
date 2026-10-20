@@ -86,9 +86,8 @@ Naming an individual instruction parser is refused as unknown, and widening
 there widens the whole bundle. `handle.filters().parser_ids()` reports the keys
 that exist. Only the newest set matters: two updates in quick
 succession may reach the source as the second alone, and a set the sink rejects
-is dropped with a warning while `filters()` still reports it. A stream with a
-live `RuntimeHandle` can reconnect at confirmed/finalized commitment. Every
-processed stream stops on loss.
+is dropped with a warning while `filters()` still reports it. A live
+`RuntimeHandle` does not keep a lost stream alive: see [Stream loss](#stream-loss).
 
 The server applies the new set promptly once it has it, but two different lags
 sit in front of that. The source awaits the runtime buffer inside the same
@@ -117,24 +116,22 @@ also depends on the provider. Both `yellowstone-grpc-geyser` and `richat` apply
 mid-stream requests to a live subscription, but a deployment can sit behind
 infrastructure that does not forward them.
 
-## Reconnect
+## Stream loss
 
-With `auto-reconnect` on, confirmed and finalized streams resume after loss.
-Recovery uses `reconnect-max-retries` and needs a server that stores slots: if
-it no longer holds the slot to resume from, the run ends with `OutOfRange`.
+The source never reconnects. At every commitment, a lost stream ends the run
+after one subscription: with `StreamEnded` when the server closes the stream,
+and with `StreamError` when it sends a status. Records delivered before the
+loss stay delivered, and none is repeated or retracted.
 
-**Confirmed or finalized: resume from the last slot.** The source subscribes
-again from the last slot it saw, with the newest filter set, and drops that
-slot's repeats by signature, pubkey and write version, or status. A slot at
-these commitments never changes once delivered, so nothing is missed and
-nothing repeats. A `from_slot` and a `RuntimeHandle` are both fine here. The
-budget starts over once the new stream delivers an update.
+Run the source under a supervisor that restarts it with fresh state. A restart
+alone does not make delivery gap-free, and it does not undo what handlers
+already wrote.
 
-**Processed: stop on stream loss.** Every processed stream ends the run when
-its connection is lost, even with `auto-reconnect = true`. The runtime cannot
-retract already delivered records from an invalidated bank or verify complete
-replacement delivery. Run the source under a supervisor that restarts it with
-fresh temporary state, or use confirmed/finalized delivery for automatic resume.
+Earlier versions resumed a lost stream on their own. That resume could miss or
+repeat data, so it is gone, and so are the `auto-reconnect` and
+`reconnect-max-retries` options. A config file that still sets them loads with
+the keys ignored, the CLI flags are rejected, and the `AUTO_RECONNECT` and
+`RECONNECT_MAX_RETRIES` env vars are no longer read.
 
 ## Banks at processed
 

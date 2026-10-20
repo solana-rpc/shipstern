@@ -15,18 +15,8 @@ x-token = "<X-TOKEN>"
 # This defines how long to wait for a connection before timing out.
 timeout = 60
 
-# Built-in auto-reconnect (default true). A confirmed or finalized stream resumes from
-# the last slot it saw. Every processed stream stops on loss. Set this to false
-# for a server without replay_stored_slots.
-#auto-reconnect = true
-
-# Maximum reconnect attempts before the stream gives up. The count starts over at
-# every delivered update. Only applies to confirmed/finalized auto-reconnect.
-# Defaults to 10. A confirmed or finalized stream waits 500ms, doubling up to 10s, so the
-# retries span about 65 seconds; raise this for a server that holds slots longer.
-# Recovery also needs the server to still hold the missed slots, or the run ends
-# with OutOfRange.
-#reconnect-max-retries = 10
+# The source does not reconnect: a lost stream ends the run at every commitment,
+# so run it under a supervisor that restarts it.
 
 # Windows of account data to receive in place of the whole account.
 # Applies to the whole subscription rather than to one parser, so every account
