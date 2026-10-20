@@ -6,6 +6,7 @@
 |------|---------|
 | `integration.rs` | Synthetic tests for all coordinator behaviors |
 | `replay_fixtures.rs` | Real data validation using captured geyser data |
+| `source.rs` | `CoordinatorSource` against a local Geyser server |
 
 ## Test Coverage
 
@@ -82,6 +83,11 @@
 |------|----------|
 | `replay_fixture_through_coordinator` | Real slots flush in order with the right tx count and parent |
 | `replay_fixture_with_competing_bank_flushes_only_confirmed_bank` | A second bank that never confirms does not change the output |
+
+### Source (`source.rs`)
+| Test | Verifies |
+|------|----------|
+| `unknown_slot_status_is_skipped` | A slot status the proto does not know is skipped, not read as processed or as missing its bank ID |
 
 ## Fixture File
 

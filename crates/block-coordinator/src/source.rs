@@ -42,11 +42,11 @@ fn validate_bank_id(update: &SubscribeUpdate) -> Result<(), &'static str> {
         Some(UpdateOneof::Slot(slot))
             if slot.bank_id.is_none()
                 && matches!(
-                    slot.status(),
-                    SlotStatus::SlotCreatedBank
+                    SlotStatus::try_from(slot.status),
+                    Ok(SlotStatus::SlotCreatedBank
                         | SlotStatus::SlotProcessed
                         | SlotStatus::SlotConfirmed
-                        | SlotStatus::SlotFinalized
+                        | SlotStatus::SlotFinalized)
                 ) =>
         {
             Err("Slot status has no bank ID")
@@ -264,6 +264,19 @@ impl SourceTrait for CoordinatorSource {
             };
 
             if let Ok(subscribe_update) = &update {
+                // The block machine reads a status it does not know as processed, so a
+                // status from a newer server would advance the wrong bank. Skip it.
+                if let Some(UpdateOneof::Slot(slot)) = &subscribe_update.update_oneof
+                    && SlotStatus::try_from(slot.status).is_err()
+                {
+                    tracing::warn!(
+                        source_label,
+                        slot = slot.slot,
+                        status = slot.status,
+                        "Unknown slot status; not forwarding it to the coordinator"
+                    );
+                    continue;
+                }
                 if let Err(message) = validate_bank_id(subscribe_update) {
                     break SourceExitStatus::Error(message.to_string());
                 }
