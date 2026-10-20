@@ -171,6 +171,7 @@ use std::time::Duration;
 use shipstern_block_coordinator::{
     AccountCommitAt, AccountRecordSortKey, AccountSlot, BlockMachineCoordinator, CoordinatorError,
     CoordinatorInput, CoordinatorMessage, InstructionRecordSortKey, InstructionSlot,
+    MISSING_PARENT_GRACE_SLOTS,
 };
 use solana_hash::Hash;
 use tokio::sync::mpsc;
@@ -1347,10 +1348,35 @@ async fn lost_parent_block_meta_does_not_block_child_forever() {
     child.confirm().await;
     harness.expect_no_flush().await;
 
-    for slot in 44..=43 + 64 {
+    for slot in 44..=43 + MISSING_PARENT_GRACE_SLOTS {
         harness.slot(slot).parent(slot - 1).empty().await;
     }
     harness.expect_flush(43).await;
+}
+
+/// Slot 5000 never gets its BlockMeta, and its confirmed child 5001 is the first bank after a
+/// jump past the frozen window. The jump must not hide the lost parent from the grace sweep.
+#[tokio::test]
+async fn lost_parent_after_a_jump_does_not_block_child_forever() {
+    let mut harness = TestHarness::spawn();
+    let first = harness.slot(41).parent(40).empty().await;
+    first.confirm().await;
+    harness.expect_flush(41).await;
+
+    send_to_bank(
+        &harness,
+        make_slot_update(5000, 4999, SlotStatus::SlotCreatedBank),
+        5000,
+    )
+    .await;
+    let child = harness.slot(5001).parent(5000).empty().await;
+    child.confirm().await;
+    harness.expect_no_flush().await;
+
+    for slot in 5002..=5001 + MISSING_PARENT_GRACE_SLOTS {
+        harness.slot(slot).parent(slot - 1).empty().await;
+    }
+    harness.expect_flush(5001).await;
 }
 
 /// Slot 42's bank 1 froze but lost. The confirmed bank 2 never gets its BlockMeta, so
@@ -1385,7 +1411,7 @@ async fn lost_block_meta_of_winning_bank_does_not_block_child_forever() {
     .await;
     harness.expect_no_flush().await;
 
-    for slot in 44..=43 + 64 {
+    for slot in 44..=43 + MISSING_PARENT_GRACE_SLOTS {
         harness.slot(slot).parent(slot - 1).empty().await;
     }
     harness.expect_flush(43).await;
@@ -1538,7 +1564,7 @@ async fn record_for_skipped_slot_does_not_block_forever() {
     next.confirm().await;
     harness.expect_no_flush().await;
 
-    for slot in 44..=43 + 64 {
+    for slot in 44..=43 + MISSING_PARENT_GRACE_SLOTS {
         harness.slot(slot).parent(slot - 1).empty().await;
     }
     harness.expect_flush(43).await;
@@ -1559,7 +1585,7 @@ async fn late_record_for_skipped_slot_does_not_block_forever() {
     next.confirm().await;
     harness.expect_no_flush().await;
 
-    for slot in 44..=43 + 64 {
+    for slot in 44..=43 + MISSING_PARENT_GRACE_SLOTS {
         harness.slot(slot).parent(slot - 1).empty().await;
     }
     harness.expect_flush(43).await;
@@ -1575,7 +1601,7 @@ async fn record_below_first_parent_edge_does_not_block_forever() {
     first.confirm().await;
     harness.expect_no_flush().await;
 
-    for slot in 100..=99 + 64 {
+    for slot in 100..=99 + MISSING_PARENT_GRACE_SLOTS {
         harness.slot(slot).parent(slot - 1).empty().await;
     }
     harness.expect_flush(99).await;
@@ -1607,7 +1633,7 @@ async fn frozen_parent_that_never_confirms_does_not_block_forever() {
     child.confirm().await;
     harness.expect_no_flush().await;
 
-    for slot in 45..=44 + 65 {
+    for slot in 45..=44 + MISSING_PARENT_GRACE_SLOTS + 1 {
         harness.slot(slot).parent(slot - 1).empty().await;
     }
     harness.expect_flush(44).await;

@@ -19,7 +19,7 @@ use yellowstone_grpc_proto::{
     tonic::{codec::CompressionEncoding, transport::ClientTlsConfig, Code, Status},
 };
 
-use crate::resume::ResumePoint;
+use crate::resume::{add_resume_filter, strip_resume_filter, ResumePoint};
 
 #[derive(Default, Copy, Debug, serde::Deserialize, Clone, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -41,13 +41,17 @@ impl From<ShipsternCompressionEncoding> for CompressionEncoding {
 const fn default_auto_reconnect() -> bool { true }
 
 /// Reconnect defaults, deliberately sturdier than the client library's
-/// (3 retries / 10ms base), which gives up in under ~100ms. With these,
-/// 10 retries doubling from 500ms span about 8.5 minutes
-/// (500ms, 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s). Recovery also needs the
-/// server to still hold the missed slots, or the run ends with `OutOfRange`.
+/// (3 retries / 10ms base), which gives up in under ~100ms. `SlotResume` doubles
+/// from 500ms and caps each wait at 10s, so 10 retries span about 65s
+/// (500ms, 1s, 2s, 4s, 8s, then 10s each). `BankReplay` hands the client the same
+/// budget without the cap, so there it spans about 8.5 minutes. Recovery also needs
+/// the server to still hold the missed slots, or the run ends with `OutOfRange`.
 const DEFAULT_RECONNECT_MAX_RETRIES: u32 = 10;
 const DEFAULT_RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 const DEFAULT_RECONNECT_MULTIPLIER: f64 = 2.0;
+/// The longest wait between two `SlotResume` attempts. Uncapped, the eighth wait
+/// alone is 64s, longer than many servers hold a slot for replay.
+const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(10);
 
 /// Yellowstone connection configuration.
 #[derive(Debug, clap::Args, serde::Deserialize, Clone)]
@@ -86,7 +90,8 @@ pub struct YellowstoneGrpcConfig {
     ///
     /// Reconnect a lost gRPC stream. Defaults to `true`. See [`ReconnectMode`].
     ///
-    /// At confirmed or finalized the source subscribes again from the last slot it saw. At
+    /// At confirmed or finalized the source subscribes again from the last slot it saw, and
+    /// adds a `slots` filter so a slot is on record even before the first matching update. At
     /// processed the client replays the cut-off banks, which needs no `from_slot` and no
     /// `RuntimeHandle`, holds replayed updates in memory until they finalize, can repeat the
     /// cut-off block, and adds its own `blocks_meta` and `slots` filters. Set it to `false` for
@@ -183,7 +188,8 @@ pub enum ReconnectMode {
     /// can retract one.
     BankReplay,
     /// The source subscribes again from the last slot it saw and drops that slot's repeats.
-    /// A confirmed or finalized slot never changes once delivered, so this is exact. It takes
+    /// A confirmed or finalized slot never changes once delivered, so this is exact. It adds
+    /// its own `slots` filter so the last slot is known even when nothing else matched, takes
     /// a `from_slot` and filter updates, and ends the run with `OutOfRange` when the server no
     /// longer holds the slot.
     SlotResume,
@@ -203,10 +209,14 @@ enum StreamStop {
 }
 
 /// A loss the network or the server caused, which a new subscription can recover from.
-/// `OutOfRange` is not one: the server no longer holds the checkpoint slot.
-fn is_recoverable(code: Code) -> bool {
+/// `OutOfRange` is not one: the server no longer holds the checkpoint slot. Nor is the
+/// `Internal` a server without replay answers `from_slot` with: every retry sends it again.
+fn is_recoverable(status: &Status) -> bool {
+    if status.code() == Code::Internal && status.message().contains("from_slot is not supported") {
+        return false;
+    }
     matches!(
-        code,
+        status.code(),
         Code::Unavailable
             | Code::Internal
             | Code::Unknown
@@ -217,12 +227,13 @@ fn is_recoverable(code: Code) -> bool {
     )
 }
 
-/// The wait before reconnect attempt `attempt`, counted from 1.
+/// The wait before reconnect attempt `attempt`, counted from 1, capped at `MAX_RECONNECT_DELAY`.
 fn retry_delay(backoff: &Backoff, attempt: u32) -> Duration {
     let exponent = attempt.saturating_sub(1).min(i32::MAX as u32) as i32;
     backoff
         .initial_interval
         .mul_f64(backoff.multiplier.powi(exponent))
+        .min(MAX_RECONNECT_DELAY)
 }
 
 /// Count a loss and wait out its backoff. False once the budget is spent.
@@ -325,8 +336,19 @@ pub struct YellowstoneGrpcSource {
 /// reconnect rather than reusing the configured value. Only the initial
 /// subscribe sets it.
 ///
-fn build_subscribe_request(filters: Filters, config: &YellowstoneGrpcConfig) -> SubscribeRequest {
+/// `SlotResume` adds its own `slots` filter on every request, so a resubscribe
+/// has a slot to start from even when no update matched the user's filters yet.
+///
+fn build_subscribe_request(
+    filters: Filters,
+    config: &YellowstoneGrpcConfig,
+    mode: ReconnectMode,
+) -> SubscribeRequest {
     let mut request: SubscribeRequest = filters.into();
+
+    if mode == ReconnectMode::SlotResume {
+        add_resume_filter(&mut request);
+    }
 
     if let Some(commitment_level) = config.commitment_level {
         request.commitment = Some(commitment_level as i32);
@@ -376,13 +398,14 @@ async fn next_filter_update(
 async fn send_filter_update<S>(
     sink: &mut S,
     config: &YellowstoneGrpcConfig,
+    mode: ReconnectMode,
     filters: Filters,
     filter_updates_sent: &mut u64,
 ) where
     S: SinkExt<SubscribeRequest> + Unpin,
     S::Error: std::fmt::Display,
 {
-    let request = build_subscribe_request(filters, config);
+    let request = build_subscribe_request(filters, config, mode);
 
     tracing::debug!(
         // Entry counts, one per parser, not pubkey counts.
@@ -494,7 +517,7 @@ impl SourceTrait for YellowstoneGrpcSource {
         let mut filter_updates_sent: u64 = 0;
 
         let exit_status = loop {
-            let mut request = build_subscribe_request(filters.clone(), &config);
+            let mut request = build_subscribe_request(filters.clone(), &config, mode);
             request.from_slot = from_slot;
 
             let (mut sink, mut stream) = match open_stream(&config, mode, request).await {
@@ -519,13 +542,18 @@ impl SourceTrait for YellowstoneGrpcSource {
             let stop = loop {
                 tokio::select! {
                     update = stream.next() => match update {
-                        Some(Ok(update)) => {
-                            if mode == ReconnectMode::SlotResume && !resume.deliver(&update) {
-                                continue;
-                            }
+                        Some(Ok(mut update)) => {
                             // A delivered update shows the connection works, so the budget
                             // starts over.
                             attempts = 0;
+
+                            // A repeat of the checkpoint slot, or a slot status only the
+                            // resume filter asked for, stays here.
+                            if mode == ReconnectMode::SlotResume
+                                && (!resume.deliver(&update) || !strip_resume_filter(&mut update))
+                            {
+                                continue;
+                            }
 
                             if tx.send(Ok(update)).await.is_err() {
                                 tracing::info!("Receiver dropped, stopping source");
@@ -554,7 +582,7 @@ impl SourceTrait for YellowstoneGrpcSource {
                                 tracing::warn!("The server sends no bank_id; set auto-reconnect = false");
                             }
 
-                            if mode == ReconnectMode::SlotResume && is_recoverable(status.code()) {
+                            if mode == ReconnectMode::SlotResume && is_recoverable(&status) {
                                 break StreamStop::Lost(Some(status));
                             }
                             break StreamStop::Exit(stream_error(&tx, status).await);
@@ -576,8 +604,14 @@ impl SourceTrait for YellowstoneGrpcSource {
 
                         // A resubscribe must carry the newest set too.
                         filters = new_filters.clone();
-                        send_filter_update(&mut sink, &config, new_filters, &mut filter_updates_sent)
-                            .await;
+                        send_filter_update(
+                            &mut sink,
+                            &config,
+                            mode,
+                            new_filters,
+                            &mut filter_updates_sent,
+                        )
+                        .await;
                     },
                 }
             };
@@ -613,14 +647,20 @@ impl FromConfig for YellowstoneGrpcSource {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::{
+        collections::{HashMap, HashSet},
+        time::Duration,
+    };
 
     use shipstern_core::{AccountPrefilter, Filters, Prefilter, Pubkey};
+    use yellowstone_grpc_client::Backoff;
+    use yellowstone_grpc_proto::tonic::Status;
 
     use super::{
-        build_subscribe_request, send_filter_update, CommitmentLevel, ReconnectMode,
-        SubscribeRequest, YellowstoneGrpcConfig,
+        build_subscribe_request, is_recoverable, retry_delay, send_filter_update, CommitmentLevel,
+        ReconnectMode, SubscribeRequest, YellowstoneGrpcConfig,
     };
+    use crate::resume::RESUME_FILTER_KEY;
 
     fn config_from(toml_src: &str) -> YellowstoneGrpcConfig {
         toml::from_str(toml_src).expect("config must deserialize")
@@ -720,7 +760,14 @@ mod tests {
         let mut sink = TestSink::default();
         let mut sent = 0;
 
-        send_filter_update(&mut sink, &config, filters_owned_by(1), &mut sent).await;
+        send_filter_update(
+            &mut sink,
+            &config,
+            ReconnectMode::Off,
+            filters_owned_by(1),
+            &mut sent,
+        )
+        .await;
 
         assert_eq!(sent, 1);
         assert_eq!(sink.sent.len(), 1);
@@ -745,7 +792,14 @@ mod tests {
         };
         let mut sent = 0;
 
-        send_filter_update(&mut sink, &config, filters_owned_by(1), &mut sent).await;
+        send_filter_update(
+            &mut sink,
+            &config,
+            ReconnectMode::Off,
+            filters_owned_by(1),
+            &mut sent,
+        )
+        .await;
 
         assert_eq!(sent, 0);
         assert!(sink.sent.is_empty());
@@ -795,7 +849,8 @@ mod tests {
         "#,
         );
 
-        let request = build_subscribe_request(Filters::new(HashMap::new()), &config);
+        let request =
+            build_subscribe_request(Filters::new(HashMap::new()), &config, ReconnectMode::Off);
 
         assert_eq!(request.commitment, Some(CommitmentLevel::Finalized as i32));
     }
@@ -814,7 +869,8 @@ mod tests {
         "#,
         );
 
-        let request = build_subscribe_request(Filters::new(HashMap::new()), &config);
+        let request =
+            build_subscribe_request(Filters::new(HashMap::new()), &config, ReconnectMode::Off);
 
         assert_eq!(request.from_slot, None);
     }
@@ -830,7 +886,8 @@ mod tests {
         "#,
         );
 
-        let request = build_subscribe_request(Filters::new(HashMap::new()), &config);
+        let request =
+            build_subscribe_request(Filters::new(HashMap::new()), &config, ReconnectMode::Off);
 
         assert_eq!(request.commitment, None);
     }
@@ -875,7 +932,8 @@ mod tests {
         )
         .expect("config must deserialize");
 
-        let request = build_subscribe_request(Filters::new(HashMap::new()), &config);
+        let request =
+            build_subscribe_request(Filters::new(HashMap::new()), &config, ReconnectMode::Off);
         let windows: Vec<_> = request
             .accounts_data_slice
             .iter()
@@ -897,7 +955,8 @@ mod tests {
         )
         .expect("config must deserialize");
 
-        let request = build_subscribe_request(Filters::new(HashMap::new()), &config);
+        let request =
+            build_subscribe_request(Filters::new(HashMap::new()), &config, ReconnectMode::Off);
 
         assert!(request.accounts_data_slice.is_empty());
         assert_eq!(request.commitment, None);
@@ -1077,5 +1136,51 @@ mod tests {
         let reconnect = config.reconnect_config().expect("auto-reconnect enabled");
 
         assert_eq!(reconnect.backoff.max_retries, 25);
+    }
+
+    /// The wait doubles until the cap, so a stream cut for a minute is retried while the
+    /// server still holds the slot, instead of once at two minutes.
+    #[test]
+    fn retry_delay_doubles_then_caps() {
+        let backoff = Backoff::new(Duration::from_millis(500), 2.0, 10);
+
+        assert_eq!(retry_delay(&backoff, 1), Duration::from_millis(500));
+        assert_eq!(retry_delay(&backoff, 5), Duration::from_secs(8));
+        assert_eq!(retry_delay(&backoff, 6), Duration::from_secs(10));
+        assert_eq!(retry_delay(&backoff, 10), Duration::from_secs(10));
+    }
+
+    /// A server without replay rejects every `from_slot` the same way, so retrying it only
+    /// spends the budget.
+    #[test]
+    fn unsupported_from_slot_is_not_retried() {
+        assert!(is_recoverable(&Status::internal("connection reset")));
+        assert!(!is_recoverable(&Status::internal(
+            "from_slot is not supported"
+        )));
+    }
+
+    /// Only `SlotResume` asks for slot statuses on its own, and it does so on every request,
+    /// so a filter update does not drop the subscription that moves the checkpoint.
+    #[test]
+    fn slot_resume_requests_carry_the_resume_filter() {
+        let config = config_from(
+            r#"
+            endpoint = "https://example.rpcpool.com"
+            timeout = 60
+            commitment-level = "confirmed"
+        "#,
+        );
+
+        let request = build_subscribe_request(
+            Filters::new(HashMap::new()),
+            &config,
+            ReconnectMode::SlotResume,
+        );
+        assert!(request.slots.contains_key(RESUME_FILTER_KEY));
+
+        let request =
+            build_subscribe_request(Filters::new(HashMap::new()), &config, ReconnectMode::Off);
+        assert!(!request.slots.contains_key(RESUME_FILTER_KEY));
     }
 }
