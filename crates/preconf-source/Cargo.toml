@@ -1,0 +1,35 @@
+[package]
+name = "shipstern-preconf-source"
+version.workspace = true
+edition.workspace = true
+description = "Triton preconfirmation source for Shipstern"
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+
+readme = "./README.md"
+
+[dependencies]
+async-trait = { workspace = true }
+clap = { workspace = true, features = ["derive", "cargo", "wrap_help"] }
+futures-util = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+shipstern = { workspace = true }
+shipstern-core = { workspace = true }
+solana-message = { workspace = true }
+solana-pubkey = { workspace = true }
+solana-transaction = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+tonic = { workspace = true, features = ["tls-native-roots"] }
+tracing = { workspace = true }
+triton-preconfs-proto = { workspace = true }
+wincode = { workspace = true }
+yellowstone-grpc-proto = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+base64 = { workspace = true }
+bs58 = { workspace = true }
+serde_json = { workspace = true }
+solana-signature = { workspace = true }
