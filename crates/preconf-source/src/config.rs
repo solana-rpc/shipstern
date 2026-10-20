@@ -102,11 +102,22 @@ pub struct PreconfConfig {
     #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS)]
     #[serde(default = "default_timeout")]
     pub timeout: u64,
+    /// Resubscribe a stream that ends or fails with a retryable status. Defaults to `true`.
+    #[arg(long, default_value_t = true)]
+    #[serde(default = "default_auto_reconnect")]
+    pub auto_reconnect: bool,
+    /// Consecutive failed resubscribes before the source stops. Unset never gives up: the feed
+    /// has no resume, so a late reconnect is as good as an early one. Ten end 42.7 s after the
+    /// drop, inside the 60 s coverage cooloff, so a bound under 12 cannot survive one.
+    #[arg(long)]
+    pub reconnect_max_retries: Option<u32>,
 }
 
 fn default_endpoint() -> String { DEFAULT_ENDPOINT.to_string() }
 
 fn default_timeout() -> u64 { DEFAULT_TIMEOUT_SECS }
+
+const fn default_auto_reconnect() -> bool { true }
 
 #[cfg(test)]
 mod tests {
