@@ -2560,6 +2560,111 @@ async fn first_flush_waits_for_a_parent_with_records() {
     harness.expect_flush(31).await.empty();
 }
 
+/// At startup the stream sees parent 30 only through an account event and an entry; its record
+/// is still parsing when child 31 finalizes. The counted account waits, so the child does too.
+#[tokio::test]
+async fn first_flush_waits_for_a_parent_with_counted_accounts() {
+    for mode in [AccountCommitAt::Confirmed, AccountCommitAt::Finalized] {
+        let mut harness = TestHarness::spawn_with_options(false, mode);
+        harness
+            .input_tx
+            .send(CoordinatorInput::AccountEventSeen {
+                slot: 30,
+                bank_id: 30,
+            })
+            .await
+            .unwrap();
+        send_to_bank(&harness, make_entry_update(30, 0, 0), 30).await;
+        harness.slot(31).parent(30).empty().await.finalize().await;
+        harness.expect_no_flush().await;
+        harness.expect_no_account_flush().await;
+
+        harness
+            .parsed_tx
+            .send(CoordinatorMessage::AccountParsed {
+                slot: 30,
+                bank_id: 30,
+                key: AccountRecordSortKey::new(1, [1; 32]),
+                record: "parent-account".into(),
+            })
+            .await
+            .unwrap();
+        for update in [
+            make_block_meta_update(30, 29, 0, &block_hash(30)),
+            make_slot_update(30, 29, SlotStatus::SlotFinalized),
+        ] {
+            send_to_bank(&harness, update, 30).await;
+        }
+        harness.expect_flush(30).await;
+        harness.expect_flush(31).await;
+        harness
+            .expect_account_flush(30)
+            .await
+            .records(&["parent-account"]);
+        harness.expect_account_flush(31).await;
+    }
+}
+
+/// At startup only losing bank 3000's entry of slot 30 reached the stream, while winning bank
+/// 3001 has a parsed account. Child 31 finalizes first. Slot 30 is not before the stream, so its
+/// finality waits for bank 3001 instead of letting the block machine guess bank 3000.
+#[tokio::test]
+async fn finality_waits_for_a_parent_with_records_at_startup() {
+    let mut harness = TestHarness::spawn_with_options(true, AccountCommitAt::Finalized);
+    send_to_bank(&harness, make_entry_update(30, 0, 0), 3000).await;
+    harness
+        .input_tx
+        .send(CoordinatorInput::AccountEventSeen {
+            slot: 30,
+            bank_id: 3001,
+        })
+        .await
+        .unwrap();
+    harness
+        .parsed_tx
+        .send(CoordinatorMessage::AccountParsed {
+            slot: 30,
+            bank_id: 3001,
+            key: AccountRecordSortKey::new(1, [1; 32]),
+            record: "winner".into(),
+        })
+        .await
+        .unwrap();
+    harness.slot(31).parent(30).empty().await.finalize().await;
+    harness.expect_no_account_flush().await;
+
+    for update in [
+        make_entry_update(30, 0, 0),
+        make_block_meta_update(30, 29, 0, &block_hash(30)),
+    ] {
+        send_to_bank(&harness, update, 3001).await;
+    }
+    harness.expect_account_flush(30).await.records(&["winner"]);
+    harness.expect_account_flush(31).await;
+}
+
+/// A losing bank reaches the stream only after its slot's winner confirmed, 32 times within the
+/// finality lag. Another bank of the slot committed, so the loser does not count as pending.
+#[tokio::test]
+async fn losers_seen_after_the_winner_do_not_count_toward_the_pending_limit() {
+    let mut harness = TestHarness::spawn_with_options(true, AccountCommitAt::Finalized);
+    harness.slot(1).empty().await.finalize().await;
+    harness.expect_flush(1).await;
+    harness.expect_account_flush(1).await;
+    for slot in 2..=40 {
+        harness.slot(slot).empty().await.confirm().await;
+        harness.expect_flush(slot).await;
+        send_to_bank(&harness, make_entry_update(slot, 0, 0), slot + 10000).await;
+        send_to_bank(
+            &harness,
+            make_block_meta_update(slot, slot - 1, 0, &bank_block_hash(slot, slot + 10000)),
+            slot + 10000,
+        )
+        .await;
+    }
+    assert!(!harness.coordinator.is_finished());
+}
+
 /// A late entry with more transactions than the BlockMeta counts can never match it.
 #[tokio::test]
 async fn late_entry_with_extra_transactions_discards_the_block() {

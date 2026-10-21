@@ -124,7 +124,10 @@ impl<R> CoordinatorState<R> {
         );
     }
 
-    pub(crate) fn first_observed_slot(&self) -> Option<Slot> { self.first_observed_slot }
+    /// `slot` is below every block the stream showed, and nothing of it waits here.
+    pub(crate) fn is_before_stream(&self, slot: Slot) -> bool {
+        self.first_observed_slot.is_some_and(|first| slot < first) && self.banks_of(slot).is_empty()
+    }
 
     pub fn discarded_slot_count(&self) -> usize { self.discarded_slots.len() }
 
@@ -463,7 +466,7 @@ impl<R> CoordinatorState<R> {
 
     /// A slot flushes after its parent, so output follows the chain: the parent is behind the
     /// drain's frontier, or was discarded incomplete. Before the first flush, only a parent from
-    /// before the stream started, with no records waiting, can be missing. A node replays a child
+    /// before the stream started, with nothing of it waiting, can be missing. A node replays a child
     /// only on a frozen parent, so a child of a dead slot waits for the repair's BlockMeta, which
     /// can come after the child's. A fork-reported parent's own confirm follows its child's, so
     /// the child waits too.
@@ -473,11 +476,7 @@ impl<R> CoordinatorState<R> {
             None => {
                 self.first_observed_slot
                     .is_none_or(|first| parent_slot < first)
-                    && self
-                        .buffer
-                        .range(BankKey::slot_range(parent_slot))
-                        .next()
-                        .is_none()
+                    && self.banks_of(parent_slot).is_empty()
             },
         };
         flushed

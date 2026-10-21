@@ -101,7 +101,7 @@ impl Commitments {
 
     /// How many banks above `frontier` the ledger tracks, and the oldest one's slot. A stream
     /// that commits or describes banks that never flush must still reach the pending-bank limit.
-    /// An invalidated bank, such as a loser, is resolved, so it does not count.
+    /// An invalidated or losing bank is resolved, so it does not count.
     pub fn unflushed(
         &self,
         frontier: Option<Slot>,
@@ -112,7 +112,14 @@ impl Commitments {
             .identities
             .range(from..)
             .map(|(&key, _)| key)
-            .filter(|&key| !is_invalidated(key))
+            // Another bank of the slot committed, so this one lost, tombstone or not.
+            .filter(|&key| {
+                !is_invalidated(key)
+                    && self
+                        .levels
+                        .range(BankKey::slot_range(key.slot))
+                        .all(|(&committed, _)| committed == key)
+            })
             .chain(self.levels.range(from..).map(|(&key, _)| key))
             .collect();
         keys.sort_unstable();
@@ -145,10 +152,11 @@ impl Commitments {
     /// the block machine has not had yet. Every confirm goes first, so the block machine picks
     /// each slot's bank before a finalize roots anything.
     ///
+    /// `before_stream` tells whether a slot came before the stream, so its block is not needed.
     pub fn reconcile(
         &mut self,
         frontier: Option<Slot>,
-        first_observed: Option<Slot>,
+        before_stream: impl Fn(Slot) -> bool,
         is_invalidated: impl Fn(BankKey) -> bool,
     ) -> Result<Vec<Forward>, CoordinatorError> {
         let pending = |slot: Slot| frontier.is_none_or(|last| slot > last);
@@ -163,7 +171,7 @@ impl Commitments {
                 continue;
             };
             // Nothing to commit for a parent from before the stream.
-            if first_observed.is_some_and(|first| identity.parent_slot < first) {
+            if before_stream(identity.parent_slot) {
                 continue;
             }
             let committed = self
@@ -216,7 +224,7 @@ impl Commitments {
         for key in keys {
             if self.levels.get(&key) == Some(&CommitmentLevel::Finalized)
                 && self.forwarded.get(&key) != Some(&CommitmentLevel::Finalized)
-                && self.ancestry_known(key, frontier, first_observed)
+                && self.ancestry_known(key, frontier, &before_stream)
             {
                 self.forwarded.insert(key, CommitmentLevel::Finalized);
                 forwards.push(self.forward(key, SlotStatusKind::Finalized));
@@ -243,14 +251,14 @@ impl Commitments {
         &self,
         mut key: BankKey,
         frontier: Option<Slot>,
-        first_observed: Option<Slot>,
+        before_stream: &impl Fn(Slot) -> bool,
     ) -> bool {
         loop {
             let Some(identity) = self.identities.get(&key) else {
                 return false;
             };
             if frontier.is_some_and(|last| identity.parent_slot <= last)
-                || first_observed.is_some_and(|first| identity.parent_slot < first)
+                || before_stream(identity.parent_slot)
             {
                 return true;
             }

@@ -346,7 +346,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
     fn forward_commitments(&mut self) -> Result<(), CoordinatorError> {
         let forwards = self.commitments.reconcile(
             self.state.flushed_through(),
-            self.state.first_observed_slot(),
+            |slot| self.state.is_before_stream(slot),
             |key| self.state.is_invalidated_bank(key),
         )?;
         for Forward {
