@@ -203,8 +203,11 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                 self.created_at_startup = HashSet::new();
             }
 
-            let (unflushed, oldest_unflushed) =
-                self.commitments.unflushed(self.state.flushed_through());
+            let (unflushed, oldest_unflushed) = self
+                .commitments
+                .unflushed(self.state.flushed_through(), |key| {
+                    self.state.is_invalidated_bank(key)
+                });
             let pending = self.state.pending_bank_count().max(unflushed);
             if pending > self.max_pending_banks {
                 return Err(CoordinatorError::TooManyPendingBanks {

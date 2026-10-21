@@ -2475,6 +2475,91 @@ async fn commitments_that_never_flush_stop_coordinator() {
     assert_stopped_behind(harness.expect_stopped().await, 100);
 }
 
+/// Accounts commit at finalized, 32 slots behind. Every slot also froze a losing bank. The
+/// losers are resolved, so they do not count toward the pending-bank limit.
+#[tokio::test]
+async fn discarded_losers_do_not_count_toward_the_pending_limit() {
+    let mut harness = TestHarness::spawn_with_options(true, AccountCommitAt::Finalized);
+    harness.slot(1).empty().await.finalize().await;
+    harness.expect_flush(1).await;
+    harness.expect_account_flush(1).await;
+    for slot in 2..=40 {
+        for (bank_id, hash) in [
+            (slot + 10000, bank_block_hash(slot, slot + 10000)),
+            (slot, block_hash(slot)),
+        ] {
+            send_to_bank(&harness, make_entry_update(slot, 0, 0), bank_id).await;
+            send_to_bank(
+                &harness,
+                make_block_meta_update(slot, slot - 1, 0, &hash),
+                bank_id,
+            )
+            .await;
+        }
+        send_to_bank(
+            &harness,
+            make_slot_update(slot, slot - 1, SlotStatus::SlotConfirmed),
+            slot,
+        )
+        .await;
+        harness.expect_flush(slot).await;
+    }
+    assert!(!harness.coordinator.is_finished());
+}
+
+/// At startup the stream sees slot 30's replacement bank 3001 only through an entry and a
+/// record, and slot 30 is reported forked. Its child 31 confirms first. The record waits, so the
+/// child's first flush waits for slot 30.
+#[tokio::test]
+async fn first_flush_waits_for_a_parent_with_records() {
+    let mut harness = TestHarness::spawn();
+    send_to_bank(
+        &harness,
+        make_slot_update(29, 27, SlotStatus::SlotProcessed),
+        2900,
+    )
+    .await;
+    send_to_bank(
+        &harness,
+        make_slot_update(30, 29, SlotStatus::SlotProcessed),
+        3000,
+    )
+    .await;
+    send_to_bank(&harness, make_entry_update(30, 0, 1), 3001).await;
+    for message in [
+        CoordinatorMessage::InstructionParsed {
+            slot: 30,
+            bank_id: 3001,
+            key: InstructionRecordSortKey::new(0, vec![0]),
+            record: "parent".into(),
+        },
+        CoordinatorMessage::TransactionParsed {
+            slot: 30,
+            bank_id: 3001,
+        },
+    ] {
+        harness.parsed_tx.send(message).await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    send_to_bank(
+        &harness,
+        make_slot_update(29, 27, SlotStatus::SlotDead),
+        2900,
+    )
+    .await;
+    harness.slot(31).parent(30).empty().await.confirm().await;
+    harness.expect_no_flush().await;
+
+    for update in [
+        make_block_meta_update(30, 27, 1, &block_hash(30)),
+        make_slot_update(30, 27, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 3001).await;
+    }
+    harness.expect_flush(30).await.records(&["parent"]);
+    harness.expect_flush(31).await.empty();
+}
+
 /// A late entry with more transactions than the BlockMeta counts can never match it.
 #[tokio::test]
 async fn late_entry_with_extra_transactions_discards_the_block() {

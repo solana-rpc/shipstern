@@ -101,12 +101,18 @@ impl Commitments {
 
     /// How many banks above `frontier` the ledger tracks, and the oldest one's slot. A stream
     /// that commits or describes banks that never flush must still reach the pending-bank limit.
-    pub fn unflushed(&self, frontier: Option<Slot>) -> (usize, Option<Slot>) {
+    /// An invalidated bank, such as a loser, is resolved, so it does not count.
+    pub fn unflushed(
+        &self,
+        frontier: Option<Slot>,
+        is_invalidated: impl Fn(BankKey) -> bool,
+    ) -> (usize, Option<Slot>) {
         let from = BankKey::first(frontier.map_or(0, |last| last.saturating_add(1)));
         let mut keys: Vec<BankKey> = self
             .identities
             .range(from..)
             .map(|(&key, _)| key)
+            .filter(|&key| !is_invalidated(key))
             .chain(self.levels.range(from..).map(|(&key, _)| key))
             .collect();
         keys.sort_unstable();

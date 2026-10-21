@@ -463,15 +463,22 @@ impl<R> CoordinatorState<R> {
 
     /// A slot flushes after its parent, so output follows the chain: the parent is behind the
     /// drain's frontier, or was discarded incomplete. Before the first flush, only a parent from
-    /// before the stream started can be missing. A node replays a child only on a frozen parent,
-    /// so a child of a dead slot waits for the repair's BlockMeta, which can come after the
-    /// child's. A fork-reported parent's own confirm follows its child's, so the child waits too.
+    /// before the stream started, with no records waiting, can be missing. A node replays a child
+    /// only on a frozen parent, so a child of a dead slot waits for the repair's BlockMeta, which
+    /// can come after the child's. A fork-reported parent's own confirm follows its child's, so
+    /// the child waits too.
     fn parent_flushed(&self, parent_slot: Slot, frontier: Option<Slot>) -> bool {
         let flushed = match frontier {
             Some(last) => parent_slot <= last,
-            None => self
-                .first_observed_slot
-                .is_none_or(|first| parent_slot < first),
+            None => {
+                self.first_observed_slot
+                    .is_none_or(|first| parent_slot < first)
+                    && self
+                        .buffer
+                        .range(BankKey::slot_range(parent_slot))
+                        .next()
+                        .is_none()
+            },
         };
         flushed
             || matches!(
