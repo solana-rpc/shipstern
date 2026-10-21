@@ -105,8 +105,8 @@ zstd = "^0.13.0"
 bytemuck = "^1"
 wincode = "0.5"
 tokio-util = "0.7"
-jetstreamer-firehose = { git = "https://github.com/anza-xyz/jetstreamer", branch = "main" }
-jetstreamer-utils = { git = "https://github.com/anza-xyz/jetstreamer", branch = "main" }
+jetstreamer-firehose = { git = "https://github.com/vaultic-win/jetstreamer", tag = "v0.9.0" }
+jetstreamer-utils = { git = "https://github.com/vaultic-win/jetstreamer", tag = "v0.9.0" }
 warp = "0.3"
 
 yellowstone-block-machine = { version = "0.4.0" }
