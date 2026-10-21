@@ -42,11 +42,11 @@ fn validate_bank_id(update: &SubscribeUpdate) -> Result<(), &'static str> {
         Some(UpdateOneof::Slot(slot))
             if slot.bank_id.is_none()
                 && matches!(
-                    slot.status(),
-                    SlotStatus::SlotCreatedBank
+                    SlotStatus::try_from(slot.status),
+                    Ok(SlotStatus::SlotCreatedBank
                         | SlotStatus::SlotProcessed
                         | SlotStatus::SlotConfirmed
-                        | SlotStatus::SlotFinalized
+                        | SlotStatus::SlotFinalized)
                 ) =>
         {
             Err("Slot status has no bank ID")
@@ -93,47 +93,26 @@ pub struct CoordinatorSourceConfig {
     pub fixture_slots: Option<usize>,
 }
 
-trait CoordinatorSubscription {
-    /// Add all subscriptions required by the BlockSM coordinator:
-    /// - entries and bank invalidations (block reconstruction)
-    /// - blocks_meta (BlockSummary)
-    /// - slot lifecycle (FirstShredReceived, CreatedBank, Completed, Dead).
-    fn with_coordinator_subscriptions(self) -> Self;
-
-    /// Set the starting slot for the gRPC stream.
-    fn with_from_slot(self, from_slot: Option<u64>) -> Self;
-
-    /// Set commitment to Processed — required for the two-gate flush pattern
-    /// so the coordinator sees all transactions before confirmation.
-    fn with_commitment_processed(self) -> Self;
-}
-
-impl CoordinatorSubscription for SubscribeRequest {
-    fn with_coordinator_subscriptions(mut self) -> Self {
-        self.entry
-            .insert("coordinator".to_string(), SubscribeRequestFilterEntry {
-                include_update_parent: Some(true),
-            });
-        self.blocks_meta.insert(
-            "coordinator".to_string(),
-            SubscribeRequestFilterBlocksMeta {},
-        );
-        self.slots.entry("coordinator".to_string()).or_default();
-        for filter in self.slots.values_mut() {
-            filter.interslot_updates = Some(true);
-            filter.filter_by_commitment = None;
-        }
-        self
-    }
-
-    fn with_from_slot(mut self, from_slot: Option<u64>) -> Self {
-        self.from_slot = from_slot.or(self.from_slot);
-        self
-    }
-
-    fn with_commitment_processed(mut self) -> Self {
-        self.commitment = Some(CommitmentLevel::Processed as i32);
-        self
+///
+/// Add all subscriptions required by the BlockSM coordinator:
+/// - entries and bank invalidations (block reconstruction)
+/// - blocks_meta (BlockSummary)
+/// - slot lifecycle (FirstShredReceived, CreatedBank, Completed, Dead).
+///
+fn add_coordinator_subscriptions(request: &mut SubscribeRequest) {
+    request
+        .entry
+        .insert("coordinator".to_string(), SubscribeRequestFilterEntry {
+            include_update_parent: Some(true),
+        });
+    request.blocks_meta.insert(
+        "coordinator".to_string(),
+        SubscribeRequestFilterBlocksMeta {},
+    );
+    request.slots.entry("coordinator".to_string()).or_default();
+    for filter in request.slots.values_mut() {
+        filter.interslot_updates = Some(true);
+        filter.filter_by_commitment = None;
     }
 }
 
@@ -205,10 +184,11 @@ impl SourceTrait for CoordinatorSource {
 
         let mut client = builder.connect().await?;
 
-        let subscribe_request = SubscribeRequest::from(filters)
-            .with_coordinator_subscriptions()
-            .with_from_slot(config.from_slot)
-            .with_commitment_processed();
+        let mut subscribe_request = SubscribeRequest::from(filters);
+        add_coordinator_subscriptions(&mut subscribe_request);
+        subscribe_request.from_slot = config.from_slot.or(subscribe_request.from_slot);
+        // Processed: the two-gate flush needs every transaction before the confirmation.
+        subscribe_request.commitment = Some(CommitmentLevel::Processed as i32);
 
         tracing::info!(
             source_label,
@@ -274,6 +254,19 @@ impl SourceTrait for CoordinatorSource {
             };
 
             if let Ok(subscribe_update) = &update {
+                // The block machine reads a status it does not know as processed, so a
+                // status from a newer server would advance the wrong bank. Skip it.
+                if let Some(UpdateOneof::Slot(slot)) = &subscribe_update.update_oneof
+                    && SlotStatus::try_from(slot.status).is_err()
+                {
+                    tracing::warn!(
+                        source_label,
+                        slot = slot.slot,
+                        status = slot.status,
+                        "Unknown slot status; not forwarding it to the coordinator"
+                    );
+                    continue;
+                }
                 if let Err(message) = validate_bank_id(subscribe_update) {
                     break SourceExitStatus::Error(message.to_string());
                 }
@@ -394,12 +387,12 @@ mod tests {
         SubscribeUpdateSlot,
     };
 
-    use super::{validate_bank_id, CoordinatorSubscription};
+    use super::{add_coordinator_subscriptions, validate_bank_id};
 
     #[test]
     fn coordinator_subscription_requests_cleared_bank_updates() {
-        let request = yellowstone_grpc_proto::geyser::SubscribeRequest::default()
-            .with_coordinator_subscriptions();
+        let mut request = yellowstone_grpc_proto::geyser::SubscribeRequest::default();
+        add_coordinator_subscriptions(&mut request);
         assert_eq!(
             request.entry["coordinator"].include_update_parent,
             Some(true)

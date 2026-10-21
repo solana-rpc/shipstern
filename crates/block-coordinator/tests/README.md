@@ -6,6 +6,7 @@
 |------|---------|
 | `integration.rs` | Synthetic tests for all coordinator behaviors |
 | `replay_fixtures.rs` | Real data validation using captured geyser data |
+| `source.rs` | `CoordinatorSource` against a local Geyser server |
 
 ## Test Coverage
 
@@ -15,49 +16,50 @@
 | `two_gate_flush_end_to_end` | Both gates required, records sorted |
 | `empty_slot_flushes` | Gate 1 satisfied with 0 transactions |
 | `incomplete_slot_blocks_subsequent` | Incomplete slot blocks flush |
-| `metadata_and_confirmation_before_entries_with_parser_already_done` | Early metadata and confirmation wait for delayed entries even when parsing is complete |
-| `metadata_and_confirmation_before_entries_still_wait_for_parser` | Delayed entries complete reconstruction while the independent parser gate still waits |
-| `out_of_order_duplicate_entries_do_not_complete_pending_metadata` | Repeated entries count once; out-of-order entries and zero-transaction entries remain required |
-| `pending_metadata_does_not_mix_entries_from_competing_banks` | Each candidate bank must supply its own complete entries; only the confirmed winner flushes |
-| `confirmed_child_waits_for_late_parent_entries` | A confirmed child waits for its parent's delayed entries and both flush in parent order |
 
 ### Sequential Ordering
 | Test | Verifies |
 |------|----------|
 | `sequential_flush_order` | Earlier slot blocks later ones |
 | `gap_in_sequence_blocks_flush` | Missing parent blocks child |
-| `first_child_cannot_anchor_over_an_already_observed_parent` | A parent observed through CreatedBank remains required even before the first output; both outputs wait |
-| `entirely_missing_parent_stops_before_child_flush` | A required parent absent from every input channel still stops publication and requires replay |
-| `stream_closes_with_missing_parent_returns_error_without_descendant_output` | A finite or disconnected stream with a required parent gap returns an error rather than silently succeeding |
-| `stream_closes_with_unparsed_accounts_requires_recovery` | An instruction flush does not permit successful shutdown while the same block still lacks account output |
 
-### Missing Canonical Data and Discard Handling
-
-A timeout does not authorize skipping a produced canonical block. Once the grace
-expires, unresolved required data stops the coordinator with an actionable error
-so recovery can replay from the last published block. Actual skipped slots and
-abandoned candidate banks remain eligible for cleanup.
-
+### Discard Handling
 | Test | Verifies |
 |------|----------|
 | `dead_slot_discarded` | Dead slot removed, no output |
 | `dead_slot_spares_sibling` | A dead slot does not discard its sibling |
-| `incomplete_confirmed_block_stops_before_child_flush` | A confirmed block with missing entries stops with the missing slot and observed progress; neither output skips to its child |
-| `cleared_pending_metadata_does_not_block_replacement_bank` | Clearing a bank waiting for entries rejects its late data and preserves the replacement |
-| `dead_metadata_first_bank_cannot_revive_and_replacement_can_flush` | Death tombstones a metadata-first bank before wrapper registration, rejects late data, and permits a replacement |
-| `frozen_loser_does_not_hide_missing_entries_of_confirmed_winner` | Missing entries of the confirmed winner require recovery; a complete losing candidate cannot fill the gap |
+| `incomplete_block_discarded` | A block with more entries than its BlockMeta counts is discarded as incomplete |
+| `entry_after_block_meta_flushes` | An entry that arrives after its BlockMeta completes the block, which flushes in order |
+| `confirm_before_late_entry_waits_for_it` | A confirm that comes before the late entry waits for it |
+| `late_entry_after_the_child_confirms_still_flushes` | A child confirm does not end the wait; the parent flushes first once its entry comes |
+| `entry_that_never_comes_stops_coordinator` | A block whose entry never comes counts as pending, even with no records, and stops the coordinator |
+| `first_flush_waits_for_a_parent_the_stream_saw` | The first flush skips only a parent from before the stream started |
+| `late_entry_from_before_the_stream_does_not_block_the_start` | A late entry of a block that froze before the stream does not hold back the first flush |
+| `discarded_losers_do_not_count_toward_the_pending_limit` | Resolved losing banks do not use up the pending-bank limit during finality lag |
+| `first_flush_waits_for_a_parent_with_records` | The first flush does not skip a parent whose records still wait for its BlockMeta |
+| `first_flush_waits_for_a_parent_with_counted_accounts` | The first flush does not skip a parent whose counted accounts still parse |
+| `finality_waits_for_a_parent_with_records_at_startup` | At startup, finality does not pass a parent slot that holds records, so the block machine cannot guess its bank |
+| `losers_seen_after_the_winner_do_not_count_toward_the_pending_limit` | A loser first seen after its slot's winner committed does not use up the pending-bank limit |
+| `commitments_that_never_flush_stop_coordinator` | Commitments for banks that never freeze count toward the pending-bank limit |
+| `first_block_of_a_stream_started_mid_slot_is_discarded` | Before the first flush, a block missing its CreatedBank and first entry is discarded and does not block its child |
+| `block_meta_before_every_entry_at_startup_waits_for_them` | At startup, a block whose CreatedBank was seen waits for entries that all come after its BlockMeta |
+| `second_death_drops_the_held_repair_bank` | A second death of a slot, which block machine 0.11 does not report, still drops its held repair bank |
+| `repair_after_a_second_death_flushes_before_its_child` | Dropping banks after an unreported second death keeps the slot open, so a later repair flushes before its child |
+| `repair_block_meta_after_its_child_flushes_first` | A child of a dead slot waits for the repair's BlockMeta, even when it comes after the child's |
+| `short_replacement_of_a_forked_slot_flushes_before_its_child_at_startup` | At startup, a held replacement in a forked slot is frozen in the state, so its child waits for it |
+| `late_entry_of_a_repair_bank_flushes_before_its_child` | A held repair bank puts its dead slot back on the chain, so its child waits for the late entry |
+| `late_entry_with_extra_transactions_discards_the_block` | A late entry that overshoots the transaction count discards the block |
+| `update_parent_for_a_bank_waiting_for_entries_stops_coordinator` | Clearing a bank that froze short of entries stops the coordinator |
 | `late_block_meta_for_losing_bank_keeps_confirmed_bank` | Only the confirmed bank of a slot flushes |
-| `lost_parent_block_meta_stops_before_child_flush` | A required parent that never freezes stops the coordinator after grace; a later parent arrival requires replay |
-| `lost_parent_after_a_jump_stops_before_child_flush` | Progress after a jump still exposes the missing canonical parent and stops publication |
-| `lost_block_meta_of_winning_bank_stops_before_child_flush` | A frozen losing bank cannot substitute for the winning parent bank whose metadata is missing |
-| `late_parent_block_meta_within_grace_flushes` | A confirmed child's records wait for its ambiguous parent's winning bank, then both flush in order inside grace |
-| `record_for_skipped_slot_does_not_block_forever` | A record for a skipped slot that never freezes is discarded after 300 slots |
-| `late_record_for_skipped_slot_does_not_block_forever` | The same holds when the record arrives after the child froze |
-| `record_below_first_parent_edge_requires_recovery` | An early orphan not proven off-chain requires recovery rather than being skipped on timeout |
-| `frozen_parent_that_never_confirms_stops_before_child_flush` | An ambiguous frozen parent stops the coordinator at the deadline; no descendant is published |
-| `late_frozen_parent_that_never_confirms_stops_before_child_flush` | A parent freezing after child confirmation preserves the original grace, then stops without guessing a winner or skipping the parent |
-| `late_forked_parent_that_never_confirms_stops_before_child_flush` | A fork report after a repaired root cannot authorize skipping a required canonical parent |
-| `second_parent_bank_freeze_keeps_original_grace_deadline` | A second candidate just before expiry does not restart the deadline or permit publishing across the gap |
+| `lost_parent_block_meta_stops_coordinator` | A parent that never freezes stops the coordinator with `TooManyPendingBanks` instead of a silent stall |
+| `lost_parent_after_a_jump_stops_coordinator` | The same holds for the first bank after a jump |
+| `lost_block_meta_of_winning_bank_stops_coordinator` | A winning bank whose BlockMeta never comes stops the coordinator at its slot |
+| `late_parent_block_meta_flushes` | A parent BlockMeta that arrives under the pending limit still flushes, parent first |
+| `record_for_a_seen_skipped_slot_does_not_block` | A skipped slot whose bank the block machine saw is discarded when its child confirms |
+| `record_for_an_unseen_skipped_slot_stops_coordinator` | A record for a slot the block machine never saw stops the coordinator |
+| `late_record_for_an_unseen_skipped_slot_stops_coordinator` | The same holds when the record arrives after the child froze |
+| `record_below_first_parent_edge_stops_coordinator` | A record below the first parent edge at stream start stops the coordinator |
+| `frozen_parent_that_never_confirms_stops_coordinator` | A frozen parent that never confirms stops the coordinator |
 | `far_bank_on_other_branch_keeps_slot_with_records` | A slot with records that nothing skips is not discarded |
 | `alpenglow_switch_skips_vote_only_slots` | Vote-only slots of the Alpenglow switch never block, and the last Tower block flushes on Finalized alone |
 | `child_of_repaired_dead_slot_flushes` | A forked report does not stop a confirmed child of a repaired slot |
@@ -68,9 +70,14 @@ abandoned candidate banks remain eligible for cleanup.
 | `unfrozen_bank_of_forked_slot_can_still_win` | A bank that has not frozen survives a fork report and can win |
 | `bank_frozen_after_fork_report_does_not_block` | A bank that freezes after a fork report does not block later slots |
 | `discarded_slot_ignores_parsed_messages` | Messages for discarded slot dropped |
+| `commitment_for_a_cleared_bank_stops_coordinator` | A commitment for a bank that UpdateParent cleared stops the coordinator |
+| `finalized_child_waits_for_parent_bank_named_by_hash` | A finalized child commits the parent bank its parent blockhash names, not the only candidate seen so far |
+| `finalized_child_selects_parent_after_delayed_winning_metadata` | The same when only the winner's BlockMeta is late |
+| `finalized_child_waits_for_hash_selected_parents_late_entries` | The same when only the winner's entries are late |
+| `finalized_child_verifies_grandparent_before_promoting_sole_candidate` | Finality reaches the block machine only once every ancestor is linked by blockhash |
+| `finalized_child_selects_replacement_after_explicit_parent_clear` | A cleared bank does not hide its replacement from the child's parent blockhash |
+| `child_with_conflicting_published_parent_hash_stops_before_output` | A child naming another block than the published parent stops the coordinator |
 | `cleared_banks_release_payloads_and_ignore_late_callbacks` | Explicit invalidations release records immediately and preserve replacement banks |
-| `commitment_for_cleared_bank_requires_recovery` | Confirmed or finalized status contradicting a cleared bank stops with an error instead of silently selecting it |
-| `clearing_raw_confirmed_bank_with_pending_metadata_requires_recovery` | Clearing a bank already confirmed on the raw stream stops immediately even when delayed entries prevented the wrapper from confirming it |
 
 ### Fork Handling
 | Test | Verifies |
@@ -104,6 +111,12 @@ abandoned candidate banks remain eligible for cleanup.
 |------|----------|
 | `replay_fixture_through_coordinator` | Real slots flush in order with the right tx count and parent |
 | `replay_fixture_with_competing_bank_flushes_only_confirmed_bank` | A second bank that never confirms does not change the output |
+
+### Source (`source.rs`)
+| Test | Verifies |
+|------|----------|
+| `unknown_slot_status_is_skipped` | A slot status the proto does not know is skipped, not read as processed or as missing its bank ID |
+| `entry_update_parent_reaches_the_coordinator` | The source requests UpdateParent and forwards it to the coordinator |
 
 ## Fixture File
 

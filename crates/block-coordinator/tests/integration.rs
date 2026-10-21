@@ -93,8 +93,8 @@
 //! │                                  ┌─────────────────┐  ┌────────────────┐    │
 //! │                                  │ STOP            │  │ INSTRUCTION    │    │
 //! │                                  │ [account_gate_  │  │ GAP CHECK:     │    │
-//! │                                  │  flush_without  │  │ parent already │    │
-//! │                                  │  _account_cnt]  │  │ published?     │    │
+//! │                                  │  flush_without  │  │ parent flushed │    │
+//! │                                  │  _account_cnt]  │  │ or discarded?  │    │
 //! │                                  └─────────────────┘  └───────┬────────┘    │
 //! │                                                               │             │
 //! │                                                    NO ◄───────┴───────► YES │
@@ -111,9 +111,10 @@
 //! └─────────────────────────────────────────────────────────────────────────────┘
 //!
 //! NOTE:
-//!   The implementation uses two independent drains, each preserving its parent
-//!   frontier. A required parent cannot be discarded just to publish its child.
-//!   Parsing and commitment gates remain independent for each output.
+//!   The implementation uses two independent drains with the same parent
+//!   check: a slot flushes after its parent flushed or was discarded
+//!   incomplete. A child of a dead slot waits for the repair. Instructions
+//!   need the tx gate, accounts the account gate.
 //!   When `require_tx_gate=false`, `expected_tx_count` is forced to 0, so
 //!   `tx_parse_complete` is immediately true once BlockFrozen is seen.
 //!
@@ -127,8 +128,10 @@
 //! │  2. FORKED SLOT                        [sibling_fork_via_finalized]         │
 //! │     Sibling finalized ──► ForksDetected ──► skip the slot until it confirms │
 //! │                                                                             │
-//! │  3. UNRESOLVED CANONICAL BLOCK                                              │
-//! │     Required data still missing after grace ──► error; no child flush       │
+//! │  3. INCOMPLETE BLOCK                   [incomplete_block_discarded]         │
+//! │     BlockMeta with surplus entries ──► BankDiscarded                        │
+//! │     BlockMeta with missing entries ──► wait for them (pending bank)         │
+//! │     Startup, missing CreatedBank and entry 0 ──► BankDiscarded              │
 //! │                                                                             │
 //! │  discard_slot() actions:                                                    │
 //! │    • Add to discarded_slots with the reason                                 │
@@ -171,7 +174,7 @@ use std::time::Duration;
 use shipstern_block_coordinator::{
     AccountCommitAt, AccountRecordSortKey, AccountSlot, BlockMachineCoordinator, CoordinatorError,
     CoordinatorInput, CoordinatorMessage, InstructionRecordSortKey, InstructionSlot,
-    MISSING_PARENT_GRACE_SLOTS,
+    DEFAULT_MAX_PENDING_BANKS,
 };
 use solana_hash::Hash;
 use tokio::sync::mpsc;
@@ -203,6 +206,22 @@ impl TestHarness {
     }
 
     fn spawn_with_options(require_tx_gate: bool, account_commit_at: AccountCommitAt) -> Self {
+        Self::spawn_with_limit(
+            require_tx_gate,
+            account_commit_at,
+            DEFAULT_MAX_PENDING_BANKS,
+        )
+    }
+
+    fn spawn_with_max_pending_banks(max_pending_banks: usize) -> Self {
+        Self::spawn_with_limit(true, AccountCommitAt::Confirmed, max_pending_banks)
+    }
+
+    fn spawn_with_limit(
+        require_tx_gate: bool,
+        account_commit_at: AccountCommitAt,
+        max_pending_banks: usize,
+    ) -> Self {
         let (input_tx, input_rx) = mpsc::channel(256);
         let (parsed_tx, parsed_rx) = mpsc::channel(256);
         let (output_tx, output_rx) = mpsc::channel(64);
@@ -215,6 +234,7 @@ impl TestHarness {
             Some(account_output_tx),
             account_commit_at,
             require_tx_gate,
+            max_pending_banks,
         ));
 
         Self {
@@ -258,47 +278,13 @@ impl TestHarness {
         assert!(self.output_rx.try_recv().is_err(), "Unexpected flush");
     }
 
-    async fn expect_unresolved(&mut self, slot: u64, observed_slot: u64) {
-        let error = tokio::time::timeout(Duration::from_secs(2), &mut self.coordinator)
+    /// The error the coordinator stopped with.
+    async fn expect_stopped(self) -> CoordinatorError {
+        tokio::time::timeout(Duration::from_secs(2), self.coordinator)
             .await
-            .expect("Coordinator must stop before skipping the unresolved block")
-            .expect("Coordinator must not panic")
-            .expect_err("Missing canonical data must require recovery");
-        assert!(
-            matches!(
-                error,
-                CoordinatorError::UnresolvedBlock {
-                    slot: missing,
-                    observed_slot: observed,
-                } if missing == slot && observed == observed_slot
-            ),
-            "Expected missing block {slot} at observed slot {observed_slot}, got {error}"
-        );
-        let diagnostic = error.to_string();
-        assert!(diagnostic.contains(&slot.to_string()));
-        assert!(diagnostic.contains(&observed_slot.to_string()));
-        assert!(
-            diagnostic.contains("replay") || diagnostic.contains("backfill"),
-            "The error must explain how to recover the missing block"
-        );
-        assert!(
-            matches!(
-                self.output_rx.try_recv(),
-                Err(mpsc::error::TryRecvError::Disconnected)
-            ),
-            "Neither the child nor any later block may be published across the gap"
-        );
-        while let Ok(output) = self.account_output_rx.try_recv() {
-            assert!(
-                output.slot < slot,
-                "Account output for slot {} crossed unresolved block {slot}",
-                output.slot
-            );
-        }
-        assert!(matches!(
-            self.account_output_rx.try_recv(),
-            Err(mpsc::error::TryRecvError::Disconnected)
-        ));
+            .expect("coordinator must stop")
+            .expect("coordinator must not panic")
+            .expect_err("coordinator must stop with an error")
     }
 
     async fn expect_no_account_flush(&mut self) {
@@ -344,7 +330,7 @@ fn make_entry_update(slot: u64, index: u64, tx_count: u64) -> SubscribeUpdate {
     }
 }
 
-/// Stable identities let ordinary synthetic blocks name the actual hash of their parent.
+/// A stable blockhash per slot, so a child's parent blockhash names its parent.
 fn block_hash(slot: u64) -> Hash { bank_block_hash(slot, slot) }
 
 fn bank_block_hash(slot: u64, bank_id: u64) -> Hash {
@@ -383,20 +369,12 @@ fn make_block_meta_update(
                 block_height: slot - 1,
             }),
             parent_slot: parent,
-            parent_blockhash: block_hash(parent).to_string(),
+            parent_blockhash: bs58::encode(block_hash(parent).as_ref()).into_string(),
             executed_transaction_count: tx_count,
             entries_count: 1,
             bank_id: slot,
         })),
     }
-}
-
-fn with_entries_count(mut update: SubscribeUpdate, entries_count: u64) -> SubscribeUpdate {
-    let Some(UpdateOneof::BlockMeta(meta)) = update.update_oneof.as_mut() else {
-        panic!("Expected BlockMeta");
-    };
-    meta.entries_count = entries_count;
-    update
 }
 
 async fn send_to_bank(harness: &TestHarness, update: SubscribeUpdate, bank_id: u64) {
@@ -430,7 +408,7 @@ async fn late_block_meta_for_losing_bank_keeps_confirmed_bank() {
     // The loser goes last with the same keys, so a record that leaks into bank 8 replaces
     // bank 8's own record.
     for (bank_id, value, blockhash) in [
-        (8, "winner", Hash::new_unique()),
+        (8, "winner", block_hash(slot)),
         (7, "loser", loser_blockhash),
     ] {
         for update in [
@@ -835,15 +813,12 @@ async fn sequential_flush_order() {
         .parsed()
         .await;
 
+    // The child's parent blockhash confirms slot 101 too, but 101's parser is not done, so
+    // neither flushes.
     slot_102.confirm().await;
-    // The child's hash can now confirm its parent, but the parent's parser must still
-    // finish before either block is published.
     harness.expect_no_flush().await;
 
-    slot_101.confirm().await;
-    harness.expect_no_flush().await;
     slot_101.late_record("rec-101").await;
-
     harness.expect_flush(101).await.records(&["rec-101"]);
     harness.expect_flush(102).await.records(&["rec-102"]);
 }
@@ -904,418 +879,36 @@ async fn empty_slot_flushes() {
 }
 
 #[tokio::test]
-async fn incomplete_confirmed_block_stops_before_child_flush() {
+async fn incomplete_block_discarded() {
     let mut harness = TestHarness::spawn();
 
-    // Establish the ingestion boundary before introducing the missing block.
+    // Flush one slot first, so slot 101 cannot skip the parent check as the first flush.
     let first = harness.slot(99).parent(98).empty().await;
     first.confirm().await;
     harness.expect_flush(99).await.empty();
 
+    // Freeze slot 100 with two entries where its BlockMeta counts one. A surplus is final.
     for update in [
         make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        make_entry_update(100, 0, 0),
+        make_entry_update(100, 1, 0),
         make_block_meta_update(100, 99, 0, &block_hash(100)),
-        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
     ] {
         send_to_bank(&harness, update, 100).await;
     }
-    send_record_to_slot(&harness.parsed_tx, 100, "missing-entry").await;
+    send_record_to_slot(&harness.parsed_tx, 100, "ignored-incomplete").await;
+    send_to_bank(
+        &harness,
+        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
+        100,
+    )
+    .await;
     harness.expect_no_flush().await;
 
     let next = harness.slot(101).parent(100).empty().await;
     next.confirm().await;
-    harness.expect_no_flush().await;
 
-    let deadline = 100 + MISSING_PARENT_GRACE_SLOTS + 1;
-    for slot in 102..=deadline {
-        for update in [
-            make_entry_update(slot, 0, 0),
-            make_block_meta_update(slot, slot - 1, 0, &block_hash(slot)),
-        ] {
-            send_to_bank(&harness, update, slot).await;
-        }
-    }
-
-    harness.expect_unresolved(100, deadline).await;
-
-    // Recovery must replay the missing block; later live data cannot silently skip it.
-    assert!(harness
-        .input_tx
-        .send(CoordinatorInput::GeyserUpdate(Box::new(make_entry_update(
-            100, 0, 0
-        ))))
-        .await
-        .is_err());
-}
-
-async fn assert_metadata_before_entries(parser_finishes_first: bool) {
-    let mut harness = TestHarness::spawn();
-    for update in [
-        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        with_entries_count(make_block_meta_update(100, 99, 2, &block_hash(100)), 2),
-        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
-    ] {
-        send_to_bank(&harness, update, 100).await;
-    }
-    if parser_finishes_first {
-        for index in 0..2 {
-            harness
-                .parsed_tx
-                .send(CoordinatorMessage::InstructionParsed {
-                    slot: 100,
-                    bank_id: 100,
-                    key: InstructionRecordSortKey::new(index, vec![0]),
-                    record: format!("record-{index}"),
-                })
-                .await
-                .unwrap();
-            harness
-                .parsed_tx
-                .send(CoordinatorMessage::TransactionParsed {
-                    slot: 100,
-                    bank_id: 100,
-                })
-                .await
-                .unwrap();
-        }
-    }
-    harness.expect_no_flush().await;
-    harness.expect_no_account_flush().await;
-
-    send_to_bank(&harness, make_entry_update(100, 0, 1), 100).await;
-    harness.expect_no_flush().await;
-    send_to_bank(&harness, make_entry_update(100, 1, 1), 100).await;
-
-    if !parser_finishes_first {
-        // Receiving every entry satisfies reconstruction, but not the independent parser gate.
-        harness.expect_no_flush().await;
-        for index in 0..2 {
-            harness
-                .parsed_tx
-                .send(CoordinatorMessage::InstructionParsed {
-                    slot: 100,
-                    bank_id: 100,
-                    key: InstructionRecordSortKey::new(index, vec![0]),
-                    record: format!("record-{index}"),
-                })
-                .await
-                .unwrap();
-            harness
-                .parsed_tx
-                .send(CoordinatorMessage::TransactionParsed {
-                    slot: 100,
-                    bank_id: 100,
-                })
-                .await
-                .unwrap();
-            if index == 0 {
-                harness.expect_no_flush().await;
-            }
-        }
-    }
-    harness
-        .expect_flush(100)
-        .await
-        .parent(99)
-        .tx_count(2)
-        .records(&["record-0", "record-1"]);
-    harness.expect_account_flush(100).await.records(&[]);
-    harness.expect_no_flush().await;
-}
-
-#[tokio::test]
-async fn metadata_and_confirmation_before_entries_with_parser_already_done() {
-    assert_metadata_before_entries(true).await;
-}
-
-#[tokio::test]
-async fn metadata_and_confirmation_before_entries_still_wait_for_parser() {
-    assert_metadata_before_entries(false).await;
-}
-
-#[tokio::test]
-async fn out_of_order_duplicate_entries_do_not_complete_pending_metadata() {
-    let mut harness = TestHarness::spawn();
-    let last_entry = make_entry_update(100, 2, 1);
-    for update in [
-        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        last_entry.clone(),
-        with_entries_count(make_block_meta_update(100, 99, 2, &block_hash(100)), 3),
-        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
-        last_entry,
-    ] {
-        send_to_bank(&harness, update, 100).await;
-    }
-    for _ in 0..2 {
-        harness
-            .parsed_tx
-            .send(CoordinatorMessage::TransactionParsed {
-                slot: 100,
-                bank_id: 100,
-            })
-            .await
-            .unwrap();
-    }
-    harness.expect_no_flush().await;
-
-    let first_entry = make_entry_update(100, 0, 1);
-    send_to_bank(&harness, first_entry.clone(), 100).await;
-    send_to_bank(&harness, first_entry, 100).await;
-    // Both transaction counts now match, but the zero-transaction entry is still missing.
-    harness.expect_no_flush().await;
-    send_to_bank(&harness, make_entry_update(100, 1, 0), 100).await;
-    harness.expect_flush(100).await.tx_count(2).records(&[]);
-    harness.expect_no_flush().await;
-}
-
-#[tokio::test]
-async fn pending_metadata_does_not_mix_entries_from_competing_banks() {
-    let mut harness = TestHarness::spawn();
-    for (bank_id, entry_index, record) in [(1000, 0, "loser"), (1001, 1, "winner")] {
-        for update in [
-            make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-            make_entry_update(100, entry_index, 1),
-            with_entries_count(make_block_meta_update(100, 99, 2, &block_hash(100)), 2),
-        ] {
-            send_to_bank(&harness, update, bank_id).await;
-        }
-        harness
-            .parsed_tx
-            .send(CoordinatorMessage::InstructionParsed {
-                slot: 100,
-                bank_id,
-                key: InstructionRecordSortKey::new(0, vec![0]),
-                record: record.to_string(),
-            })
-            .await
-            .unwrap();
-        for _ in 0..2 {
-            harness
-                .parsed_tx
-                .send(CoordinatorMessage::TransactionParsed { slot: 100, bank_id })
-                .await
-                .unwrap();
-        }
-    }
-    send_to_bank(
-        &harness,
-        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
-        1001,
-    )
-    .await;
-    // Combining bank 1000's entry 0 and bank 1001's entry 1 would incorrectly complete it.
-    harness.expect_no_flush().await;
-    send_to_bank(&harness, make_entry_update(100, 0, 1), 1001).await;
-    harness
-        .expect_flush(100)
-        .await
-        .tx_count(2)
-        .records(&["winner"]);
-    // Completing the losing bank afterwards cannot create a second output.
-    send_to_bank(&harness, make_entry_update(100, 1, 1), 1000).await;
-    harness.expect_no_flush().await;
-}
-
-#[tokio::test]
-async fn cleared_pending_metadata_does_not_block_replacement_bank() {
-    let mut harness = TestHarness::spawn();
-    for update in [
-        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        make_block_meta_update(100, 99, 1, &block_hash(100)),
-    ] {
-        send_to_bank(&harness, update, 1000).await;
-    }
-    harness
-        .input_tx
-        .send(CoordinatorInput::GeyserUpdate(Box::new(SubscribeUpdate {
-            update_oneof: Some(UpdateOneof::EntryUpdateParent(
-                SubscribeUpdateEntryUpdateParent {
-                    slot: 100,
-                    cleared_bank_id: 1000,
-                    parent_slot: 98,
-                    ..Default::default()
-                },
-            )),
-            ..Default::default()
-        })))
-        .await
-        .unwrap();
-    // Let invalidation reach the coordinator before delayed parsed output arrives.
-    drop(
-        harness
-            .input_tx
-            .reserve_many(harness.input_tx.max_capacity())
-            .await
-            .unwrap(),
-    );
-    for message in [
-        CoordinatorMessage::InstructionParsed {
-            slot: 100,
-            bank_id: 1000,
-            key: InstructionRecordSortKey::new(0, vec![0]),
-            record: "cleared".to_string(),
-        },
-        CoordinatorMessage::TransactionParsed {
-            slot: 100,
-            bank_id: 1000,
-        },
-    ] {
-        harness.parsed_tx.send(message).await.unwrap();
-    }
-    for update in [
-        make_entry_update(100, 0, 1),
-        make_slot_update(100, 99, SlotStatus::SlotProcessed),
-    ] {
-        send_to_bank(&harness, update, 1000).await;
-    }
-    let replacement = harness
-        .slot(100)
-        .parent(98)
-        .record("replacement")
-        .parsed()
-        .await;
-    replacement.confirm().await;
-    harness
-        .expect_flush(100)
-        .await
-        .parent(98)
-        .records(&["replacement"]);
-    harness.expect_no_flush().await;
-}
-
-#[tokio::test]
-async fn dead_metadata_first_bank_cannot_revive_and_replacement_can_flush() {
-    let mut harness = TestHarness::spawn();
-    // No CreatedBank or Entry has registered this bank inside the wrapper yet.
-    for update in [
-        make_block_meta_update(100, 99, 1, &block_hash(100)),
-        make_slot_update(100, 99, SlotStatus::SlotDead),
-    ] {
-        send_to_bank(&harness, update, 1000).await;
-    }
-    drop(
-        harness
-            .input_tx
-            .reserve_many(harness.input_tx.max_capacity())
-            .await
-            .unwrap(),
-    );
-
-    for message in [
-        CoordinatorMessage::InstructionParsed {
-            slot: 100,
-            bank_id: 1000,
-            key: InstructionRecordSortKey::new(0, vec![0]),
-            record: "dead".to_string(),
-        },
-        CoordinatorMessage::TransactionParsed {
-            slot: 100,
-            bank_id: 1000,
-        },
-    ] {
-        harness.parsed_tx.send(message).await.unwrap();
-    }
-    for update in [
-        make_entry_update(100, 0, 1),
-        make_block_meta_update(100, 99, 1, &block_hash(100)),
-        make_slot_update(100, 99, SlotStatus::SlotProcessed),
-    ] {
-        send_to_bank(&harness, update, 1000).await;
-    }
-    harness.expect_no_flush().await;
-
-    let replacement = harness
-        .slot(100)
-        .parent(99)
-        .record("replacement")
-        .parsed()
-        .await;
-    replacement.confirm().await;
-    harness.expect_flush(100).await.records(&["replacement"]);
-    harness.expect_no_flush().await;
-}
-
-#[tokio::test]
-async fn frozen_loser_does_not_hide_missing_entries_of_confirmed_winner() {
-    let mut harness = TestHarness::spawn();
-    let root = harness.slot(99).parent(98).empty().await;
-    root.confirm().await;
-    harness.expect_flush(99).await.empty();
-    for update in [
-        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        make_entry_update(100, 0, 0),
-        make_block_meta_update(100, 99, 0, &bank_block_hash(100, 1000)),
-    ] {
-        send_to_bank(&harness, update, 1000).await;
-    }
-    for update in [
-        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        make_block_meta_update(100, 99, 1, &block_hash(100)),
-        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
-    ] {
-        send_to_bank(&harness, update, 1001).await;
-    }
-    for message in [
-        CoordinatorMessage::InstructionParsed {
-            slot: 100,
-            bank_id: 1001,
-            key: InstructionRecordSortKey::new(0, vec![0]),
-            record: "missing-winner-entry".to_string(),
-        },
-        CoordinatorMessage::TransactionParsed {
-            slot: 100,
-            bank_id: 1001,
-        },
-    ] {
-        harness.parsed_tx.send(message).await.unwrap();
-    }
-    let child = harness.slot(101).parent(100).empty().await;
-    child.confirm().await;
-    harness.expect_no_flush().await;
-
-    let deadline = 100 + MISSING_PARENT_GRACE_SLOTS + 1;
-    for slot in 102..=deadline {
-        for update in [
-            make_entry_update(slot, 0, 0),
-            make_block_meta_update(slot, slot - 1, 0, &block_hash(slot)),
-        ] {
-            send_to_bank(&harness, update, slot).await;
-        }
-    }
-    // An incomplete winner requires recovery; the complete loser cannot fill the gap.
-    harness.expect_unresolved(100, deadline).await;
-}
-
-#[tokio::test]
-async fn confirmed_child_waits_for_late_parent_entries() {
-    let mut harness = TestHarness::spawn();
-    let root = harness.slot(99).parent(98).empty().await;
-    root.confirm().await;
-    harness.expect_flush(99).await.empty();
-    for update in [
-        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        make_block_meta_update(100, 99, 1, &block_hash(100)),
-        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
-    ] {
-        send_to_bank(&harness, update, 100).await;
-    }
-    send_record_to_slot(&harness.parsed_tx, 100, "parent").await;
-    let child = harness.slot(101).parent(100).record("child").parsed().await;
-    child.confirm().await;
-    harness.expect_no_flush().await;
-
-    send_to_bank(&harness, make_entry_update(100, 0, 1), 100).await;
-    harness
-        .expect_flush(100)
-        .await
-        .tx_count(1)
-        .records(&["parent"]);
-    harness
-        .expect_flush(101)
-        .await
-        .tx_count(1)
-        .records(&["child"]);
-    harness.expect_no_flush().await;
+    harness.expect_flush(101).await.empty();
 }
 
 #[tokio::test]
@@ -1421,248 +1014,6 @@ async fn gap_in_sequence_blocks_flush() {
     harness.expect_flush(102).await.records(&["waiting"]);
 }
 
-/// Observing a bank establishes the startup boundary before any complete block flushes.
-#[tokio::test]
-async fn first_child_cannot_anchor_over_an_already_observed_parent() {
-    let mut harness = TestHarness::spawn();
-    send_to_bank(
-        &harness,
-        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        100,
-    )
-    .await;
-    let child = harness.slot(101).parent(100).empty().await;
-    child.confirm().await;
-    harness.expect_no_flush().await;
-    harness.expect_no_account_flush().await;
-
-    let parent = harness.slot(100).parent(99).empty().await;
-    parent.confirm().await;
-    harness.expect_flush(100).await.empty();
-    harness.expect_flush(101).await.empty();
-    harness.expect_account_flush(100).await.records(&[]);
-    harness.expect_account_flush(101).await.records(&[]);
-}
-
-/// A canonical parent can be absent from every input channel, not just lack metadata.
-#[tokio::test]
-async fn entirely_missing_parent_stops_before_child_flush() {
-    let mut harness = TestHarness::spawn();
-    let first = harness.slot(100).parent(99).empty().await;
-    first.confirm().await;
-    harness.expect_flush(100).await.empty();
-
-    let child = harness.slot(102).parent(101).empty().await;
-    child.confirm().await;
-    harness.expect_no_flush().await;
-    let deadline = 101 + MISSING_PARENT_GRACE_SLOTS + 1;
-    for slot in 103..=deadline {
-        harness.slot(slot).parent(slot - 1).empty().await;
-    }
-    harness.expect_unresolved(101, deadline).await;
-}
-
-/// A finite or disconnected stream must not report success with a required block missing.
-#[tokio::test]
-async fn stream_closes_with_missing_parent_returns_error_without_descendant_output() {
-    let (input_tx, input_rx) = mpsc::channel(32);
-    let (parsed_tx, parsed_rx) = mpsc::channel::<CoordinatorMessage<String>>(1);
-    let (output_tx, mut output_rx) = mpsc::channel(8);
-    let (account_output_tx, mut account_output_rx) = mpsc::channel(8);
-    let coordinator = tokio::spawn(BlockMachineCoordinator::run(
-        input_rx,
-        parsed_rx,
-        Some(output_tx),
-        Some(account_output_tx),
-        AccountCommitAt::Confirmed,
-        true,
-    ));
-    for update in [
-        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        make_entry_update(100, 0, 0),
-        make_block_meta_update(100, 99, 0, &block_hash(100)),
-        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
-    ] {
-        input_tx
-            .send(CoordinatorInput::GeyserUpdate(Box::new(update)))
-            .await
-            .unwrap();
-    }
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), output_rx.recv())
-            .await
-            .unwrap()
-            .unwrap()
-            .slot,
-        100
-    );
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), account_output_rx.recv())
-            .await
-            .unwrap()
-            .unwrap()
-            .slot,
-        100
-    );
-
-    // Slot 101 is never observed at all, but the confirmed chain requires it.
-    for slot in [102, 103] {
-        for update in [
-            make_slot_update(slot, slot - 1, SlotStatus::SlotCreatedBank),
-            make_entry_update(slot, 0, 0),
-            make_block_meta_update(slot, slot - 1, 0, &block_hash(slot)),
-            make_slot_update(slot, slot - 1, SlotStatus::SlotConfirmed),
-        ] {
-            input_tx
-                .send(CoordinatorInput::GeyserUpdate(Box::new(update)))
-                .await
-                .unwrap();
-        }
-    }
-    drop(input_tx);
-    drop(parsed_tx);
-    let result = tokio::time::timeout(Duration::from_secs(2), coordinator)
-        .await
-        .expect("A closed stream must report its canonical gap")
-        .expect("Coordinator must not panic");
-    assert!(
-        matches!(
-            result,
-            Err(CoordinatorError::UnresolvedBlock {
-                slot: 101,
-                observed_slot: 103
-            })
-        ),
-        "Missing canonical data must not be reported as a successful shutdown: {result:?}"
-    );
-    assert!(
-        matches!(
-            output_rx.try_recv(),
-            Err(mpsc::error::TryRecvError::Disconnected)
-        ),
-        "No descendant instructions may cross the missing parent"
-    );
-    assert!(
-        matches!(
-            account_output_rx.try_recv(),
-            Err(mpsc::error::TryRecvError::Disconnected)
-        ),
-        "No descendant accounts may cross the missing parent"
-    );
-}
-
-/// Instruction publication does not make a missing account parse safe to drop on shutdown.
-#[tokio::test]
-async fn stream_closes_with_unparsed_accounts_requires_recovery() {
-    let (input_tx, input_rx) = mpsc::channel(16);
-    let (parsed_tx, parsed_rx) = mpsc::channel::<CoordinatorMessage<String>>(1);
-    let (output_tx, mut output_rx) = mpsc::channel(8);
-    let (account_output_tx, mut account_output_rx) = mpsc::channel(8);
-    let coordinator = tokio::spawn(BlockMachineCoordinator::run(
-        input_rx,
-        parsed_rx,
-        Some(output_tx),
-        Some(account_output_tx),
-        AccountCommitAt::Confirmed,
-        true,
-    ));
-    for update in [
-        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        make_entry_update(100, 0, 0),
-        make_block_meta_update(100, 99, 0, &block_hash(100)),
-    ] {
-        input_tx
-            .send(CoordinatorInput::GeyserUpdate(Box::new(update)))
-            .await
-            .unwrap();
-    }
-    input_tx
-        .send(CoordinatorInput::AccountEventSeen {
-            slot: 100,
-            bank_id: 100,
-        })
-        .await
-        .unwrap();
-    input_tx
-        .send(CoordinatorInput::GeyserUpdate(Box::new(make_slot_update(
-            100,
-            99,
-            SlotStatus::SlotConfirmed,
-        ))))
-        .await
-        .unwrap();
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), output_rx.recv())
-            .await
-            .unwrap()
-            .unwrap()
-            .slot,
-        100
-    );
-    assert!(
-        account_output_rx.try_recv().is_err(),
-        "The account parser has not completed"
-    );
-
-    drop(input_tx);
-    drop(parsed_tx);
-    let result = tokio::time::timeout(Duration::from_secs(2), coordinator)
-        .await
-        .expect("The missing account parse must be reported on stream close")
-        .expect("Coordinator must not panic");
-    assert!(
-        matches!(
-            result,
-            Err(CoordinatorError::UnresolvedBlock {
-                slot: 100,
-                observed_slot: 100
-            })
-        ),
-        "An instruction flush must not hide missing account output: {result:?}"
-    );
-    assert!(
-        matches!(
-            account_output_rx.try_recv(),
-            Err(mpsc::error::TryRecvError::Disconnected)
-        ),
-        "An incomplete account block must remain unpublished"
-    );
-    assert!(matches!(
-        output_rx.try_recv(),
-        Err(mpsc::error::TryRecvError::Disconnected)
-    ));
-}
-
-/// The raw commitment is authoritative even while late entries delay the wrapper's confirmation.
-#[tokio::test]
-async fn clearing_raw_confirmed_bank_with_pending_metadata_requires_recovery() {
-    let mut harness = TestHarness::spawn();
-    for update in [
-        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        make_block_meta_update(100, 99, 1, &block_hash(100)),
-        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
-    ] {
-        send_to_bank(&harness, update, 1000).await;
-    }
-    harness.expect_no_flush().await;
-    harness
-        .input_tx
-        .send(CoordinatorInput::GeyserUpdate(Box::new(SubscribeUpdate {
-            update_oneof: Some(UpdateOneof::EntryUpdateParent(
-                SubscribeUpdateEntryUpdateParent {
-                    slot: 100,
-                    cleared_bank_id: 1000,
-                    parent_slot: 98,
-                    ..Default::default()
-                },
-            )),
-            ..Default::default()
-        })))
-        .await
-        .unwrap();
-    harness.expect_unresolved(100, 100).await;
-}
-
 #[tokio::test]
 async fn late_message_for_flushed_slot_is_dropped() {
     let (input_tx, input_rx) = mpsc::channel::<CoordinatorInput>(256);
@@ -1676,6 +1027,7 @@ async fn late_message_for_flushed_slot_is_dropped() {
         None,
         AccountCommitAt::Confirmed,
         true,
+        DEFAULT_MAX_PENDING_BANKS,
     ));
 
     // Create and flush slot 100
@@ -1730,6 +1082,7 @@ async fn output_channel_closed_returns_error() {
         None,
         AccountCommitAt::Confirmed,
         true,
+        DEFAULT_MAX_PENDING_BANKS,
     ));
 
     // Drop the output receiver — the coordinator can't send flushed slots.
@@ -2026,10 +1379,54 @@ async fn bank_frozen_after_fork_report_does_not_block() {
     harness.expect_flush(31).await;
 }
 
-/// A confirmed child's missing parent must stop the stream rather than be skipped.
+/// The pending-bank limit for tests where a slot never resolves.
+const TEST_PENDING_LIMIT: usize = 16;
+
+///
+/// Freeze empty slots on a chain from `from` until the coordinator stops behind a slot that never
+/// resolves, and return its error. Nothing flushes meanwhile, and sends that race with the exit
+/// are ignored.
+///
+async fn freeze_until_stopped(mut harness: TestHarness, from: u64) -> CoordinatorError {
+    for slot in from..from + 4 * TEST_PENDING_LIMIT as u64 {
+        if harness.coordinator.is_finished() {
+            break;
+        }
+        for update in [
+            make_slot_update(slot, slot - 1, SlotStatus::SlotCreatedBank),
+            make_entry_update(slot, 0, 0),
+            make_block_meta_update(slot, slot - 1, 0, &block_hash(slot)),
+        ] {
+            let _ = harness
+                .input_tx
+                .send(CoordinatorInput::GeyserUpdate(Box::new(update)))
+                .await;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(harness.output_rx.try_recv().is_err(), "Unexpected flush");
+    harness.expect_stopped().await
+}
+
+fn assert_stopped_behind(error: CoordinatorError, slot: u64) {
+    assert!(
+        matches!(
+            error,
+            CoordinatorError::TooManyPendingBanks {
+                limit: TEST_PENDING_LIMIT,
+                oldest_slot: Some(oldest),
+                ..
+            } if oldest == slot
+        ),
+        "{error}"
+    );
+}
+
+/// Slot 42 never gets its BlockMeta, so it never freezes. Its confirmed child 43 waits, and
+/// the coordinator stops with an error once too many banks pend behind it.
 #[tokio::test]
-async fn lost_parent_block_meta_stops_before_child_flush() {
-    let mut harness = TestHarness::spawn();
+async fn lost_parent_block_meta_stops_coordinator() {
+    let mut harness = TestHarness::spawn_with_max_pending_banks(TEST_PENDING_LIMIT);
     let parent = harness.slot(41).parent(40).empty().await;
     parent.confirm().await;
     harness.expect_flush(41).await;
@@ -2044,29 +1441,14 @@ async fn lost_parent_block_meta_stops_before_child_flush() {
     child.confirm().await;
     harness.expect_no_flush().await;
 
-    for slot in 44..=43 + MISSING_PARENT_GRACE_SLOTS {
-        harness.slot(slot).parent(slot - 1).empty().await;
-    }
-    harness
-        .expect_unresolved(42, 43 + MISSING_PARENT_GRACE_SLOTS)
-        .await;
-    assert!(
-        harness
-            .input_tx
-            .send(CoordinatorInput::GeyserUpdate(Box::new(
-                make_block_meta_update(42, 41, 0, &block_hash(42),)
-            )))
-            .await
-            .is_err(),
-        "A parent arriving after the deadline must require replay, never a skipped child"
-    );
+    assert_stopped_behind(freeze_until_stopped(harness, 44).await, 43);
 }
 
 /// Slot 5000 never gets its BlockMeta, and its confirmed child 5001 is the first bank after a
-/// jump past the frozen window. Progress must still expose the unresolved parent as an error.
+/// jump. The jump changes nothing: the coordinator stops once too many banks pend.
 #[tokio::test]
-async fn lost_parent_after_a_jump_stops_before_child_flush() {
-    let mut harness = TestHarness::spawn();
+async fn lost_parent_after_a_jump_stops_coordinator() {
+    let mut harness = TestHarness::spawn_with_max_pending_banks(TEST_PENDING_LIMIT);
     let first = harness.slot(41).parent(40).empty().await;
     first.confirm().await;
     harness.expect_flush(41).await;
@@ -2081,19 +1463,14 @@ async fn lost_parent_after_a_jump_stops_before_child_flush() {
     child.confirm().await;
     harness.expect_no_flush().await;
 
-    for slot in 5002..=5001 + MISSING_PARENT_GRACE_SLOTS {
-        harness.slot(slot).parent(slot - 1).empty().await;
-    }
-    harness
-        .expect_unresolved(5000, 5001 + MISSING_PARENT_GRACE_SLOTS)
-        .await;
+    assert_stopped_behind(freeze_until_stopped(harness, 5002).await, 5001);
 }
 
-/// Slot 42's bank 1 froze but lost. The confirmed bank 2 never gets its BlockMeta, so
-/// the frozen loser must not hide the lost parent from its child 43.
+/// Slot 42's bank 1 froze but lost. The confirmed bank 2 never gets its BlockMeta, so its child
+/// 43 waits, and the coordinator stops behind bank 2's slot 42.
 #[tokio::test]
-async fn lost_block_meta_of_winning_bank_stops_before_child_flush() {
-    let mut harness = TestHarness::spawn();
+async fn lost_block_meta_of_winning_bank_stops_coordinator() {
+    let mut harness = TestHarness::spawn_with_max_pending_banks(TEST_PENDING_LIMIT);
     let parent = harness.slot(41).parent(40).empty().await;
     parent.confirm().await;
     harness.expect_flush(41).await;
@@ -2101,7 +1478,7 @@ async fn lost_block_meta_of_winning_bank_stops_before_child_flush() {
     for update in [
         make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
         make_entry_update(42, 0, 0),
-        make_block_meta_update(42, 41, 0, &bank_block_hash(42, 1)),
+        make_block_meta_update(42, 41, 0, &Hash::new_unique()),
     ] {
         send_to_bank(&harness, update, 1).await;
     }
@@ -2121,92 +1498,39 @@ async fn lost_block_meta_of_winning_bank_stops_before_child_flush() {
     .await;
     harness.expect_no_flush().await;
 
-    for slot in 44..=43 + MISSING_PARENT_GRACE_SLOTS {
-        harness.slot(slot).parent(slot - 1).empty().await;
-    }
-    harness
-        .expect_unresolved(42, 43 + MISSING_PARENT_GRACE_SLOTS)
-        .await;
+    assert_stopped_behind(freeze_until_stopped(harness, 44).await, 42);
 }
 
-/// Child 43's records wait while parent 42 has two candidate banks. The winning parent's
-/// BlockMeta and confirm arrive inside grace, so its records must precede the child's.
+/// Slot 42's BlockMeta arrives after its child 43 and 7 more slots froze. That is under the
+/// pending limit, so 42 must flush first, then 43.
 #[tokio::test]
-async fn late_parent_block_meta_within_grace_flushes() {
+async fn late_parent_block_meta_flushes() {
     let mut harness = TestHarness::spawn();
     let parent = harness.slot(41).parent(40).empty().await;
     parent.confirm().await;
     harness.expect_flush(41).await;
 
-    for (bank_id, record) in [(4200, "loser"), (4201, "parent")] {
-        for update in [
-            make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
-            make_entry_update(42, 0, 1),
-        ] {
-            send_to_bank(&harness, update, bank_id).await;
-        }
-        for message in [
-            CoordinatorMessage::InstructionParsed {
-                slot: 42,
-                bank_id,
-                key: InstructionRecordSortKey::new(0, vec![0]),
-                record: record.to_string(),
-            },
-            CoordinatorMessage::TransactionParsed { slot: 42, bank_id },
-        ] {
-            harness.parsed_tx.send(message).await.unwrap();
-        }
-    }
-    let child = harness.slot(43).parent(42).record("child").parsed().await;
+    send_to_bank(
+        &harness,
+        make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
+        42,
+    )
+    .await;
+    let child = harness.slot(43).parent(42).empty().await;
     child.confirm().await;
     for slot in 44..=50 {
         harness.slot(slot).parent(slot - 1).empty().await;
     }
-    // Drain each ingress queue before the late metadata so the child is already confirmed
-    // and all three banks' records have reached the coordinator.
-    drop(
-        harness
-            .input_tx
-            .reserve_many(harness.input_tx.max_capacity())
-            .await
-            .unwrap(),
-    );
-    drop(
-        harness
-            .parsed_tx
-            .reserve_many(harness.parsed_tx.max_capacity())
-            .await
-            .unwrap(),
-    );
-    harness.expect_no_flush().await;
-
-    send_to_bank(
-        &harness,
-        make_block_meta_update(42, 41, 1, &bank_block_hash(42, 4200)),
-        4200,
-    )
-    .await;
-    harness.expect_no_flush().await;
     for update in [
-        make_block_meta_update(42, 41, 1, &block_hash(42)),
+        make_entry_update(42, 0, 0),
+        make_block_meta_update(42, 41, 0, &block_hash(42)),
         make_slot_update(42, 41, SlotStatus::SlotConfirmed),
     ] {
-        send_to_bank(&harness, update, 4201).await;
+        send_to_bank(&harness, update, 42).await;
     }
 
-    harness
-        .expect_flush(42)
-        .await
-        .parent(41)
-        .tx_count(1)
-        .records(&["parent"]);
-    harness
-        .expect_flush(43)
-        .await
-        .parent(42)
-        .tx_count(1)
-        .records(&["child"]);
-    harness.expect_no_flush().await;
+    harness.expect_flush(42).await;
+    harness.expect_flush(43).await;
 }
 
 #[tokio::test]
@@ -2235,6 +1559,7 @@ async fn malformed_block_meta_or_entry_is_skipped() {
             .unwrap();
     }
 
+    // The stream saw slot 50's entry, so its child waits for a valid BlockMeta.
     let recovered = harness.slot(50).parent(49).empty().await;
     recovered.confirm().await;
     harness.expect_flush(50).await.empty();
@@ -2256,6 +1581,7 @@ async fn missing_bank_id_stops_coordinator() {
         None,
         AccountCommitAt::Confirmed,
         true,
+        DEFAULT_MAX_PENDING_BANKS,
     ));
 
     for slot in [100, 101] {
@@ -2290,6 +1616,7 @@ async fn bank_in_two_slots_stops_coordinator() {
         None,
         AccountCommitAt::Confirmed,
         true,
+        DEFAULT_MAX_PENDING_BANKS,
     ));
 
     for update in [
@@ -2314,11 +1641,32 @@ async fn bank_in_two_slots_stops_coordinator() {
     ));
 }
 
-/// A record arrives for slot 42, which the chain skips. Slot 43 must flush once the stream
-/// is well past slot 42, not wait forever.
+/// The chain skips slot 42, whose bank the block machine saw. It discards 42 when 43 confirms,
+/// so 42's record does not hold 43 back.
 #[tokio::test]
-async fn record_for_skipped_slot_does_not_block_forever() {
+async fn record_for_a_seen_skipped_slot_does_not_block() {
     let mut harness = TestHarness::spawn();
+    let first = harness.slot(41).parent(40).empty().await;
+    first.confirm().await;
+    harness.expect_flush(41).await;
+
+    send_to_bank(
+        &harness,
+        make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
+        42,
+    )
+    .await;
+    send_record_to_slot(&harness.parsed_tx, 42, "skipped").await;
+    let next = harness.slot(43).parent(41).empty().await;
+    next.confirm().await;
+    harness.expect_flush(43).await;
+}
+
+/// A record arrives for slot 42, whose bank the block machine never saw, so nothing discards
+/// it. Slot 43 waits, and the coordinator stops with an error once too many banks pend.
+#[tokio::test]
+async fn record_for_an_unseen_skipped_slot_stops_coordinator() {
+    let mut harness = TestHarness::spawn_with_max_pending_banks(TEST_PENDING_LIMIT);
     let first = harness.slot(41).parent(40).empty().await;
     first.confirm().await;
     harness.expect_flush(41).await;
@@ -2328,17 +1676,14 @@ async fn record_for_skipped_slot_does_not_block_forever() {
     next.confirm().await;
     harness.expect_no_flush().await;
 
-    for slot in 44..=43 + MISSING_PARENT_GRACE_SLOTS {
-        harness.slot(slot).parent(slot - 1).empty().await;
-    }
-    harness.expect_flush(43).await;
+    assert_stopped_behind(freeze_until_stopped(harness, 44).await, 42);
 }
 
-/// Records come on their own channel and can lag. The record for skipped slot 42 arrives
-/// after 43 froze, so no later parent edge skips 42.
+/// Records come on their own channel and can lag. A record for unseen slot 42 arrives after 43
+/// froze; the coordinator still stops with an error rather than waiting forever.
 #[tokio::test]
-async fn late_record_for_skipped_slot_does_not_block_forever() {
-    let mut harness = TestHarness::spawn();
+async fn late_record_for_an_unseen_skipped_slot_stops_coordinator() {
+    let mut harness = TestHarness::spawn_with_max_pending_banks(TEST_PENDING_LIMIT);
     let first = harness.slot(41).parent(40).empty().await;
     first.confirm().await;
     harness.expect_flush(41).await;
@@ -2349,229 +1694,49 @@ async fn late_record_for_skipped_slot_does_not_block_forever() {
     next.confirm().await;
     harness.expect_no_flush().await;
 
-    for slot in 44..=43 + MISSING_PARENT_GRACE_SLOTS {
-        harness.slot(slot).parent(slot - 1).empty().await;
-    }
-    harness.expect_flush(43).await;
+    assert_stopped_behind(freeze_until_stopped(harness, 44).await, 42);
 }
 
-/// An early orphan record is not proven off-chain merely because no later parent edge reaches it.
+/// At stream start a record lands for slot 97, whose bank the block machine never saw. The
+/// coordinator stops with an error instead of holding back 99 forever.
 #[tokio::test]
-async fn record_below_first_parent_edge_requires_recovery() {
-    let mut harness = TestHarness::spawn();
+async fn record_below_first_parent_edge_stops_coordinator() {
+    let mut harness = TestHarness::spawn_with_max_pending_banks(TEST_PENDING_LIMIT);
     send_record_to_slot(&harness.parsed_tx, 97, "early").await;
     let first = harness.slot(99).parent(98).empty().await;
     first.confirm().await;
     harness.expect_no_flush().await;
 
-    let deadline = 97 + MISSING_PARENT_GRACE_SLOTS + 1;
-    for slot in 100..=deadline {
-        harness.slot(slot).parent(slot - 1).empty().await;
-    }
-    harness.expect_unresolved(97, deadline).await;
+    assert_stopped_behind(freeze_until_stopped(harness, 100).await, 97);
 }
 
-/// Replay all lifecycle updates on one channel so parent freeze versus child confirmation
-/// has a fixed order. Neither candidate matches the child's expected parent hash, and no
-/// direct commitment supplies the missing bank's identity.
-async fn assert_unconfirmed_parent_stops_before_child_flush(
-    late_parent_freeze: bool,
-    repaired_root: bool,
-    second_parent_freeze_slot: Option<u64>,
-) {
-    let (input_tx, input_rx) = mpsc::channel(2048);
-    let (parsed_tx, parsed_rx) = mpsc::channel::<CoordinatorMessage<String>>(1);
-    let (output_tx, mut output_rx) = mpsc::channel(2048);
-    let (account_output_tx, mut account_output_rx) = mpsc::channel(2048);
-    let coordinator = tokio::spawn(BlockMachineCoordinator::run(
-        input_rx,
-        parsed_rx,
-        Some(output_tx),
-        Some(account_output_tx),
-        AccountCommitAt::Confirmed,
-        true,
-    ));
-    let mut updates = Vec::new();
-    if repaired_root {
-        for update in [
-            make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
-            make_slot_update(42, 41, SlotStatus::SlotDead),
-        ] {
-            updates.push(with_bank_id(update, 4200));
-        }
-    }
+/// Slot 43 froze with a bank that loses, and the winning bank never seals, so 43 never gets a
+/// confirm. Its confirmed child 44 waits, and the coordinator stops behind 43.
+#[tokio::test]
+async fn frozen_parent_that_never_confirms_stops_coordinator() {
+    let mut harness = TestHarness::spawn_with_max_pending_banks(TEST_PENDING_LIMIT);
+    let first = harness.slot(42).parent(41).empty().await;
+    first.confirm().await;
+    harness.expect_flush(42).await;
+
     for update in [
-        make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
-        make_entry_update(42, 0, 0),
-        make_block_meta_update(42, 41, 0, &block_hash(42)),
-        make_slot_update(42, 41, SlotStatus::SlotConfirmed),
+        make_slot_update(43, 42, SlotStatus::SlotCreatedBank),
+        make_entry_update(43, 0, 0),
+        make_block_meta_update(43, 42, 0, &Hash::new_unique()),
     ] {
-        updates.push(with_bank_id(update, 4201));
+        send_to_bank(&harness, update, 4300).await;
     }
-    for update in updates.drain(..) {
-        input_tx
-            .send(CoordinatorInput::GeyserUpdate(Box::new(update)))
-            .await
-            .unwrap();
-    }
-    let first = tokio::time::timeout(Duration::from_secs(2), output_rx.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(first.slot, 42);
-
-    for bank_id in [4300, 4301] {
-        updates.push(with_bank_id(
-            make_slot_update(43, 42, SlotStatus::SlotCreatedBank),
-            bank_id,
-        ));
-    }
-    updates.push(with_bank_id(make_entry_update(43, 0, 0), 4300));
-    let parent_meta = with_bank_id(
-        make_block_meta_update(43, 42, 0, &bank_block_hash(43, 4300)),
-        4300,
-    );
-    if !late_parent_freeze {
-        updates.push(parent_meta.clone());
-    }
-    for update in [
-        make_entry_update(44, 0, 0),
-        with_parent_blockhash(
-            make_block_meta_update(44, 43, 0, &block_hash(44)),
-            bank_block_hash(43, 4302),
-        ),
-        make_slot_update(44, 43, SlotStatus::SlotConfirmed),
-    ] {
-        updates.push(with_bank_id(update, 4400));
-    }
-    if late_parent_freeze {
-        updates.push(parent_meta);
-    }
-    for update in updates {
-        input_tx
-            .send(CoordinatorInput::GeyserUpdate(Box::new(update)))
-            .await
-            .unwrap();
-    }
-    let deadline = 44 + MISSING_PARENT_GRACE_SLOTS + 1;
-    for slot in 45..=deadline {
-        if second_parent_freeze_slot == Some(slot) {
-            for update in [
-                make_entry_update(43, 0, 0),
-                make_block_meta_update(43, 42, 0, &bank_block_hash(43, 4301)),
-            ] {
-                input_tx
-                    .send(CoordinatorInput::GeyserUpdate(Box::new(with_bank_id(
-                        update, 4301,
-                    ))))
-                    .await
-                    .unwrap();
-            }
-        }
-        for update in [
-            make_entry_update(slot, 0, 0),
-            make_block_meta_update(slot, slot - 1, 0, &block_hash(slot)),
-        ] {
-            input_tx
-                .send(CoordinatorInput::GeyserUpdate(Box::new(with_bank_id(
-                    update,
-                    slot * 100,
-                ))))
-                .await
-                .unwrap();
-        }
-        if slot < deadline {
-            input_tx
-                .send(CoordinatorInput::GeyserUpdate(Box::new(with_bank_id(
-                    make_slot_update(slot, slot - 1, SlotStatus::SlotConfirmed),
-                    slot * 100,
-                ))))
-                .await
-                .unwrap();
-        }
-        if slot == deadline - 1 {
-            drop(
-                input_tx
-                    .reserve_many(input_tx.max_capacity())
-                    .await
-                    .unwrap(),
-            );
-            assert!(
-                output_rx.try_recv().is_err(),
-                "Neither the child nor a later block may flush while its parent is unresolved"
-            );
-            while let Ok(output) = account_output_rx.try_recv() {
-                assert!(
-                    output.slot < 43,
-                    "Account output must not cross the parent gap"
-                );
-            }
-            assert!(
-                !coordinator.is_finished(),
-                "The original grace must remain intact"
-            );
-        }
-    }
-    let error = tokio::time::timeout(Duration::from_secs(2), coordinator)
-        .await
-        .expect("The original grace deadline must stop the coordinator")
-        .expect("Coordinator must not panic")
-        .expect_err("An unresolved canonical parent must require replay");
-    assert!(
-        matches!(
-            error,
-            CoordinatorError::UnresolvedBlock { slot: 43, observed_slot } if observed_slot == deadline
-        ),
-        "Unexpected gap error: {error}"
-    );
-    assert!(
-        matches!(
-            output_rx.try_recv(),
-            Err(mpsc::error::TryRecvError::Disconnected)
-        ),
-        "The child and every later block must remain unpublished"
-    );
-    while let Ok(output) = account_output_rx.try_recv() {
-        assert!(
-            output.slot < 43,
-            "Account output must not cross the parent gap"
-        );
-    }
-    assert!(matches!(
-        account_output_rx.try_recv(),
-        Err(mpsc::error::TryRecvError::Disconnected)
-    ));
-    drop(input_tx);
-    drop(parsed_tx);
-}
-
-/// A parent candidate freezing before child confirmation cannot be skipped at timeout.
-#[tokio::test]
-async fn frozen_parent_that_never_confirms_stops_before_child_flush() {
-    assert_unconfirmed_parent_stops_before_child_flush(false, false, None).await;
-}
-
-/// Late metadata preserves the wait, but never permits dropping the unresolved parent.
-#[tokio::test]
-async fn late_frozen_parent_that_never_confirms_stops_before_child_flush() {
-    assert_unconfirmed_parent_stops_before_child_flush(true, false, None).await;
-}
-
-/// A repaired-root fork report does not authorize skipping a confirmed child's parent.
-#[tokio::test]
-async fn late_forked_parent_that_never_confirms_stops_before_child_flush() {
-    assert_unconfirmed_parent_stops_before_child_flush(true, true, None).await;
-}
-
-/// A second candidate cannot restart the deadline or authorize publishing across the gap.
-#[tokio::test]
-async fn second_parent_bank_freeze_keeps_original_grace_deadline() {
-    assert_unconfirmed_parent_stops_before_child_flush(
-        true,
-        false,
-        Some(44 + MISSING_PARENT_GRACE_SLOTS - 1),
+    send_to_bank(
+        &harness,
+        make_slot_update(43, 42, SlotStatus::SlotCreatedBank),
+        4301,
     )
     .await;
+    let child = harness.slot(44).parent(43).empty().await;
+    child.confirm().await;
+    harness.expect_no_flush().await;
+
+    assert_stopped_behind(freeze_until_stopped(harness, 45).await, 43);
 }
 
 /// The devnet Alpenglow switch: vote-only slots 100..=107 freeze on G = 99 and never confirm.
@@ -2811,13 +1976,12 @@ async fn cleared_banks_release_payloads_and_ignore_late_callbacks() {
                 harness.parsed_tx.send(message).await.unwrap();
             }
         }
-        // Noncommitting lifecycle delivery can also lag the invalidation. It must
-        // not revive A inside the block machine; contradictory commitment is tested separately.
+        // Raw lifecycle delivery can also lag the invalidation. It must not revive A
+        // inside the block machine.
         for update in [
             make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
             make_entry_update(42, 0, 0),
             make_block_meta_update(42, 41, 0, &block_hash(42)),
-            make_slot_update(42, 41, SlotStatus::SlotProcessed),
         ] {
             send_to_bank(&harness, update, bank_id).await;
         }
@@ -2835,36 +1999,760 @@ async fn cleared_banks_release_payloads_and_ignore_late_callbacks() {
     harness.expect_no_account_flush().await;
 }
 
-/// An invalidated bank cannot later be declared canonical without an explicit error.
-#[tokio::test]
-async fn commitment_for_cleared_bank_requires_recovery() {
-    for status in [SlotStatus::SlotConfirmed, SlotStatus::SlotFinalized] {
-        let mut harness = TestHarness::spawn();
-        send_to_bank(
-            &harness,
-            make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
-            1000,
-        )
-        .await;
-        harness
-            .input_tx
-            .send(CoordinatorInput::GeyserUpdate(Box::new(SubscribeUpdate {
-                update_oneof: Some(UpdateOneof::EntryUpdateParent(
-                    SubscribeUpdateEntryUpdateParent {
-                        slot: 42,
-                        cleared_bank_id: 1000,
-                        parent_slot: 40,
-                        ..Default::default()
-                    },
-                )),
-                ..Default::default()
-            })))
-            .await
-            .unwrap();
-        send_to_bank(&harness, make_slot_update(42, 41, status), 1000).await;
-        harness.expect_unresolved(42, 42).await;
+///
+/// Freeze slot `slot` (parent `slot - 1`) on BlockMeta with one of its two entries. Entry 0 holds
+/// the slot's one transaction and entry 1 is a tick. LaserStream can send a bank's last entry
+/// after its BlockMeta, and a stream that starts mid-slot misses the first ones.
+///
+async fn freeze_with_entry(harness: &TestHarness, slot: u64, index: u64) {
+    let mut block_meta = make_block_meta_update(slot, slot - 1, 1, &block_hash(slot));
+    if let Some(UpdateOneof::BlockMeta(meta)) = block_meta.update_oneof.as_mut() {
+        meta.entries_count = 2;
+    }
+    for update in [
+        make_slot_update(slot, slot - 1, SlotStatus::SlotCreatedBank),
+        make_entry_update(slot, index, u64::from(index == 0)),
+        block_meta,
+    ] {
+        send_to_bank(harness, update, slot).await;
     }
 }
+
+async fn freeze_without_last_tick(harness: &TestHarness, slot: u64, record: &str) {
+    freeze_with_entry(harness, slot, 0).await;
+    send_record_to_slot(&harness.parsed_tx, slot, record).await;
+}
+
+async fn send_late_tick(harness: &TestHarness, slot: u64) {
+    send_to_bank(harness, make_entry_update(slot, 1, 0), slot).await;
+}
+
+async fn confirm_slot(harness: &TestHarness, slot: u64) {
+    send_to_bank(
+        harness,
+        make_slot_update(slot, slot - 1, SlotStatus::SlotConfirmed),
+        slot,
+    )
+    .await;
+}
+
+/// Flush slot 99, so later slots cannot pass as the stream's first flush.
+async fn flush_slot_99(harness: &mut TestHarness) {
+    harness.slot(99).parent(98).empty().await.confirm().await;
+    harness.expect_flush(99).await.empty();
+}
+
+/// The late tick completes slot 100 before its confirm, so the slot flushes in order.
+#[tokio::test]
+async fn entry_after_block_meta_flushes() {
+    let mut harness = TestHarness::spawn();
+    flush_slot_99(&mut harness).await;
+
+    freeze_without_last_tick(&harness, 100, "a").await;
+    send_late_tick(&harness, 100).await;
+    confirm_slot(&harness, 100).await;
+    harness.expect_flush(100).await.parent(99).records(&["a"]);
+
+    harness.slot(101).parent(100).empty().await.confirm().await;
+    harness.expect_flush(101).await.empty();
+}
+
+/// Slot 100 confirms before its late tick. The confirm waits for the tick.
+#[tokio::test]
+async fn confirm_before_late_entry_waits_for_it() {
+    let mut harness = TestHarness::spawn();
+    flush_slot_99(&mut harness).await;
+
+    freeze_without_last_tick(&harness, 100, "a").await;
+    confirm_slot(&harness, 100).await;
+    harness.expect_no_flush().await;
+
+    send_late_tick(&harness, 100).await;
+    harness.expect_flush(100).await.records(&["a"]);
+}
+
+/// A later slot's confirm does not prove the tick is lost, so the child waits for it.
+#[tokio::test]
+async fn late_entry_after_the_child_confirms_still_flushes() {
+    let mut harness = TestHarness::spawn();
+    flush_slot_99(&mut harness).await;
+
+    freeze_without_last_tick(&harness, 100, "a").await;
+    confirm_slot(&harness, 100).await;
+    harness.slot(101).parent(100).empty().await.confirm().await;
+    harness.expect_no_flush().await;
+
+    send_late_tick(&harness, 100).await;
+    harness.expect_flush(100).await.records(&["a"]);
+    harness.expect_flush(101).await.empty();
+}
+
+/// The tick of slot 100 never comes. The bank counts as pending even with no records, so the
+/// coordinator stops behind it instead of skipping it.
+#[tokio::test]
+async fn entry_that_never_comes_stops_coordinator() {
+    let mut harness = TestHarness::spawn_with_max_pending_banks(TEST_PENDING_LIMIT);
+    flush_slot_99(&mut harness).await;
+
+    freeze_with_entry(&harness, 100, 0).await;
+    confirm_slot(&harness, 100).await;
+    assert_stopped_behind(freeze_until_stopped(harness, 101).await, 100);
+}
+
+/// The stream started inside slot 100, so it missed its CreatedBank and entry 0. Nothing flushed
+/// yet, so the slot is discarded and its child flushes.
+#[tokio::test]
+async fn first_block_of_a_stream_started_mid_slot_is_discarded() {
+    let mut harness = TestHarness::spawn();
+
+    let mut block_meta = make_block_meta_update(100, 99, 0, &block_hash(100));
+    if let Some(UpdateOneof::BlockMeta(meta)) = block_meta.update_oneof.as_mut() {
+        meta.entries_count = 2;
+    }
+    send_to_bank(&harness, make_entry_update(100, 1, 0), 100).await;
+    send_to_bank(&harness, block_meta, 100).await;
+    send_record_to_slot(&harness.parsed_tx, 100, "lost").await;
+    confirm_slot(&harness, 100).await;
+
+    harness.slot(101).parent(100).empty().await.confirm().await;
+    harness.expect_flush(101).await.parent(100).empty();
+    harness.expect_no_flush().await;
+}
+
+/// At startup the stream saw slot 100's CreatedBank, so its entries are coming even though
+/// BlockMeta arrives before all of them.
+#[tokio::test]
+async fn block_meta_before_every_entry_at_startup_waits_for_them() {
+    let mut harness = TestHarness::spawn();
+
+    let mut block_meta = make_block_meta_update(100, 99, 1, &block_hash(100));
+    if let Some(UpdateOneof::BlockMeta(meta)) = block_meta.update_oneof.as_mut() {
+        meta.entries_count = 2;
+    }
+    for update in [
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        block_meta,
+        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 100).await;
+    }
+    send_record_to_slot(&harness.parsed_tx, 100, "a").await;
+    harness.expect_no_flush().await;
+
+    send_to_bank(&harness, make_entry_update(100, 0, 1), 100).await;
+    send_late_tick(&harness, 100).await;
+    harness.expect_flush(100).await.records(&["a"]);
+}
+
+/// Bank 10 of slot 100 dies, and repair bank 11 freezes short of its tick. The repair puts the
+/// slot back on the chain, so child 101 waits for the tick instead of flushing past a dead slot.
+#[tokio::test]
+async fn late_entry_of_a_repair_bank_flushes_before_its_child() {
+    let mut harness = TestHarness::spawn();
+    flush_slot_99(&mut harness).await;
+
+    send_to_bank(
+        &harness,
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        10,
+    )
+    .await;
+    send_to_bank(
+        &harness,
+        make_slot_update(100, 99, SlotStatus::SlotDead),
+        10,
+    )
+    .await;
+
+    let mut block_meta = make_block_meta_update(100, 99, 1, &block_hash(100));
+    if let Some(UpdateOneof::BlockMeta(meta)) = block_meta.update_oneof.as_mut() {
+        meta.entries_count = 2;
+    }
+    for update in [
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        make_entry_update(100, 0, 1),
+        block_meta,
+        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 11).await;
+    }
+    for message in [
+        CoordinatorMessage::InstructionParsed {
+            slot: 100,
+            bank_id: 11,
+            key: InstructionRecordSortKey::new(0, vec![0]),
+            record: "repair".to_string(),
+        },
+        CoordinatorMessage::TransactionParsed {
+            slot: 100,
+            bank_id: 11,
+        },
+    ] {
+        harness.parsed_tx.send(message).await.unwrap();
+    }
+    harness.slot(101).parent(100).empty().await.confirm().await;
+    harness.expect_no_flush().await;
+
+    send_to_bank(&harness, make_entry_update(100, 1, 0), 11).await;
+    harness.expect_flush(100).await.records(&["repair"]);
+    harness.expect_flush(101).await.empty();
+}
+
+///
+/// Slot 100 dies, repair bank 11 freezes short of its tick, then the slot dies again during
+/// replay bank 12. Block machine 0.11 reports only the first death.
+///
+async fn kill_slot_100_twice(harness: &TestHarness) {
+    let dead = || {
+        let mut update = make_slot_update(100, 99, SlotStatus::SlotDead);
+        if let Some(UpdateOneof::Slot(status)) = update.update_oneof.as_mut() {
+            status.bank_id = None;
+        }
+        update
+    };
+    let mut block_meta = make_block_meta_update(100, 99, 0, &block_hash(100));
+    if let Some(UpdateOneof::BlockMeta(meta)) = block_meta.update_oneof.as_mut() {
+        meta.entries_count = 2;
+    }
+    send_to_bank(
+        harness,
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        10,
+    )
+    .await;
+    send_to_bank(harness, dead(), 10).await;
+    for update in [
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        make_entry_update(100, 0, 0),
+        block_meta,
+    ] {
+        send_to_bank(harness, update, 11).await;
+    }
+    send_to_bank(
+        harness,
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        12,
+    )
+    .await;
+    harness
+        .input_tx
+        .send(CoordinatorInput::GeyserUpdate(Box::new(dead())))
+        .await
+        .unwrap();
+}
+
+/// The coordinator drops the held repair bank 11 itself, so a successor that skips slot 100
+/// flushes.
+#[tokio::test]
+async fn second_death_drops_the_held_repair_bank() {
+    let mut harness = TestHarness::spawn();
+    flush_slot_99(&mut harness).await;
+    kill_slot_100_twice(&harness).await;
+
+    harness.slot(101).parent(99).empty().await.confirm().await;
+    harness.expect_flush(101).await.parent(99).empty();
+}
+
+/// After the second death, repair bank 13 confirms before its BlockMeta and its child confirms
+/// first. Dropping bank 11 must not mark slot 100 dead again, or the child flushes past bank 13.
+#[tokio::test]
+async fn repair_after_a_second_death_flushes_before_its_child() {
+    let mut harness = TestHarness::spawn();
+    flush_slot_99(&mut harness).await;
+    kill_slot_100_twice(&harness).await;
+
+    for update in [
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        make_entry_update(100, 0, 0),
+        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 13).await;
+    }
+    harness.slot(101).parent(100).empty().await.confirm().await;
+    harness.expect_no_flush().await;
+
+    send_to_bank(
+        &harness,
+        make_block_meta_update(100, 99, 0, &block_hash(100)),
+        13,
+    )
+    .await;
+    harness.expect_flush(100).await.empty();
+    harness.expect_flush(101).await.empty();
+}
+
+/// Slot 100 dies once, and repair bank 11 confirms before its BlockMeta, which comes after
+/// child 101's. A node replays a child only on a frozen parent, so the child waits for the repair.
+#[tokio::test]
+async fn repair_block_meta_after_its_child_flushes_first() {
+    let mut harness = TestHarness::spawn();
+    flush_slot_99(&mut harness).await;
+
+    send_to_bank(
+        &harness,
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        10,
+    )
+    .await;
+    send_to_bank(
+        &harness,
+        make_slot_update(100, 99, SlotStatus::SlotDead),
+        10,
+    )
+    .await;
+    for update in [
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        make_entry_update(100, 0, 0),
+        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 11).await;
+    }
+    harness.slot(101).parent(100).empty().await.confirm().await;
+    harness.expect_no_flush().await;
+
+    send_to_bank(
+        &harness,
+        make_block_meta_update(100, 99, 0, &block_hash(100)),
+        11,
+    )
+    .await;
+    harness.expect_flush(100).await.empty();
+    harness.expect_flush(101).await.empty();
+}
+
+/// At startup, bank 1000 of slot 100 freezes on parent 98, which then dies, so slot 100 is
+/// reported forked. Replacement bank 1001 on parent 97 freezes short of its tick and confirms,
+/// and child 101 confirms first. The child waits for the tick, even as the stream's first flush.
+#[tokio::test]
+async fn short_replacement_of_a_forked_slot_flushes_before_its_child_at_startup() {
+    let mut harness = TestHarness::spawn();
+
+    send_to_bank(
+        &harness,
+        make_slot_update(98, 97, SlotStatus::SlotCreatedBank),
+        98,
+    )
+    .await;
+    for update in [
+        make_slot_update(100, 98, SlotStatus::SlotCreatedBank),
+        make_entry_update(100, 0, 0),
+        make_block_meta_update(100, 98, 0, &block_hash(100)),
+    ] {
+        send_to_bank(&harness, update, 1000).await;
+    }
+    send_to_bank(&harness, make_slot_update(98, 97, SlotStatus::SlotDead), 98).await;
+
+    let mut block_meta = make_block_meta_update(100, 97, 1, &block_hash(100));
+    if let Some(UpdateOneof::BlockMeta(meta)) = block_meta.update_oneof.as_mut() {
+        meta.entries_count = 2;
+    }
+    for update in [
+        make_slot_update(100, 97, SlotStatus::SlotCreatedBank),
+        make_entry_update(100, 0, 1),
+        block_meta,
+        make_slot_update(100, 97, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 1001).await;
+    }
+    for message in [
+        CoordinatorMessage::InstructionParsed {
+            slot: 100,
+            bank_id: 1001,
+            key: InstructionRecordSortKey::new(0, vec![0]),
+            record: "replacement".to_string(),
+        },
+        CoordinatorMessage::TransactionParsed {
+            slot: 100,
+            bank_id: 1001,
+        },
+    ] {
+        harness.parsed_tx.send(message).await.unwrap();
+    }
+    harness.slot(101).parent(100).empty().await.confirm().await;
+    harness.expect_no_flush().await;
+
+    send_to_bank(&harness, make_entry_update(100, 1, 0), 1001).await;
+    harness.expect_flush(100).await.records(&["replacement"]);
+    harness.expect_flush(101).await.empty();
+}
+
+///
+/// At startup, bank 3000 of slot 30 sits on slot 29, which dies, so slot 30 is reported forked.
+/// Replacement bank 3001 of slot 30, on slot 27, has a record but freezes after child 31
+/// confirms. The stream saw slot 30, so the child's first flush must not skip it.
+///
+#[tokio::test]
+async fn first_flush_waits_for_a_parent_the_stream_saw() {
+    let mut harness = TestHarness::spawn();
+
+    send_to_bank(
+        &harness,
+        make_slot_update(29, 27, SlotStatus::SlotCreatedBank),
+        2900,
+    )
+    .await;
+    for status in [SlotStatus::SlotCreatedBank, SlotStatus::SlotProcessed] {
+        send_to_bank(&harness, make_slot_update(30, 29, status), 3000).await;
+    }
+    send_to_bank(
+        &harness,
+        make_slot_update(30, 27, SlotStatus::SlotCreatedBank),
+        3001,
+    )
+    .await;
+    for message in [
+        CoordinatorMessage::InstructionParsed {
+            slot: 30,
+            bank_id: 3001,
+            key: InstructionRecordSortKey::new(0, vec![0]),
+            record: "parent".to_string(),
+        },
+        CoordinatorMessage::TransactionParsed {
+            slot: 30,
+            bank_id: 3001,
+        },
+    ] {
+        harness.parsed_tx.send(message).await.unwrap();
+    }
+    send_to_bank(
+        &harness,
+        make_slot_update(29, 27, SlotStatus::SlotDead),
+        2900,
+    )
+    .await;
+
+    for update in [
+        make_slot_update(31, 30, SlotStatus::SlotCreatedBank),
+        make_entry_update(31, 0, 0),
+        make_block_meta_update(31, 30, 0, &block_hash(31)),
+        make_slot_update(31, 30, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 3100).await;
+    }
+    harness.expect_no_flush().await;
+
+    for update in [
+        make_entry_update(30, 0, 1),
+        make_block_meta_update(30, 27, 1, &block_hash(30)),
+        make_slot_update(30, 27, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 3001).await;
+    }
+    harness.expect_flush(30).await.records(&["parent"]);
+    harness.expect_flush(31).await.empty();
+}
+
+/// The stream starts after slot 99's BlockMeta but before its late tick. That entry does not
+/// show the stream saw slot 99, so child 100 still flushes first.
+#[tokio::test]
+async fn late_entry_from_before_the_stream_does_not_block_the_start() {
+    let mut harness = TestHarness::spawn();
+    send_to_bank(&harness, make_entry_update(99, 3, 0), 99).await;
+
+    harness.slot(100).parent(99).empty().await.confirm().await;
+    harness.expect_flush(100).await.parent(99).empty();
+}
+
+/// Confirmed statuses keep coming for banks whose BlockMeta never does, and nothing has records.
+/// The commitments still count as pending, so the coordinator stops instead of growing.
+#[tokio::test]
+async fn commitments_that_never_flush_stop_coordinator() {
+    let harness = TestHarness::spawn_with_max_pending_banks(TEST_PENDING_LIMIT);
+    for slot in 100..100 + 4 * TEST_PENDING_LIMIT as u64 {
+        if harness.coordinator.is_finished() {
+            break;
+        }
+        let _ = harness
+            .input_tx
+            .send(CoordinatorInput::GeyserUpdate(Box::new(make_slot_update(
+                slot,
+                slot - 1,
+                SlotStatus::SlotConfirmed,
+            ))))
+            .await;
+        tokio::task::yield_now().await;
+    }
+    assert_stopped_behind(harness.expect_stopped().await, 100);
+}
+
+/// Accounts commit at finalized, 32 slots behind. Every slot also froze a losing bank. The
+/// losers are resolved, so they do not count toward the pending-bank limit.
+#[tokio::test]
+async fn discarded_losers_do_not_count_toward_the_pending_limit() {
+    let mut harness = TestHarness::spawn_with_options(true, AccountCommitAt::Finalized);
+    harness.slot(1).empty().await.finalize().await;
+    harness.expect_flush(1).await;
+    harness.expect_account_flush(1).await;
+    for slot in 2..=40 {
+        for (bank_id, hash) in [
+            (slot + 10000, bank_block_hash(slot, slot + 10000)),
+            (slot, block_hash(slot)),
+        ] {
+            send_to_bank(&harness, make_entry_update(slot, 0, 0), bank_id).await;
+            send_to_bank(
+                &harness,
+                make_block_meta_update(slot, slot - 1, 0, &hash),
+                bank_id,
+            )
+            .await;
+        }
+        send_to_bank(
+            &harness,
+            make_slot_update(slot, slot - 1, SlotStatus::SlotConfirmed),
+            slot,
+        )
+        .await;
+        harness.expect_flush(slot).await;
+    }
+    assert!(!harness.coordinator.is_finished());
+}
+
+/// At startup the stream sees slot 30's replacement bank 3001 only through an entry and a
+/// record, and slot 30 is reported forked. Its child 31 confirms first. The record waits, so the
+/// child's first flush waits for slot 30.
+#[tokio::test]
+async fn first_flush_waits_for_a_parent_with_records() {
+    let mut harness = TestHarness::spawn();
+    send_to_bank(
+        &harness,
+        make_slot_update(29, 27, SlotStatus::SlotProcessed),
+        2900,
+    )
+    .await;
+    send_to_bank(
+        &harness,
+        make_slot_update(30, 29, SlotStatus::SlotProcessed),
+        3000,
+    )
+    .await;
+    send_to_bank(&harness, make_entry_update(30, 0, 1), 3001).await;
+    for message in [
+        CoordinatorMessage::InstructionParsed {
+            slot: 30,
+            bank_id: 3001,
+            key: InstructionRecordSortKey::new(0, vec![0]),
+            record: "parent".into(),
+        },
+        CoordinatorMessage::TransactionParsed {
+            slot: 30,
+            bank_id: 3001,
+        },
+    ] {
+        harness.parsed_tx.send(message).await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    send_to_bank(
+        &harness,
+        make_slot_update(29, 27, SlotStatus::SlotDead),
+        2900,
+    )
+    .await;
+    harness.slot(31).parent(30).empty().await.confirm().await;
+    harness.expect_no_flush().await;
+
+    for update in [
+        make_block_meta_update(30, 27, 1, &block_hash(30)),
+        make_slot_update(30, 27, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 3001).await;
+    }
+    harness.expect_flush(30).await.records(&["parent"]);
+    harness.expect_flush(31).await.empty();
+}
+
+/// At startup the stream sees parent 30 only through an account event and an entry; its record
+/// is still parsing when child 31 finalizes. The counted account waits, so the child does too.
+#[tokio::test]
+async fn first_flush_waits_for_a_parent_with_counted_accounts() {
+    for mode in [AccountCommitAt::Confirmed, AccountCommitAt::Finalized] {
+        let mut harness = TestHarness::spawn_with_options(false, mode);
+        harness
+            .input_tx
+            .send(CoordinatorInput::AccountEventSeen {
+                slot: 30,
+                bank_id: 30,
+            })
+            .await
+            .unwrap();
+        send_to_bank(&harness, make_entry_update(30, 0, 0), 30).await;
+        harness.slot(31).parent(30).empty().await.finalize().await;
+        harness.expect_no_flush().await;
+        harness.expect_no_account_flush().await;
+
+        harness
+            .parsed_tx
+            .send(CoordinatorMessage::AccountParsed {
+                slot: 30,
+                bank_id: 30,
+                key: AccountRecordSortKey::new(1, [1; 32]),
+                record: "parent-account".into(),
+            })
+            .await
+            .unwrap();
+        for update in [
+            make_block_meta_update(30, 29, 0, &block_hash(30)),
+            make_slot_update(30, 29, SlotStatus::SlotFinalized),
+        ] {
+            send_to_bank(&harness, update, 30).await;
+        }
+        harness.expect_flush(30).await;
+        harness.expect_flush(31).await;
+        harness
+            .expect_account_flush(30)
+            .await
+            .records(&["parent-account"]);
+        harness.expect_account_flush(31).await;
+    }
+}
+
+/// At startup only losing bank 3000's entry of slot 30 reached the stream, while winning bank
+/// 3001 has a parsed account. Child 31 finalizes first. Slot 30 is not before the stream, so its
+/// finality waits for bank 3001 instead of letting the block machine guess bank 3000.
+#[tokio::test]
+async fn finality_waits_for_a_parent_with_records_at_startup() {
+    let mut harness = TestHarness::spawn_with_options(true, AccountCommitAt::Finalized);
+    send_to_bank(&harness, make_entry_update(30, 0, 0), 3000).await;
+    harness
+        .input_tx
+        .send(CoordinatorInput::AccountEventSeen {
+            slot: 30,
+            bank_id: 3001,
+        })
+        .await
+        .unwrap();
+    harness
+        .parsed_tx
+        .send(CoordinatorMessage::AccountParsed {
+            slot: 30,
+            bank_id: 3001,
+            key: AccountRecordSortKey::new(1, [1; 32]),
+            record: "winner".into(),
+        })
+        .await
+        .unwrap();
+    harness.slot(31).parent(30).empty().await.finalize().await;
+    harness.expect_no_account_flush().await;
+
+    for update in [
+        make_entry_update(30, 0, 0),
+        make_block_meta_update(30, 29, 0, &block_hash(30)),
+    ] {
+        send_to_bank(&harness, update, 3001).await;
+    }
+    harness.expect_account_flush(30).await.records(&["winner"]);
+    harness.expect_account_flush(31).await;
+}
+
+/// A losing bank reaches the stream only after its slot's winner confirmed, 32 times within the
+/// finality lag. Another bank of the slot committed, so the loser does not count as pending.
+#[tokio::test]
+async fn losers_seen_after_the_winner_do_not_count_toward_the_pending_limit() {
+    let mut harness = TestHarness::spawn_with_options(true, AccountCommitAt::Finalized);
+    harness.slot(1).empty().await.finalize().await;
+    harness.expect_flush(1).await;
+    harness.expect_account_flush(1).await;
+    for slot in 2..=40 {
+        harness.slot(slot).empty().await.confirm().await;
+        harness.expect_flush(slot).await;
+        send_to_bank(&harness, make_entry_update(slot, 0, 0), slot + 10000).await;
+        send_to_bank(
+            &harness,
+            make_block_meta_update(slot, slot - 1, 0, &bank_block_hash(slot, slot + 10000)),
+            slot + 10000,
+        )
+        .await;
+    }
+    assert!(!harness.coordinator.is_finished());
+}
+
+/// A late entry with more transactions than the BlockMeta counts can never match it.
+#[tokio::test]
+async fn late_entry_with_extra_transactions_discards_the_block() {
+    let mut harness = TestHarness::spawn();
+    flush_slot_99(&mut harness).await;
+
+    freeze_without_last_tick(&harness, 100, "lost").await;
+    send_to_bank(&harness, make_entry_update(100, 1, 1), 100).await;
+    confirm_slot(&harness, 100).await;
+    harness.expect_no_flush().await;
+
+    harness.slot(101).parent(100).empty().await.confirm().await;
+    harness.expect_flush(101).await.empty();
+}
+
+/// A bank that froze short of entries has frozen, so clearing it stops the coordinator.
+#[tokio::test]
+async fn update_parent_for_a_bank_waiting_for_entries_stops_coordinator() {
+    let harness = TestHarness::spawn();
+    freeze_without_last_tick(&harness, 100, "a").await;
+    harness
+        .input_tx
+        .send(CoordinatorInput::GeyserUpdate(Box::new(SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::EntryUpdateParent(
+                SubscribeUpdateEntryUpdateParent {
+                    slot: 100,
+                    cleared_bank_id: 100,
+                    parent_slot: 98,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        })))
+        .await
+        .unwrap();
+    assert!(matches!(
+        harness.expect_stopped().await,
+        CoordinatorError::ClearedCommittedBank {
+            slot: 100,
+            bank_id: 100
+        }
+    ));
+}
+
+/// The cluster cannot commit a bank that UpdateParent cleared, so such a commitment means the
+/// stream contradicts itself, and the coordinator stops.
+#[tokio::test]
+async fn commitment_for_a_cleared_bank_stops_coordinator() {
+    let harness = TestHarness::spawn();
+    send_to_bank(
+        &harness,
+        make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
+        1000,
+    )
+    .await;
+    harness
+        .input_tx
+        .send(CoordinatorInput::GeyserUpdate(Box::new(SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::EntryUpdateParent(
+                SubscribeUpdateEntryUpdateParent {
+                    slot: 42,
+                    cleared_bank_id: 1000,
+                    parent_slot: 40,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        })))
+        .await
+        .unwrap();
+    send_to_bank(
+        &harness,
+        make_slot_update(42, 41, SlotStatus::SlotConfirmed),
+        1000,
+    )
+    .await;
+    assert!(matches!(
+        harness.expect_stopped().await,
+        CoordinatorError::ConflictingBlockIdentity {
+            slot: 42,
+            bank_id: 1000
+        }
+    ));
+}
+
+// =============================================================================
+// Blockhash-linked commitments (ported from #363 by @the-orex)
+// =============================================================================
 
 /// A bank's hash is distinct from every other candidate, including another bank in its slot.
 #[derive(Clone, Copy)]

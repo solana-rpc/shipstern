@@ -250,6 +250,7 @@ impl<R> SlotRecordBuffer<R> {
     }
 
     /// Drain account records and produce an AccountSlot.
+    /// Returns None if metadata is missing.
     pub fn drain_account_records(&mut self, slot: Slot, bank_id: u64) -> Option<AccountSlot<R>> {
         let metadata = self.metadata.as_ref()?;
         let decoded_account_count = self.account_records.len() as u64;

@@ -6839,6 +6839,7 @@ dependencies = [
  "clap 4.6.6",
  "futures-util",
  "prost 0.14.4",
+ "rustls",
  "serde",
  "shipstern",
  "shipstern-core",
