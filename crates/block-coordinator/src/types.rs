@@ -55,6 +55,14 @@ impl fmt::Display for DiscardReason {
 /// Coordinator invariants and unrecoverable errors.
 #[derive(Debug)]
 pub enum CoordinatorError {
+    UnresolvedBlock {
+        slot: Slot,
+        observed_slot: Slot,
+    },
+    IncompleteBlock {
+        slot: Slot,
+        bank_id: u64,
+    },
     BankInTwoSlots {
         bank_id: u64,
         slot: Slot,
@@ -77,6 +85,19 @@ pub enum CoordinatorError {
 impl fmt::Display for CoordinatorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnresolvedBlock {
+                slot,
+                observed_slot,
+            } => write!(
+                f,
+                "Unresolved block at slot {slot} while observing slot {observed_slot}; stopping \
+                 before advancing past the gap; replay or backfill is required"
+            ),
+            Self::IncompleteBlock { slot, bank_id } => write!(
+                f,
+                "Incomplete block at slot {slot} bank {bank_id}; stopping before advancing past \
+                 the gap; replay or backfill is required"
+            ),
             Self::BankInTwoSlots {
                 bank_id,
                 slot,

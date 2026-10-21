@@ -34,8 +34,10 @@ async fn replay_fixture_through_coordinator() {
         .expect("Failed to open fixture")
         .collect();
 
+    let updates = from_complete_capture_boundary(&updates);
     let expected = ExpectedState::from_updates(&updates);
-    let confirmed = run_coordinator_with_updates(&updates).await;
+    let (confirmed, result) = run_coordinator_with_updates(&updates).await;
+    result.expect("Complete fixture replay failed");
 
     assert!(!confirmed.is_empty(), "Should produce confirmed slots");
     assert_strictly_ascending(&confirmed);
@@ -53,8 +55,11 @@ async fn replay_fixture_with_competing_bank_flushes_only_confirmed_bank() {
         .expect("Failed to open fixture")
         .collect();
 
-    let plain = run_coordinator_with_updates(&updates).await;
-    let competing = run_coordinator_with_updates(&with_competing_bank(&updates)).await;
+    let updates = from_complete_capture_boundary(&updates);
+    let (plain, result) = run_coordinator_with_updates(&updates).await;
+    result.expect("Complete fixture replay failed");
+    let (competing, result) = run_coordinator_with_updates(&with_competing_bank(&updates)).await;
+    result.expect("Competing-bank fixture replay failed");
 
     let summary = |slots: &[InstructionSlot<u64>]| {
         slots
@@ -71,6 +76,63 @@ async fn replay_fixture_with_competing_bank_flushes_only_confirmed_bank() {
     };
     assert!(!plain.is_empty());
     assert_eq!(summary(&competing), summary(&plain));
+}
+
+/// The untrimmed capture starts during slot 454787399, with its first 1,032 entries absent.
+/// Earlier commitment-only updates also lack block data. A finite replay must report a gap
+/// instead of publishing the partial slot's complete descendants.
+#[tokio::test]
+async fn replay_partial_capture_reports_gap_before_publishing_descendants() {
+    let updates: Vec<_> = FixtureReader::new(&fixture_path())
+        .expect("Failed to open fixture")
+        .collect();
+    let partial_slot = updates
+        .iter()
+        .find_map(|update| match &update.update_oneof {
+            Some(UpdateOneof::Entry(entry)) => Some(entry.slot),
+            _ => None,
+        })
+        .expect("Fixture has no entries");
+    let (confirmed, result) = run_coordinator_with_updates(&updates).await;
+
+    assert!(
+        matches!(result, Err(CoordinatorError::UnresolvedBlock { slot, .. }) if slot <= partial_slot),
+        "Partial capture must fail before publishing descendants of slot {partial_slot}: \
+         {result:?}"
+    );
+    assert!(
+        confirmed.iter().all(|slot| slot.slot < partial_slot),
+        "A missing captured block must not be skipped to publish its descendants"
+    );
+}
+
+/// Select an explicit ingestion boundary at the first bank whose creation was captured.
+/// The binary fixture stays intact: only successful replay tests exclude earlier partial slots,
+/// including their later metadata and commitment updates.
+fn from_complete_capture_boundary(updates: &[SubscribeUpdate]) -> Vec<SubscribeUpdate> {
+    let first_created_slot = updates
+        .iter()
+        .find_map(|update| match &update.update_oneof {
+            Some(UpdateOneof::Slot(status))
+                if status.status == SlotStatus::SlotCreatedBank as i32 =>
+            {
+                Some(status.slot)
+            },
+            _ => None,
+        })
+        .expect("Fixture has no captured bank creation");
+
+    updates
+        .iter()
+        .filter(|update| match &update.update_oneof {
+            Some(UpdateOneof::Account(account)) => account.slot >= first_created_slot,
+            Some(UpdateOneof::Slot(status)) => status.slot >= first_created_slot,
+            Some(UpdateOneof::Entry(entry)) => entry.slot >= first_created_slot,
+            Some(UpdateOneof::BlockMeta(meta)) => meta.slot >= first_created_slot,
+            _ => true,
+        })
+        .cloned()
+        .collect()
 }
 
 /// Copy each bank-scoped update to a second bank with its own blockhash, sent right
@@ -132,7 +194,9 @@ impl ExpectedState {
     }
 }
 
-async fn run_coordinator_with_updates(updates: &[SubscribeUpdate]) -> Vec<InstructionSlot<u64>> {
+async fn run_coordinator_with_updates(
+    updates: &[SubscribeUpdate],
+) -> (Vec<InstructionSlot<u64>>, Result<(), CoordinatorError>) {
     let (input_tx, input_rx) = mpsc::channel(4096);
     let (parsed_tx, parsed_rx) = mpsc::channel::<CoordinatorMessage<u64>>(4096);
     let (output_tx, mut output_rx) = mpsc::channel::<InstructionSlot<u64>>(256);
@@ -200,7 +264,7 @@ async fn run_coordinator_with_updates(updates: &[SubscribeUpdate]) -> Vec<Instru
 
     let mut confirmed = Vec::new();
 
-    finish_coordinator_and_drain_remaining_instructions(
+    let result = finish_coordinator_and_drain_remaining_instructions(
         input_tx,
         parsed_tx,
         coordinator_task,
@@ -209,7 +273,7 @@ async fn run_coordinator_with_updates(updates: &[SubscribeUpdate]) -> Vec<Instru
     )
     .await;
 
-    confirmed
+    (confirmed, result)
 }
 
 async fn finish_coordinator_and_drain_remaining_instructions(
@@ -218,7 +282,7 @@ async fn finish_coordinator_and_drain_remaining_instructions(
     coordinator_task: tokio::task::JoinHandle<Result<(), CoordinatorError>>,
     output_rx: &mut mpsc::Receiver<InstructionSlot<u64>>,
     confirmed: &mut Vec<InstructionSlot<u64>>,
-) {
+) -> Result<(), CoordinatorError> {
     drop(input_tx);
     drop(parsed_tx);
 
@@ -226,10 +290,7 @@ async fn finish_coordinator_and_drain_remaining_instructions(
         confirmed.push(slot);
     }
 
-    coordinator_task
-        .await
-        .expect("coordinator task panicked")
-        .expect("coordinator failed");
+    coordinator_task.await.expect("coordinator task panicked")
 }
 
 fn assert_strictly_ascending(slots: &[InstructionSlot<u64>]) {
