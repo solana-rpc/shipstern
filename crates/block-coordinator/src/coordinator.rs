@@ -5,7 +5,9 @@ use solana_commitment_config::CommitmentLevel;
 use solana_hash::Hash;
 use tokio::sync::mpsc;
 use yellowstone_block_machine::{
-    event::{BlockMetaEvInfo, GeyserEventAdapter, GeyserEventInfo},
+    event::{
+        BlockMetaEvInfo, GeyserEventAdapter, GeyserEventInfo, SlotStatusKind, SlotUpdateEvInfo,
+    },
     state_machine::BlockStateMachineOutput,
     wrapper::{BlockMachineConfig, BlocksStateMachineWrapper},
 };
@@ -51,6 +53,12 @@ pub struct BlockMachineCoordinator<R> {
     committed_banks: BTreeMap<Slot, u64>,
     /// Exact parent links of committed banks distinguish skipped slots from missing blocks.
     committed_parents: BTreeMap<Slot, Slot>,
+    /// Keep identities after freezing: a committed child identifies its parent by hash.
+    bank_metadata: BTreeMap<BankKey, BlockMetaEvInfo>,
+    /// Commitments established directly or through a verified child-parent hash link.
+    bank_commitments: BTreeMap<BankKey, CommitmentLevel>,
+    /// Finalized is withheld from the wrapper until all required ancestor banks are known.
+    forwarded_commitments: BTreeMap<BankKey, CommitmentLevel>,
 }
 
 #[cfg(test)]
@@ -132,6 +140,64 @@ mod tests {
             .pending_blocks
             .contains_key(&BankKey::new(5000, 5000)));
     }
+
+    #[test]
+    fn verified_finality_still_prunes_the_wrapper_fork_graph() {
+        use yellowstone_grpc_proto::geyser::{SlotStatus, SubscribeUpdateSlot};
+
+        let (_, input_rx) = mpsc::channel(1);
+        let (_, parsed_rx) = mpsc::channel(1);
+        let mut coordinator = BlockMachineCoordinator::<()>::new(
+            input_rx,
+            parsed_rx,
+            None,
+            None,
+            AccountCommitAt::Finalized,
+            true,
+        );
+        let mut parent_hash = Hash::default();
+        for slot in 1..=1500 {
+            let blockhash = Hash::new_unique();
+            let updates = [
+                UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
+                    slot,
+                    bank_id: slot,
+                    parent_slot: slot - 1,
+                    blockhash: blockhash.to_string(),
+                    parent_blockhash: parent_hash.to_string(),
+                    ..Default::default()
+                }),
+                UpdateOneof::Slot(SubscribeUpdateSlot {
+                    slot,
+                    bank_id: Some(slot),
+                    parent: Some(slot - 1),
+                    status: SlotStatus::SlotFinalized as i32,
+                    ..Default::default()
+                }),
+            ];
+            for update in updates {
+                let events = coordinator
+                    .convert_geyser_update(&SubscribeUpdate {
+                        update_oneof: Some(update),
+                        ..Default::default()
+                    })
+                    .unwrap();
+                for event in events {
+                    coordinator.state.apply(event).unwrap();
+                }
+                coordinator.state.drain_instruction_flushable().unwrap();
+                coordinator.state.drain_account_flushable();
+            }
+            parent_hash = blockhash;
+        }
+        assert_eq!(coordinator.state.last_account_flushed_slot(), Some(1500));
+        assert!(coordinator
+            .wrapper
+            .fork_graph()
+            .oldest_rooted_slot()
+            .is_some_and(|oldest| oldest > 1));
+        assert!(coordinator.wrapper.fork_graph().len() < 1500);
+    }
 }
 
 #[derive(Default)]
@@ -198,6 +264,9 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
             last_metadata_slot: None,
             committed_banks: BTreeMap::new(),
             committed_parents: BTreeMap::new(),
+            bank_metadata: BTreeMap::new(),
+            bank_commitments: BTreeMap::new(),
+            forwarded_commitments: BTreeMap::new(),
         }
     }
 
@@ -309,6 +378,13 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
             if let Some(through) = self.output_frontier() {
                 self.committed_banks.retain(|slot, _| *slot > through);
                 self.committed_parents.retain(|slot, _| *slot > through);
+                // Retain the published anchor and recent identities for delayed finalization.
+                let retain_from = through.saturating_sub(FROZEN_SLOT_WINDOW);
+                self.bank_metadata.retain(|key, _| key.slot >= retain_from);
+                self.bank_commitments
+                    .retain(|key, _| key.slot >= retain_from);
+                self.forwarded_commitments
+                    .retain(|key, _| key.slot >= retain_from);
             }
         }
         Ok(())
@@ -325,7 +401,10 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         // not below it can never flush. So skip such an update before the wrapper sees it.
         let malformed = match &update.update_oneof {
             Some(UpdateOneof::BlockMeta(meta))
-                if meta.blockhash.parse::<Hash>().is_err() || meta.parent_slot >= meta.slot =>
+                if meta.blockhash.parse::<Hash>().is_err()
+                    || (!meta.parent_blockhash.is_empty()
+                        && meta.parent_blockhash.parse::<Hash>().is_err())
+                    || meta.parent_slot >= meta.slot =>
             {
                 Some((meta.slot, meta.bank_id))
             },
@@ -374,17 +453,14 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                         | yellowstone_grpc_proto::geyser::SlotStatus::SlotFinalized
                 )
             {
-                if self
-                    .committed_banks
-                    .get(&slot)
-                    .is_some_and(|known| *known != bank_id)
+                let commitment = if status.status()
+                    == yellowstone_grpc_proto::geyser::SlotStatus::SlotFinalized
                 {
-                    return Err(CoordinatorError::UnresolvedBlock {
-                        slot,
-                        observed_slot: self.last_metadata_slot.unwrap_or(slot),
-                    });
-                }
-                self.committed_banks.insert(slot, bank_id);
+                    CommitmentLevel::Finalized
+                } else {
+                    CommitmentLevel::Confirmed
+                };
+                self.record_commitment(BankKey::new(slot, bank_id), commitment)?;
                 // The wrapper may defer this status until entries arrive. Record the parent
                 // now so a missing block cannot be mistaken for an unrelated fork.
                 let parent = status
@@ -419,64 +495,96 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         // UpdateParent invalidates one bank, not the slot's replacement. Block machine 0.11
         // ignores this event, so release its parsed records here and reject late callbacks.
         if let Some(UpdateOneof::EntryUpdateParent(parent)) = &update.update_oneof {
-            if self.committed_banks.get(&parent.slot) == Some(&parent.cleared_bank_id) {
+            let key = BankKey::new(parent.slot, parent.cleared_bank_id);
+            if self.bank_commitments.contains_key(&key) {
                 return Err(CoordinatorError::UnresolvedBlock {
                     slot: parent.slot,
                     observed_slot: self.last_metadata_slot.unwrap_or(parent.slot),
                 });
             }
-            return Ok(vec![CoordinatorEvent::BankDiscarded {
+            self.bank_metadata.remove(&key);
+            events.push(CoordinatorEvent::BankDiscarded {
                 slot: parent.slot,
                 bank_id: parent.cleared_bank_id,
                 reason: DiscardReason::Forked,
-            }]);
+            });
         }
 
-        let Some(info) = <SubscribeUpdate as GeyserEventAdapter>::extract_geyser_ev_info(update)
-        else {
-            return Ok(events);
-        };
-        match info {
-            GeyserEventInfo::BlockMeta(meta) => {
-                if self.committed_banks.get(&meta.slot) == Some(&meta.bank_id) {
-                    self.committed_parents.insert(meta.slot, meta.parent_slot);
-                }
-                self.expire_pending_metadata(meta.slot)?;
-                let key = BankKey::new(meta.slot, meta.bank_id);
-                if self.wrapper.sm.is_bank_trackable(meta.bank_id)
-                    && !self.wrapper.sm.is_bank_frozen(meta.bank_id)
+        if let Some(info) = <SubscribeUpdate as GeyserEventAdapter>::extract_geyser_ev_info(update)
+        {
+            match info {
+                GeyserEventInfo::BlockMeta(meta) => {
+                    let key = BankKey::new(meta.slot, meta.bank_id);
+                    if let Some(known) = self.bank_metadata.get(&key)
+                        && (known.blockhash != meta.blockhash
+                            || known.parent_slot != meta.parent_slot
+                            || known.parent_blockhash != meta.parent_blockhash)
+                    {
+                        return Err(CoordinatorError::ConflictingBlockIdentity {
+                            slot: meta.slot,
+                            bank_id: meta.bank_id,
+                        });
+                    }
+                    self.bank_metadata.entry(key).or_insert(meta);
+                    if self.committed_banks.get(&meta.slot) == Some(&meta.bank_id) {
+                        self.committed_parents.insert(meta.slot, meta.parent_slot);
+                    }
+                    self.expire_pending_metadata(meta.slot)?;
+                    if self.wrapper.sm.is_bank_trackable(meta.bank_id)
+                        && !self.wrapper.sm.is_bank_frozen(meta.bank_id)
+                    {
+                        self.expect_slot(meta.slot);
+                        // Match the wrapper's first-metadata-wins behavior.
+                        self.pending_blocks
+                            .entry(key)
+                            .or_default()
+                            .metadata
+                            .get_or_insert(meta);
+                        self.release_complete_metadata(key);
+                    }
+                },
+                GeyserEventInfo::Entry(entry) => {
+                    // Count only entries accepted by the wrapper, using the same index-keyed
+                    // replacement semantics so duplicate deliveries cannot complete a bank early.
+                    if self
+                        .wrapper
+                        .handle_new_geyser_event(GeyserEventInfo::Entry(entry))
+                        .is_ok()
+                    {
+                        let key = BankKey::new(entry.slot, entry.bank_id);
+                        self.pending_blocks
+                            .entry(key)
+                            .or_default()
+                            .entry_transactions
+                            .insert(entry.index, entry.executed_transaction_count);
+                        self.release_complete_metadata(key);
+                    }
+                },
+                GeyserEventInfo::Slot(status)
+                    if matches!(
+                        status.status,
+                        SlotStatusKind::Confirmed | SlotStatusKind::Finalized
+                    ) =>
                 {
-                    self.expect_slot(meta.slot);
-                    // Match the wrapper's first-metadata-wins behavior.
-                    self.pending_blocks
-                        .entry(key)
-                        .or_default()
-                        .metadata
-                        .get_or_insert(meta);
-                    self.release_complete_metadata(key);
-                }
-            },
-            GeyserEventInfo::Entry(entry) => {
-                // Count only entries accepted by the wrapper, using the same index-keyed
-                // replacement semantics so duplicate deliveries cannot complete a bank early.
-                if self
-                    .wrapper
-                    .handle_new_geyser_event(GeyserEventInfo::Entry(entry))
-                    .is_ok()
-                {
-                    let key = BankKey::new(entry.slot, entry.bank_id);
-                    self.pending_blocks
-                        .entry(key)
-                        .or_default()
-                        .entry_transactions
-                        .insert(entry.index, entry.executed_transaction_count);
-                    self.release_complete_metadata(key);
-                }
-            },
-            other => {
-                // A rejected event does not invalidate the slot's other candidates.
-                let _ = self.wrapper.handle_new_geyser_event(other);
-            },
+                    // Finalizing a child lets block-machine 0.11 finalize its sole observed
+                    // ancestor, which may be a loser whose replacement has not arrived. Resolve
+                    // the ancestry ourselves before giving finality to that state machine.
+                },
+                other => {
+                    // A rejected event does not invalidate the slot's other candidates.
+                    let _ = self.wrapper.handle_new_geyser_event(other);
+                },
+            }
+        }
+
+        // Entries can be numerous. Their bank identities were already reconciled when its
+        // metadata or commitment arrived, so they only need to drive the wrapper's outputs.
+        if matches!(
+            update.update_oneof,
+            Some(UpdateOneof::BlockMeta(_) | UpdateOneof::EntryUpdateParent(_))
+        ) || matches!(&update.update_oneof, Some(UpdateOneof::Slot(status)) if matches!(status.status(), yellowstone_grpc_proto::geyser::SlotStatus::SlotConfirmed | yellowstone_grpc_proto::geyser::SlotStatus::SlotFinalized))
+        {
+            self.reconcile_commitments()?;
         }
 
         while let Some(output) = self.wrapper.pop_next_state_machine_output() {
@@ -532,6 +640,12 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                 },
                 BlockStateMachineOutput::SlotStatus(status) => match status.commitment {
                     CommitmentLevel::Confirmed => {
+                        if !self
+                            .bank_commitments
+                            .contains_key(&BankKey::new(status.slot, status.bank_id))
+                        {
+                            continue;
+                        }
                         self.note_confirm(status.slot, status.bank_id);
                         events.push(CoordinatorEvent::SlotConfirmed {
                             slot: status.slot,
@@ -539,6 +653,13 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                         });
                     },
                     CommitmentLevel::Finalized => {
+                        if self
+                            .bank_commitments
+                            .get(&BankKey::new(status.slot, status.bank_id))
+                            != Some(&CommitmentLevel::Finalized)
+                        {
+                            continue;
+                        }
                         events.push(CoordinatorEvent::SlotFinalized {
                             slot: status.slot,
                             bank_id: status.bank_id,
@@ -602,6 +723,198 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         while self.wrapper.pop_next_dlq().is_some() {}
 
         Ok(events)
+    }
+
+    fn record_commitment(
+        &mut self,
+        key: BankKey,
+        commitment: CommitmentLevel,
+    ) -> Result<bool, CoordinatorError> {
+        if self.state.is_invalidated_bank(key)
+            || self
+                .bank_commitments
+                .range(BankKey::slot_range(key.slot))
+                .any(|(known, _)| *known != key)
+        {
+            return Err(CoordinatorError::ConflictingBlockIdentity {
+                slot: key.slot,
+                bank_id: key.bank_id,
+            });
+        }
+        let changed = match self.bank_commitments.get_mut(&key) {
+            Some(level)
+                if *level == CommitmentLevel::Confirmed
+                    && commitment == CommitmentLevel::Finalized =>
+            {
+                *level = commitment;
+                true
+            },
+            Some(_) => false,
+            None => {
+                self.bank_commitments.insert(key, commitment);
+                true
+            },
+        };
+        self.committed_banks.insert(key.slot, key.bank_id);
+        if let Some(meta) = self.bank_metadata.get(&key) {
+            self.committed_parents.insert(key.slot, meta.parent_slot);
+        }
+        if !self.is_confirmed_or_flushed(key.slot) {
+            self.pending_slots.entry(key.slot).or_insert(key.slot);
+        }
+        Ok(changed)
+    }
+
+    /// A finalized child proves which block its parent is, but not which of several
+    /// node-local banks produced it. Use the blockhash link, never the candidate count.
+    fn reconcile_commitments(&mut self) -> Result<(), CoordinatorError> {
+        let frontier = self.output_frontier();
+        let mut pending: Vec<_> = self
+            .bank_commitments
+            .iter()
+            .filter(|(key, _)| frontier.is_none_or(|frontier| key.slot > frontier))
+            .map(|(&key, &level)| (key, level))
+            .collect();
+        while let Some((key, level)) = pending.pop() {
+            let Some(meta) = self.bank_metadata.get(&key).copied() else {
+                continue;
+            };
+            if self
+                .state
+                .first_observed_slot()
+                .is_some_and(|first| meta.parent_slot < first)
+            {
+                continue;
+            }
+            let known_parent = self
+                .bank_commitments
+                .range(BankKey::slot_range(meta.parent_slot))
+                .next()
+                .map(|(&parent, _)| parent);
+            let parent = if let Some(parent) = known_parent {
+                let Some(parent_meta) = self.bank_metadata.get(&parent) else {
+                    continue;
+                };
+                if parent_meta.blockhash != meta.parent_blockhash {
+                    return Err(CoordinatorError::ConflictingBlockIdentity {
+                        slot: key.slot,
+                        bank_id: key.bank_id,
+                    });
+                }
+                parent
+            } else {
+                if self
+                    .output_frontier()
+                    .is_some_and(|frontier| meta.parent_slot <= frontier)
+                {
+                    continue;
+                }
+                let mut candidates = self
+                    .bank_metadata
+                    .range(BankKey::slot_range(meta.parent_slot))
+                    .filter(|(candidate, parent)| {
+                        parent.blockhash == meta.parent_blockhash
+                            && !self.state.is_invalidated_bank(**candidate)
+                    })
+                    .map(|(&candidate, _)| candidate);
+                let Some(parent) = candidates.next() else {
+                    continue;
+                };
+                if candidates.next().is_some() {
+                    continue;
+                }
+                parent
+            };
+            if self.record_commitment(parent, level)?
+                && frontier.is_none_or(|frontier| parent.slot > frontier)
+            {
+                pending.push((parent, level));
+            }
+        }
+
+        // Resolve every identified bank before allowing any finalization to root ancestors
+        // inside the wrapper. A parent's entries may still be arriving; its status queues.
+        let commitments: Vec<_> = self
+            .bank_commitments
+            .iter()
+            .map(|(&key, &level)| (key, level))
+            .collect();
+        for &(key, _) in &commitments {
+            if !self.forwarded_commitments.contains_key(&key) {
+                self.forward_commitment(key, SlotStatusKind::Confirmed)?;
+                self.forwarded_commitments
+                    .insert(key, CommitmentLevel::Confirmed);
+            }
+        }
+        for (key, level) in commitments {
+            if level == CommitmentLevel::Finalized
+                && self.forwarded_commitments.get(&key) != Some(&CommitmentLevel::Finalized)
+                && self.ancestry_is_known(key)
+            {
+                self.forward_commitment(key, SlotStatusKind::Finalized)?;
+                self.forwarded_commitments.insert(key, level);
+            }
+        }
+        Ok(())
+    }
+
+    fn ancestry_is_known(&self, mut key: BankKey) -> bool {
+        loop {
+            if self
+                .output_frontier()
+                .is_some_and(|frontier| key.slot <= frontier)
+            {
+                return true;
+            }
+            let Some(meta) = self.bank_metadata.get(&key) else {
+                return false;
+            };
+            if self
+                .state
+                .first_observed_slot()
+                .is_some_and(|first| meta.parent_slot < first)
+            {
+                return true;
+            }
+            let Some((&parent, _)) = self
+                .bank_commitments
+                .range(BankKey::slot_range(meta.parent_slot))
+                .next()
+            else {
+                return false;
+            };
+            let Some(parent_meta) = self.bank_metadata.get(&parent) else {
+                return false;
+            };
+            if parent_meta.blockhash != meta.parent_blockhash {
+                return false;
+            }
+            key = parent;
+        }
+    }
+
+    fn forward_commitment(
+        &mut self,
+        key: BankKey,
+        status: SlotStatusKind,
+    ) -> Result<(), CoordinatorError> {
+        let parent = self
+            .bank_metadata
+            .get(&key)
+            .map(|meta| meta.parent_slot)
+            .or_else(|| self.committed_parents.get(&key.slot).copied());
+        self.wrapper
+            .handle_new_geyser_event(GeyserEventInfo::Slot(SlotUpdateEvInfo {
+                slot: key.slot,
+                bank_id: Some(key.bank_id),
+                parent,
+                status,
+                dead_error: false,
+            }))
+            .map_err(|_| CoordinatorError::ConflictingBlockIdentity {
+                slot: key.slot,
+                bank_id: key.bank_id,
+            })
     }
 
     fn release_complete_metadata(&mut self, key: BankKey) {

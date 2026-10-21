@@ -344,6 +344,25 @@ fn make_entry_update(slot: u64, index: u64, tx_count: u64) -> SubscribeUpdate {
     }
 }
 
+/// Stable identities let ordinary synthetic blocks name the actual hash of their parent.
+fn block_hash(slot: u64) -> Hash { bank_block_hash(slot, slot) }
+
+fn bank_block_hash(slot: u64, bank_id: u64) -> Hash {
+    let mut bytes = [0_u8; 32];
+    bytes[..8].copy_from_slice(&slot.to_le_bytes());
+    bytes[8..16].copy_from_slice(&bank_id.to_le_bytes());
+    bytes[31] = 1;
+    Hash::new_from_array(bytes)
+}
+
+fn with_parent_blockhash(mut update: SubscribeUpdate, parent_blockhash: Hash) -> SubscribeUpdate {
+    let Some(UpdateOneof::BlockMeta(meta)) = update.update_oneof.as_mut() else {
+        panic!("Expected BlockMeta");
+    };
+    meta.parent_blockhash = parent_blockhash.to_string();
+    update
+}
+
 fn make_block_meta_update(
     slot: u64,
     parent: u64,
@@ -364,7 +383,7 @@ fn make_block_meta_update(
                 block_height: slot - 1,
             }),
             parent_slot: parent,
-            parent_blockhash: bs58::encode(Hash::default().as_ref()).into_string(),
+            parent_blockhash: block_hash(parent).to_string(),
             executed_transaction_count: tx_count,
             entries_count: 1,
             bank_id: slot,
@@ -575,7 +594,7 @@ impl SlotBuilder {
 
     /// Send all block lifecycle events (FirstShredReceived, CreatedBank, Entry, Completed, BlockMeta).
     async fn send_block_events(&self, tx_count: u64) {
-        let blockhash = Hash::new_unique();
+        let blockhash = block_hash(self.slot);
 
         for status in [
             SlotStatus::SlotFirstShredReceived,
@@ -808,12 +827,7 @@ async fn two_gate_flush_end_to_end() {
 async fn sequential_flush_order() {
     let mut harness = TestHarness::spawn();
 
-    let slot_101 = harness
-        .slot(101)
-        .parent(100)
-        .record("rec-101")
-        .parsed()
-        .await;
+    let slot_101 = harness.slot(101).parent(100).pending(1).await;
     let slot_102 = harness
         .slot(102)
         .parent(101)
@@ -822,9 +836,13 @@ async fn sequential_flush_order() {
         .await;
 
     slot_102.confirm().await;
+    // The child's hash can now confirm its parent, but the parent's parser must still
+    // finish before either block is published.
     harness.expect_no_flush().await;
 
     slot_101.confirm().await;
+    harness.expect_no_flush().await;
+    slot_101.late_record("rec-101").await;
 
     harness.expect_flush(101).await.records(&["rec-101"]);
     harness.expect_flush(102).await.records(&["rec-102"]);
@@ -896,7 +914,7 @@ async fn incomplete_confirmed_block_stops_before_child_flush() {
 
     for update in [
         make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        make_block_meta_update(100, 99, 0, &Hash::new_unique()),
+        make_block_meta_update(100, 99, 0, &block_hash(100)),
         make_slot_update(100, 99, SlotStatus::SlotConfirmed),
     ] {
         send_to_bank(&harness, update, 100).await;
@@ -912,7 +930,7 @@ async fn incomplete_confirmed_block_stops_before_child_flush() {
     for slot in 102..=deadline {
         for update in [
             make_entry_update(slot, 0, 0),
-            make_block_meta_update(slot, slot - 1, 0, &Hash::new_unique()),
+            make_block_meta_update(slot, slot - 1, 0, &block_hash(slot)),
         ] {
             send_to_bank(&harness, update, slot).await;
         }
@@ -934,7 +952,7 @@ async fn assert_metadata_before_entries(parser_finishes_first: bool) {
     let mut harness = TestHarness::spawn();
     for update in [
         make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        with_entries_count(make_block_meta_update(100, 99, 2, &Hash::new_unique()), 2),
+        with_entries_count(make_block_meta_update(100, 99, 2, &block_hash(100)), 2),
         make_slot_update(100, 99, SlotStatus::SlotConfirmed),
     ] {
         send_to_bank(&harness, update, 100).await;
@@ -1022,7 +1040,7 @@ async fn out_of_order_duplicate_entries_do_not_complete_pending_metadata() {
     for update in [
         make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
         last_entry.clone(),
-        with_entries_count(make_block_meta_update(100, 99, 2, &Hash::new_unique()), 3),
+        with_entries_count(make_block_meta_update(100, 99, 2, &block_hash(100)), 3),
         make_slot_update(100, 99, SlotStatus::SlotConfirmed),
         last_entry,
     ] {
@@ -1057,7 +1075,7 @@ async fn pending_metadata_does_not_mix_entries_from_competing_banks() {
         for update in [
             make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
             make_entry_update(100, entry_index, 1),
-            with_entries_count(make_block_meta_update(100, 99, 2, &Hash::new_unique()), 2),
+            with_entries_count(make_block_meta_update(100, 99, 2, &block_hash(100)), 2),
         ] {
             send_to_bank(&harness, update, bank_id).await;
         }
@@ -1103,7 +1121,7 @@ async fn cleared_pending_metadata_does_not_block_replacement_bank() {
     let mut harness = TestHarness::spawn();
     for update in [
         make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        make_block_meta_update(100, 99, 1, &Hash::new_unique()),
+        make_block_meta_update(100, 99, 1, &block_hash(100)),
     ] {
         send_to_bank(&harness, update, 1000).await;
     }
@@ -1170,7 +1188,7 @@ async fn dead_metadata_first_bank_cannot_revive_and_replacement_can_flush() {
     let mut harness = TestHarness::spawn();
     // No CreatedBank or Entry has registered this bank inside the wrapper yet.
     for update in [
-        make_block_meta_update(100, 99, 1, &Hash::new_unique()),
+        make_block_meta_update(100, 99, 1, &block_hash(100)),
         make_slot_update(100, 99, SlotStatus::SlotDead),
     ] {
         send_to_bank(&harness, update, 1000).await;
@@ -1199,7 +1217,7 @@ async fn dead_metadata_first_bank_cannot_revive_and_replacement_can_flush() {
     }
     for update in [
         make_entry_update(100, 0, 1),
-        make_block_meta_update(100, 99, 1, &Hash::new_unique()),
+        make_block_meta_update(100, 99, 1, &block_hash(100)),
         make_slot_update(100, 99, SlotStatus::SlotProcessed),
     ] {
         send_to_bank(&harness, update, 1000).await;
@@ -1226,13 +1244,13 @@ async fn frozen_loser_does_not_hide_missing_entries_of_confirmed_winner() {
     for update in [
         make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
         make_entry_update(100, 0, 0),
-        make_block_meta_update(100, 99, 0, &Hash::new_unique()),
+        make_block_meta_update(100, 99, 0, &bank_block_hash(100, 1000)),
     ] {
         send_to_bank(&harness, update, 1000).await;
     }
     for update in [
         make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        make_block_meta_update(100, 99, 1, &Hash::new_unique()),
+        make_block_meta_update(100, 99, 1, &block_hash(100)),
         make_slot_update(100, 99, SlotStatus::SlotConfirmed),
     ] {
         send_to_bank(&harness, update, 1001).await;
@@ -1259,7 +1277,7 @@ async fn frozen_loser_does_not_hide_missing_entries_of_confirmed_winner() {
     for slot in 102..=deadline {
         for update in [
             make_entry_update(slot, 0, 0),
-            make_block_meta_update(slot, slot - 1, 0, &Hash::new_unique()),
+            make_block_meta_update(slot, slot - 1, 0, &block_hash(slot)),
         ] {
             send_to_bank(&harness, update, slot).await;
         }
@@ -1276,7 +1294,7 @@ async fn confirmed_child_waits_for_late_parent_entries() {
     harness.expect_flush(99).await.empty();
     for update in [
         make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        make_block_meta_update(100, 99, 1, &Hash::new_unique()),
+        make_block_meta_update(100, 99, 1, &block_hash(100)),
         make_slot_update(100, 99, SlotStatus::SlotConfirmed),
     ] {
         send_to_bank(&harness, update, 100).await;
@@ -1462,7 +1480,7 @@ async fn stream_closes_with_missing_parent_returns_error_without_descendant_outp
     for update in [
         make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
         make_entry_update(100, 0, 0),
-        make_block_meta_update(100, 99, 0, &Hash::new_unique()),
+        make_block_meta_update(100, 99, 0, &block_hash(100)),
         make_slot_update(100, 99, SlotStatus::SlotConfirmed),
     ] {
         input_tx
@@ -1492,7 +1510,7 @@ async fn stream_closes_with_missing_parent_returns_error_without_descendant_outp
         for update in [
             make_slot_update(slot, slot - 1, SlotStatus::SlotCreatedBank),
             make_entry_update(slot, 0, 0),
-            make_block_meta_update(slot, slot - 1, 0, &Hash::new_unique()),
+            make_block_meta_update(slot, slot - 1, 0, &block_hash(slot)),
             make_slot_update(slot, slot - 1, SlotStatus::SlotConfirmed),
         ] {
             input_tx
@@ -1551,7 +1569,7 @@ async fn stream_closes_with_unparsed_accounts_requires_recovery() {
     for update in [
         make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
         make_entry_update(100, 0, 0),
-        make_block_meta_update(100, 99, 0, &Hash::new_unique()),
+        make_block_meta_update(100, 99, 0, &block_hash(100)),
     ] {
         input_tx
             .send(CoordinatorInput::GeyserUpdate(Box::new(update)))
@@ -1621,7 +1639,7 @@ async fn clearing_raw_confirmed_bank_with_pending_metadata_requires_recovery() {
     let mut harness = TestHarness::spawn();
     for update in [
         make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
-        make_block_meta_update(100, 99, 1, &Hash::new_unique()),
+        make_block_meta_update(100, 99, 1, &block_hash(100)),
         make_slot_update(100, 99, SlotStatus::SlotConfirmed),
     ] {
         send_to_bank(&harness, update, 1000).await;
@@ -1912,7 +1930,7 @@ async fn dead_bank_record_does_not_block_after_repair_loses() {
     for update in [
         make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
         make_entry_update(42, 0, 0),
-        make_block_meta_update(42, 41, 0, &Hash::new_unique()),
+        make_block_meta_update(42, 41, 0, &block_hash(42)),
     ] {
         send_to_bank(&harness, update, 1042).await;
     }
@@ -1941,7 +1959,7 @@ async fn unfrozen_bank_of_forked_slot_can_still_win() {
     for update in [
         make_slot_update(30, 29, SlotStatus::SlotCreatedBank),
         make_entry_update(30, 0, 0),
-        make_block_meta_update(30, 29, 0, &Hash::new_unique()),
+        make_block_meta_update(30, 29, 0, &block_hash(30)),
     ] {
         send_to_bank(&harness, update, 3000).await;
     }
@@ -1973,7 +1991,7 @@ async fn unfrozen_bank_of_forked_slot_can_still_win() {
     .await;
     for update in [
         make_entry_update(30, 0, 1),
-        make_block_meta_update(30, 27, 1, &Hash::new_unique()),
+        make_block_meta_update(30, 27, 1, &block_hash(30)),
         make_slot_update(30, 27, SlotStatus::SlotConfirmed),
     ] {
         send_to_bank(&harness, update, 3001).await;
@@ -1997,7 +2015,7 @@ async fn bank_frozen_after_fork_report_does_not_block() {
         (make_slot_update(30, 29, SlotStatus::SlotProcessed), 3000),
         (make_slot_update(29, 27, SlotStatus::SlotDead), 2900),
         (make_entry_update(30, 0, 0), 3000),
-        (make_block_meta_update(30, 29, 0, &Hash::new_unique()), 3000),
+        (make_block_meta_update(30, 29, 0, &block_hash(30)), 3000),
         (make_slot_update(30, 29, SlotStatus::SlotDead), 3000),
     ] {
         send_to_bank(&harness, update, bank_id).await;
@@ -2036,7 +2054,7 @@ async fn lost_parent_block_meta_stops_before_child_flush() {
         harness
             .input_tx
             .send(CoordinatorInput::GeyserUpdate(Box::new(
-                make_block_meta_update(42, 41, 0, &Hash::new_unique(),)
+                make_block_meta_update(42, 41, 0, &block_hash(42),)
             )))
             .await
             .is_err(),
@@ -2083,7 +2101,7 @@ async fn lost_block_meta_of_winning_bank_stops_before_child_flush() {
     for update in [
         make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
         make_entry_update(42, 0, 0),
-        make_block_meta_update(42, 41, 0, &Hash::new_unique()),
+        make_block_meta_update(42, 41, 0, &bank_block_hash(42, 1)),
     ] {
         send_to_bank(&harness, update, 1).await;
     }
@@ -2164,13 +2182,13 @@ async fn late_parent_block_meta_within_grace_flushes() {
 
     send_to_bank(
         &harness,
-        make_block_meta_update(42, 41, 1, &Hash::new_unique()),
+        make_block_meta_update(42, 41, 1, &bank_block_hash(42, 4200)),
         4200,
     )
     .await;
     harness.expect_no_flush().await;
     for update in [
-        make_block_meta_update(42, 41, 1, &Hash::new_unique()),
+        make_block_meta_update(42, 41, 1, &block_hash(42)),
         make_slot_update(42, 41, SlotStatus::SlotConfirmed),
     ] {
         send_to_bank(&harness, update, 4201).await;
@@ -2194,7 +2212,7 @@ async fn late_parent_block_meta_within_grace_flushes() {
 #[tokio::test]
 async fn malformed_block_meta_or_entry_is_skipped() {
     let mut harness = TestHarness::spawn();
-    let mut bad_hash_meta = make_block_meta_update(50, 49, 0, &Hash::new_unique());
+    let mut bad_hash_meta = make_block_meta_update(50, 49, 0, &block_hash(50));
     let mut bad_hash_entry = make_entry_update(50, 0, 0);
     if let Some(UpdateOneof::BlockMeta(meta)) = bad_hash_meta.update_oneof.as_mut() {
         meta.blockhash = bs58::encode([1u8; 31]).into_string();
@@ -2203,7 +2221,7 @@ async fn malformed_block_meta_or_entry_is_skipped() {
         entry.hash = vec![1; 31];
     }
     // A complete block whose parent is its own slot would block every later slot.
-    let self_parent_meta = make_block_meta_update(50, 50, 0, &Hash::new_unique());
+    let self_parent_meta = make_block_meta_update(50, 50, 0, &block_hash(50));
     for update in [
         bad_hash_entry,
         bad_hash_meta,
@@ -2276,7 +2294,7 @@ async fn bank_in_two_slots_stops_coordinator() {
 
     for update in [
         make_entry_update(100, 0, 0),
-        make_block_meta_update(101, 100, 0, &Hash::new_unique()),
+        make_block_meta_update(101, 100, 0, &block_hash(101)),
     ] {
         input_tx
             .send(CoordinatorInput::GeyserUpdate(Box::new(with_bank_id(
@@ -2354,7 +2372,8 @@ async fn record_below_first_parent_edge_requires_recovery() {
 }
 
 /// Replay all lifecycle updates on one channel so parent freeze versus child confirmation
-/// has a fixed order. Neither candidate parent bank ever receives a usable confirmation.
+/// has a fixed order. Neither candidate matches the child's expected parent hash, and no
+/// direct commitment supplies the missing bank's identity.
 async fn assert_unconfirmed_parent_stops_before_child_flush(
     late_parent_freeze: bool,
     repaired_root: bool,
@@ -2384,7 +2403,7 @@ async fn assert_unconfirmed_parent_stops_before_child_flush(
     for update in [
         make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
         make_entry_update(42, 0, 0),
-        make_block_meta_update(42, 41, 0, &Hash::new_unique()),
+        make_block_meta_update(42, 41, 0, &block_hash(42)),
         make_slot_update(42, 41, SlotStatus::SlotConfirmed),
     ] {
         updates.push(with_bank_id(update, 4201));
@@ -2408,13 +2427,19 @@ async fn assert_unconfirmed_parent_stops_before_child_flush(
         ));
     }
     updates.push(with_bank_id(make_entry_update(43, 0, 0), 4300));
-    let parent_meta = with_bank_id(make_block_meta_update(43, 42, 0, &Hash::new_unique()), 4300);
+    let parent_meta = with_bank_id(
+        make_block_meta_update(43, 42, 0, &bank_block_hash(43, 4300)),
+        4300,
+    );
     if !late_parent_freeze {
         updates.push(parent_meta.clone());
     }
     for update in [
         make_entry_update(44, 0, 0),
-        make_block_meta_update(44, 43, 0, &Hash::new_unique()),
+        with_parent_blockhash(
+            make_block_meta_update(44, 43, 0, &block_hash(44)),
+            bank_block_hash(43, 4302),
+        ),
         make_slot_update(44, 43, SlotStatus::SlotConfirmed),
     ] {
         updates.push(with_bank_id(update, 4400));
@@ -2433,7 +2458,7 @@ async fn assert_unconfirmed_parent_stops_before_child_flush(
         if second_parent_freeze_slot == Some(slot) {
             for update in [
                 make_entry_update(43, 0, 0),
-                make_block_meta_update(43, 42, 0, &Hash::new_unique()),
+                make_block_meta_update(43, 42, 0, &bank_block_hash(43, 4301)),
             ] {
                 input_tx
                     .send(CoordinatorInput::GeyserUpdate(Box::new(with_bank_id(
@@ -2445,7 +2470,7 @@ async fn assert_unconfirmed_parent_stops_before_child_flush(
         }
         for update in [
             make_entry_update(slot, 0, 0),
-            make_block_meta_update(slot, slot - 1, 0, &Hash::new_unique()),
+            make_block_meta_update(slot, slot - 1, 0, &block_hash(slot)),
         ] {
             input_tx
                 .send(CoordinatorInput::GeyserUpdate(Box::new(with_bank_id(
@@ -2615,7 +2640,7 @@ async fn flush_repaired_dead_slot_42(harness: &mut TestHarness) {
     for update in [
         make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
         make_entry_update(42, 0, 0),
-        make_block_meta_update(42, 41, 0, &Hash::new_unique()),
+        make_block_meta_update(42, 41, 0, &block_hash(42)),
         make_slot_update(42, 41, SlotStatus::SlotConfirmed),
     ] {
         send_to_bank(harness, update, 11).await;
@@ -2653,7 +2678,7 @@ async fn forked_report_after_confirm_keeps_confirmed_bank() {
         send_to_bank(&harness, make_entry_update(43, 0, 0), bank_id).await;
         send_to_bank(
             &harness,
-            make_block_meta_update(43, 42, 0, &Hash::new_unique()),
+            make_block_meta_update(43, 42, 0, &block_hash(43)),
             bank_id,
         )
         .await;
@@ -2687,7 +2712,7 @@ async fn fork_report_after_child_confirm_keeps_parent() {
     let child = harness.slot(44).parent(43).empty().await;
     child.confirm().await;
     for update in [
-        make_block_meta_update(43, 42, 0, &Hash::new_unique()),
+        make_block_meta_update(43, 42, 0, &block_hash(43)),
         make_slot_update(43, 42, SlotStatus::SlotConfirmed),
     ] {
         send_to_bank(&harness, update, 4300).await;
@@ -2707,7 +2732,7 @@ async fn child_confirm_before_forked_parent_keeps_parent() {
     for update in [
         make_slot_update(43, 42, SlotStatus::SlotCreatedBank),
         make_entry_update(43, 0, 0),
-        make_block_meta_update(43, 42, 0, &Hash::new_unique()),
+        make_block_meta_update(43, 42, 0, &block_hash(43)),
     ] {
         send_to_bank(&harness, update, 4300).await;
     }
@@ -2791,7 +2816,7 @@ async fn cleared_banks_release_payloads_and_ignore_late_callbacks() {
         for update in [
             make_slot_update(42, 41, SlotStatus::SlotCreatedBank),
             make_entry_update(42, 0, 0),
-            make_block_meta_update(42, 41, 0, &Hash::new_unique()),
+            make_block_meta_update(42, 41, 0, &block_hash(42)),
             make_slot_update(42, 41, SlotStatus::SlotProcessed),
         ] {
             send_to_bank(&harness, update, bank_id).await;
@@ -2839,4 +2864,312 @@ async fn commitment_for_cleared_bank_requires_recovery() {
         send_to_bank(&harness, make_slot_update(42, 41, status), 1000).await;
         harness.expect_unresolved(42, 42).await;
     }
+}
+
+/// A bank's hash is distinct from every other candidate, including another bank in its slot.
+#[derive(Clone, Copy)]
+struct HashLinkedBank {
+    slot: u64,
+    bank_id: u64,
+    parent_slot: u64,
+    blockhash: Hash,
+    parent_blockhash: Hash,
+}
+
+impl HashLinkedBank {
+    fn new(slot: u64, bank_id: u64, parent_slot: u64, parent_blockhash: Hash) -> Self {
+        Self {
+            slot,
+            bank_id,
+            parent_slot,
+            blockhash: bank_block_hash(slot, bank_id),
+            parent_blockhash,
+        }
+    }
+
+    async fn create(self, harness: &TestHarness) {
+        self.status(harness, SlotStatus::SlotCreatedBank).await;
+    }
+
+    async fn entry(self, harness: &TestHarness) {
+        send_to_bank(harness, make_entry_update(self.slot, 0, 1), self.bank_id).await;
+    }
+
+    async fn metadata(self, harness: &TestHarness) {
+        send_to_bank(
+            harness,
+            with_parent_blockhash(
+                make_block_meta_update(self.slot, self.parent_slot, 1, &self.blockhash),
+                self.parent_blockhash,
+            ),
+            self.bank_id,
+        )
+        .await;
+    }
+
+    async fn parsed(self, harness: &TestHarness, record: &str) {
+        harness
+            .input_tx
+            .send(CoordinatorInput::AccountEventSeen {
+                slot: self.slot,
+                bank_id: self.bank_id,
+            })
+            .await
+            .unwrap();
+        for message in [
+            CoordinatorMessage::InstructionParsed {
+                slot: self.slot,
+                bank_id: self.bank_id,
+                key: InstructionRecordSortKey::new(0, vec![0]),
+                record: record.to_string(),
+            },
+            CoordinatorMessage::AccountParsed {
+                slot: self.slot,
+                bank_id: self.bank_id,
+                key: AccountRecordSortKey::new(1, [1; 32]),
+                record: record.to_string(),
+            },
+            CoordinatorMessage::TransactionParsed {
+                slot: self.slot,
+                bank_id: self.bank_id,
+            },
+        ] {
+            harness.parsed_tx.send(message).await.unwrap();
+        }
+    }
+
+    async fn complete(self, harness: &TestHarness, record: &str) {
+        self.create(harness).await;
+        self.entry(harness).await;
+        // Account ingress precedes BlockMeta in a complete bank. Its parser may still
+        // finish later, but inherited commitment can freeze the count as soon as metadata
+        // identifies this bank as the finalized child's parent.
+        self.parsed(harness, record).await;
+        self.metadata(harness).await;
+    }
+
+    async fn status(self, harness: &TestHarness, status: SlotStatus) {
+        send_to_bank(
+            harness,
+            make_slot_update(self.slot, self.parent_slot, status),
+            self.bank_id,
+        )
+        .await;
+    }
+
+    async fn expect_both_outputs(self, harness: &mut TestHarness, record: &str) {
+        let output = harness.expect_flush(self.slot).await;
+        assert_eq!(output.0.blockhash, self.blockhash);
+        assert_eq!(output.0.parent_slot, self.parent_slot);
+        output.tx_count(1).records(&[record]);
+        let account_output = harness.expect_account_flush(self.slot).await;
+        assert_eq!(account_output.0.bank_id, self.bank_id);
+        assert_eq!(account_output.0.parent_slot, self.parent_slot);
+        assert_eq!(account_output.0.blockhash, self.blockhash);
+        account_output.records(&[record]);
+    }
+}
+
+async fn finish_hash_linked_replay(harness: TestHarness) {
+    let TestHarness {
+        input_tx,
+        parsed_tx,
+        mut output_rx,
+        mut account_output_rx,
+        coordinator,
+    } = harness;
+    drop(input_tx);
+    drop(parsed_tx);
+    tokio::time::timeout(Duration::from_secs(2), coordinator)
+        .await
+        .expect("Coordinator did not finish after the complete chain")
+        .expect("Coordinator panicked")
+        .expect("A complete hash-linked chain must not require recovery");
+    assert!(output_rx.recv().await.is_none());
+    assert!(account_output_rx.recv().await.is_none());
+}
+
+#[derive(Clone, Copy)]
+enum DelayedParentData {
+    EntireBank,
+    Metadata,
+    Entries,
+}
+
+async fn assert_child_selects_hash_linked_parent(delayed: DelayedParentData) {
+    let mut harness = TestHarness::spawn_with_options(true, AccountCommitAt::Finalized);
+    let root = HashLinkedBank::new(41, 410, 40, block_hash(40));
+    root.complete(&harness, "root").await;
+    root.status(&harness, SlotStatus::SlotFinalized).await;
+    root.expect_both_outputs(&mut harness, "root").await;
+
+    let loser = HashLinkedBank::new(42, 420, 41, root.blockhash);
+    let winner = HashLinkedBank::new(42, 421, 41, root.blockhash);
+    let child = HashLinkedBank::new(43, 430, 42, winner.blockhash);
+    assert_ne!(loser.blockhash, winner.blockhash);
+    loser.complete(&harness, "losing-parent").await;
+    match delayed {
+        DelayedParentData::EntireBank => {},
+        DelayedParentData::Metadata => {
+            winner.create(&harness).await;
+            winner.entry(&harness).await;
+            winner.parsed(&harness, "winning-parent").await;
+        },
+        DelayedParentData::Entries => {
+            winner.create(&harness).await;
+            winner.metadata(&harness).await;
+            winner.parsed(&harness, "winning-parent").await;
+        },
+    }
+    child.complete(&harness, "child").await;
+    child.status(&harness, SlotStatus::SlotFinalized).await;
+    harness.expect_no_flush().await;
+    harness.expect_no_account_flush().await;
+
+    match delayed {
+        DelayedParentData::EntireBank => winner.complete(&harness, "winning-parent").await,
+        DelayedParentData::Metadata => winner.metadata(&harness).await,
+        DelayedParentData::Entries => winner.entry(&harness).await,
+    }
+    // The child authenticates the parent by hash. No direct commitment for either parent
+    // candidate has been sent, and the earlier losing candidate must never be published.
+    winner
+        .expect_both_outputs(&mut harness, "winning-parent")
+        .await;
+    child.expect_both_outputs(&mut harness, "child").await;
+
+    // The wrapper must remain able to accept B's delayed own status instead of having
+    // permanently finalized A when the child arrived.
+    winner.status(&harness, SlotStatus::SlotConfirmed).await;
+    child.status(&harness, SlotStatus::SlotFinalized).await;
+    harness.expect_no_flush().await;
+    harness.expect_no_account_flush().await;
+    finish_hash_linked_replay(harness).await;
+}
+
+#[tokio::test]
+async fn finalized_child_waits_for_parent_bank_named_by_hash() {
+    assert_child_selects_hash_linked_parent(DelayedParentData::EntireBank).await;
+}
+
+#[tokio::test]
+async fn finalized_child_selects_parent_after_delayed_winning_metadata() {
+    assert_child_selects_hash_linked_parent(DelayedParentData::Metadata).await;
+}
+
+#[tokio::test]
+async fn finalized_child_waits_for_hash_selected_parents_late_entries() {
+    assert_child_selects_hash_linked_parent(DelayedParentData::Entries).await;
+}
+
+#[tokio::test]
+async fn finalized_child_verifies_grandparent_before_promoting_sole_candidate() {
+    let mut harness = TestHarness::spawn_with_options(true, AccountCommitAt::Finalized);
+    let root = HashLinkedBank::new(40, 400, 39, block_hash(39));
+    root.complete(&harness, "root").await;
+    root.status(&harness, SlotStatus::SlotFinalized).await;
+    root.expect_both_outputs(&mut harness, "root").await;
+
+    let loser = HashLinkedBank::new(41, 410, 40, root.blockhash);
+    let winner = HashLinkedBank::new(41, 411, 40, root.blockhash);
+    let parent = HashLinkedBank::new(42, 420, 41, winner.blockhash);
+    let child = HashLinkedBank::new(43, 430, 42, parent.blockhash);
+    loser.complete(&harness, "losing-grandparent").await;
+    parent.complete(&harness, "parent").await;
+    child.complete(&harness, "child").await;
+    child.status(&harness, SlotStatus::SlotFinalized).await;
+    harness.expect_no_flush().await;
+    harness.expect_no_account_flush().await;
+
+    winner.complete(&harness, "winning-grandparent").await;
+    winner
+        .expect_both_outputs(&mut harness, "winning-grandparent")
+        .await;
+    parent.expect_both_outputs(&mut harness, "parent").await;
+    child.expect_both_outputs(&mut harness, "child").await;
+    finish_hash_linked_replay(harness).await;
+}
+
+#[tokio::test]
+async fn finalized_child_selects_replacement_after_explicit_parent_clear() {
+    let mut harness = TestHarness::spawn_with_options(true, AccountCommitAt::Finalized);
+    let root = HashLinkedBank::new(40, 400, 39, block_hash(39));
+    root.complete(&harness, "root").await;
+    root.status(&harness, SlotStatus::SlotFinalized).await;
+    root.expect_both_outputs(&mut harness, "root").await;
+
+    let cleared = HashLinkedBank::new(42, 420, 41, block_hash(41));
+    let winner = HashLinkedBank::new(42, 421, 40, root.blockhash);
+    let child = HashLinkedBank::new(43, 430, 42, winner.blockhash);
+    cleared.create(&harness).await;
+    cleared.entry(&harness).await;
+    cleared.parsed(&harness, "cleared-parent").await;
+    harness
+        .input_tx
+        .send(CoordinatorInput::GeyserUpdate(Box::new(SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::EntryUpdateParent(
+                SubscribeUpdateEntryUpdateParent {
+                    slot: cleared.slot,
+                    cleared_bank_id: cleared.bank_id,
+                    parent_slot: winner.parent_slot,
+                    parent_block_id: winner.parent_blockhash.to_bytes().to_vec(),
+                },
+            )),
+            ..Default::default()
+        })))
+        .await
+        .unwrap();
+    winner.complete(&harness, "winning-parent").await;
+    child.complete(&harness, "child").await;
+    child.status(&harness, SlotStatus::SlotFinalized).await;
+    // Late callbacks from the cleared bank cannot replace the verified winner's records.
+    cleared.entry(&harness).await;
+    cleared.parsed(&harness, "late-cleared-parent").await;
+
+    winner
+        .expect_both_outputs(&mut harness, "winning-parent")
+        .await;
+    child.expect_both_outputs(&mut harness, "child").await;
+    finish_hash_linked_replay(harness).await;
+}
+
+#[tokio::test]
+async fn child_with_conflicting_published_parent_hash_stops_before_output() {
+    let mut harness = TestHarness::spawn_with_options(true, AccountCommitAt::Finalized);
+    let parent = HashLinkedBank::new(42, 420, 41, block_hash(41));
+    parent.complete(&harness, "published-parent").await;
+    parent.status(&harness, SlotStatus::SlotFinalized).await;
+    parent
+        .expect_both_outputs(&mut harness, "published-parent")
+        .await;
+
+    let other_parent_hash = bank_block_hash(42, 421);
+    assert_ne!(parent.blockhash, other_parent_hash);
+    let child = HashLinkedBank::new(43, 430, 42, other_parent_hash);
+    child.complete(&harness, "conflicting-child").await;
+    child.status(&harness, SlotStatus::SlotFinalized).await;
+
+    let TestHarness {
+        input_tx,
+        parsed_tx,
+        mut output_rx,
+        mut account_output_rx,
+        coordinator,
+    } = harness;
+    drop(input_tx);
+    drop(parsed_tx);
+    let error = tokio::time::timeout(Duration::from_secs(2), coordinator)
+        .await
+        .expect("Contradictory parent identity must stop ingestion")
+        .expect("Coordinator panicked")
+        .expect_err("A child cannot extend a different block in the published parent slot");
+    assert!(matches!(
+        error,
+        CoordinatorError::ConflictingBlockIdentity {
+            slot: 43,
+            bank_id: 430,
+        }
+    ));
+    assert!(output_rx.recv().await.is_none());
+    assert!(account_output_rx.recv().await.is_none());
 }

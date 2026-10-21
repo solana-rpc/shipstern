@@ -371,7 +371,7 @@ impl<R> CoordinatorState<R> {
             }
 
             let ix_slot = buf
-                .drain_instruction_records(slot)
+                .drain_instruction_records(slot, bank_id)
                 .ok_or(CoordinatorError::ReadySlotMissingMetadata { slot })?;
             self.last_instruction_flushed_slot = Some(slot);
             flushed.push(ix_slot);
@@ -422,7 +422,9 @@ impl<R> CoordinatorState<R> {
                 break;
             }
 
-            let acct_slot = buf.drain_account_records(slot);
+            let Some(acct_slot) = buf.drain_account_records(slot, bank_id) else {
+                break;
+            };
             self.last_account_flushed_slot = Some(slot);
             flushed.push(acct_slot);
         }

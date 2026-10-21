@@ -225,10 +225,15 @@ impl<R> SlotRecordBuffer<R> {
 
     /// Drain instruction records and produce an InstructionSlot.
     /// Returns None if metadata is missing.
-    pub fn drain_instruction_records(&mut self, slot: Slot) -> Option<InstructionSlot<R>> {
+    pub fn drain_instruction_records(
+        &mut self,
+        slot: Slot,
+        bank_id: u64,
+    ) -> Option<InstructionSlot<R>> {
         let metadata = self.metadata.as_ref()?;
         let result = InstructionSlot {
             slot,
+            bank_id,
             parent_slot: metadata.parent_slot,
             blockhash: metadata.blockhash,
             executed_transaction_count: metadata.expected_tx_count,
@@ -245,10 +250,14 @@ impl<R> SlotRecordBuffer<R> {
     }
 
     /// Drain account records and produce an AccountSlot.
-    pub fn drain_account_records(&mut self, slot: Slot) -> AccountSlot<R> {
+    pub fn drain_account_records(&mut self, slot: Slot, bank_id: u64) -> Option<AccountSlot<R>> {
+        let metadata = self.metadata.as_ref()?;
         let decoded_account_count = self.account_records.len() as u64;
         let result = AccountSlot {
             slot,
+            bank_id,
+            parent_slot: metadata.parent_slot,
+            blockhash: metadata.blockhash,
             records: std::mem::take(&mut self.account_records)
                 .into_values()
                 .collect(),
@@ -257,7 +266,7 @@ impl<R> SlotRecordBuffer<R> {
             failed_account_count: self.failed_account_count,
         };
         self.accounts_drained = true;
-        result
+        Some(result)
     }
 }
 
@@ -284,7 +293,9 @@ mod tests {
         );
         buf.insert_instruction_record(InstructionRecordSortKey::new(0, vec![0]), "tx0-ix0".into());
 
-        let ix_slot = buf.drain_instruction_records(42).expect("instruction slot");
+        let ix_slot = buf
+            .drain_instruction_records(42, 7)
+            .expect("instruction slot");
         assert_eq!(ix_slot.records, vec![
             "tx0-ix0".to_string(),
             "tx0-ix0.1".to_string(),
@@ -295,13 +306,18 @@ mod tests {
     #[test]
     fn account_records_drain_in_sorted_order() {
         let mut buf = SlotRecordBuffer::<String>::default();
+        buf.set_block_metadata(BlockMetadata {
+            parent_slot: 41,
+            blockhash: Hash::new_unique(),
+            expected_tx_count: 0,
+        });
 
         // Insert out of order
         buf.insert_account_record(AccountRecordSortKey::new(300, [3; 32]), "wv300".into());
         buf.insert_account_record(AccountRecordSortKey::new(100, [1; 32]), "wv100".into());
         buf.insert_account_record(AccountRecordSortKey::new(200, [2; 32]), "wv200".into());
 
-        let acct_slot = buf.drain_account_records(42);
+        let acct_slot = buf.drain_account_records(42, 7).expect("account slot");
         assert_eq!(acct_slot.records, vec![
             "wv100".to_string(),
             "wv200".to_string(),
@@ -380,7 +396,9 @@ mod tests {
         buf.insert_instruction_record(InstructionRecordSortKey::new(0, vec![0]), "main".into());
         buf.insert_instruction_record(InstructionRecordSortKey::new(0, vec![0, 0]), "cpi-0".into());
 
-        let ix_slot = buf.drain_instruction_records(42).expect("instruction slot");
+        let ix_slot = buf
+            .drain_instruction_records(42, 7)
+            .expect("instruction slot");
         assert_eq!(ix_slot.records, vec![
             "main".to_string(),
             "cpi-0".to_string(),
@@ -400,7 +418,9 @@ mod tests {
             blockhash: Hash::default(),
             expected_tx_count: 0,
         });
-        let ix_slot = buf.drain_instruction_records(42).expect("instruction slot");
+        let ix_slot = buf
+            .drain_instruction_records(42, 7)
+            .expect("instruction slot");
         assert_eq!(ix_slot.records.len(), 1);
         assert_eq!(buf.record_count(), 0);
     }
@@ -452,7 +472,9 @@ mod tests {
         buf.mark_account_commitment_reached();
         assert!(buf.slot_ready());
 
-        let ix_slot = buf.drain_instruction_records(42).expect("instruction slot");
+        let ix_slot = buf
+            .drain_instruction_records(42, 7)
+            .expect("instruction slot");
         assert_eq!(ix_slot.parent_slot, 20);
         assert_eq!(ix_slot.blockhash, new_hash);
         assert_eq!(ix_slot.executed_transaction_count, 3);

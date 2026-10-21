@@ -63,6 +63,10 @@ pub enum CoordinatorError {
         slot: Slot,
         bank_id: u64,
     },
+    ConflictingBlockIdentity {
+        slot: Slot,
+        bank_id: u64,
+    },
     BankInTwoSlots {
         bank_id: u64,
         slot: Slot,
@@ -97,6 +101,11 @@ impl fmt::Display for CoordinatorError {
                 f,
                 "Incomplete block at slot {slot} bank {bank_id}; stopping before advancing past \
                  the gap; replay or backfill is required"
+            ),
+            Self::ConflictingBlockIdentity { slot, bank_id } => write!(
+                f,
+                "Conflicting block identity at slot {slot} bank {bank_id}; stopping before \
+                 publication; replay or backfill is required"
             ),
             Self::BankInTwoSlots {
                 bank_id,
@@ -270,6 +279,8 @@ pub enum AccountMode {
 /// An instruction slot ready for downstream consumption (e.g., Kafka write).
 pub struct InstructionSlot<R> {
     pub slot: Slot,
+    /// The bank selected by commitment evidence for this connection.
+    pub bank_id: u64,
     pub parent_slot: Slot,
     pub blockhash: Hash,
     pub executed_transaction_count: u64,
@@ -283,6 +294,10 @@ pub struct InstructionSlot<R> {
 /// An account slot ready for downstream consumption.
 pub struct AccountSlot<R> {
     pub slot: Slot,
+    /// The bank selected by commitment evidence for this connection.
+    pub bank_id: u64,
+    pub parent_slot: Slot,
+    pub blockhash: Hash,
     pub records: Vec<R>,
     pub decoded_account_count: u64,
     pub filtered_account_count: u64,
