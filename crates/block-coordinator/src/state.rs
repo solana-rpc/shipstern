@@ -132,22 +132,6 @@ impl<R> CoordinatorState<R> {
                 .is_some_and(|buf| buf.parent_slot().is_some())
     }
 
-    /// Keep a bank that froze pending, even with no records or block metadata yet, so it counts
-    /// toward the pending-bank limit until it flushes or is dropped. A new bank puts a dead or
-    /// incomplete slot back on the chain, so its children wait for it. False when the bank can
-    /// never flush.
-    pub(crate) fn admit_frozen_bank(&mut self, key: BankKey) -> bool {
-        let BankKey { slot, bank_id } = key;
-        if self.is_discarded(key) || self.is_behind_instruction_frontier(key, "BlockFrozen") {
-            return false;
-        }
-        if !self.is_forked(slot) && self.discarded_slots.remove(&slot).is_some() {
-            tracing::info!(slot, bank_id, "New bank froze for a discarded slot");
-        }
-        self.buffer.entry(key).or_default();
-        true
-    }
-
     pub(crate) fn has_bank(&self, key: BankKey) -> bool { self.buffer.contains_key(&key) }
 
     pub fn last_instruction_flushed_slot(&self) -> Option<Slot> {
@@ -183,12 +167,16 @@ impl<R> CoordinatorState<R> {
                 metadata,
             } => {
                 let key = BankKey::new(slot, bank_id);
-                if self.admit_frozen_bank(key) {
-                    self.buffer
-                        .entry(key)
-                        .or_default()
-                        .set_block_metadata(metadata);
+                if self.is_discarded(key) || self.is_behind_instruction_frontier(key, "BlockFrozen")
+                {
+                    return Ok(());
                 }
+                // A new bank puts a dead or incomplete slot back on the chain.
+                if !self.is_forked(slot) && self.discarded_slots.remove(&slot).is_some() {
+                    tracing::info!(slot, bank_id, "New bank froze for a discarded slot");
+                }
+                let buf = self.buffer.entry(key).or_default();
+                buf.set_block_metadata(metadata);
             },
             CoordinatorEvent::SlotConfirmed { slot, bank_id } => {
                 let key = BankKey::new(slot, bank_id);
@@ -450,8 +438,10 @@ impl<R> CoordinatorState<R> {
     }
 
     /// A slot flushes after its parent, so output follows the chain: the parent is behind the
-    /// drain's frontier, or left the chain dead or incomplete. The first flush has no frontier.
-    /// A fork-reported parent's own confirm follows its child's, so the child waits for it.
+    /// drain's frontier, or was discarded incomplete. The first flush has no frontier. A node
+    /// replays a child only on a frozen parent, so a child of a dead slot waits for the repair's
+    /// BlockMeta, which can come after the child's. A fork-reported parent's own confirm follows
+    /// its child's, so the child waits for it too.
     fn parent_flushed(&self, parent_slot: Slot, frontier: Option<Slot>) -> bool {
         let Some(last) = frontier else {
             return true;
@@ -459,7 +449,7 @@ impl<R> CoordinatorState<R> {
         parent_slot <= last
             || matches!(
                 self.discarded_slots.get(&parent_slot),
-                Some(DiscardReason::Dead | DiscardReason::Incomplete)
+                Some(DiscardReason::Incomplete)
             )
     }
 
@@ -876,7 +866,8 @@ mod tests {
                 bank_ids: vec![0],
             })
             .unwrap();
-        apply_ready_slot(&mut state, 43, 42, 0);
+        // Slot 43 skips the dead slot, so the instruction frontier passes it.
+        apply_ready_slot(&mut state, 43, 41, 0);
         assert_eq!(drain_both(&mut state).unwrap().len(), 2);
 
         state
@@ -1076,6 +1067,8 @@ mod tests {
         assert_eq!(slots, vec![100, 101, 102, 103]);
     }
 
+    /// A node replays a child only on a frozen parent, so a child of a dead slot waits for the
+    /// repair, whose BlockMeta can come after the child's, and flushes after it.
     #[test]
     fn gap_invariant_holds() {
         let mut state = CoordinatorState::<String>::default();
@@ -1094,10 +1087,15 @@ mod tests {
                 bank_ids: vec![],
             })
             .unwrap();
+        assert!(drain_both(&mut state).unwrap().is_empty());
 
-        let flushed = drain_both(&mut state).unwrap();
-        assert_eq!(flushed.len(), 1);
-        assert_eq!(flushed[0].slot, 102);
+        apply_ready_slot(&mut state, 101, 100, 0);
+        let slots: Vec<_> = drain_both(&mut state)
+            .unwrap()
+            .iter()
+            .map(|s| s.slot)
+            .collect();
+        assert_eq!(slots, [101, 102]);
     }
 
     #[test]
@@ -1234,7 +1232,8 @@ mod tests {
                 .unwrap();
         }
 
-        apply_ready_slot(&mut state, 1200, 1000, 0);
+        // Slot 1200 skips the dead slots.
+        apply_ready_slot(&mut state, 1200, 900, 0);
 
         let flushed = drain_both(&mut state).unwrap();
         assert_eq!(flushed.len(), 1);

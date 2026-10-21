@@ -112,8 +112,9 @@
 //!
 //! NOTE:
 //!   The implementation uses two independent drains with the same parent
-//!   check: a slot flushes after its parent flushed or left the chain dead or
-//!   incomplete. Instructions need the tx gate, accounts the account gate.
+//!   check: a slot flushes after its parent flushed or was discarded
+//!   incomplete. A child of a dead slot waits for the repair. Instructions
+//!   need the tx gate, accounts the account gate.
 //!   When `require_tx_gate=false`, `expected_tx_count` is forced to 0, so
 //!   `tx_parse_complete` is immediately true once BlockFrozen is seen.
 //!
@@ -2258,6 +2259,101 @@ async fn repair_after_a_second_death_flushes_before_its_child() {
     )
     .await;
     harness.expect_flush(100).await.empty();
+    harness.expect_flush(101).await.empty();
+}
+
+/// Slot 100 dies once, and repair bank 11 confirms before its BlockMeta, which comes after
+/// child 101's. A node replays a child only on a frozen parent, so the child waits for the repair.
+#[tokio::test]
+async fn repair_block_meta_after_its_child_flushes_first() {
+    let mut harness = TestHarness::spawn();
+    flush_slot_99(&mut harness).await;
+
+    send_to_bank(
+        &harness,
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        10,
+    )
+    .await;
+    send_to_bank(
+        &harness,
+        make_slot_update(100, 99, SlotStatus::SlotDead),
+        10,
+    )
+    .await;
+    for update in [
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        make_entry_update(100, 0, 0),
+        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 11).await;
+    }
+    harness.slot(101).parent(100).empty().await.confirm().await;
+    harness.expect_no_flush().await;
+
+    send_to_bank(
+        &harness,
+        make_block_meta_update(100, 99, 0, &Hash::new_unique()),
+        11,
+    )
+    .await;
+    harness.expect_flush(100).await.empty();
+    harness.expect_flush(101).await.empty();
+}
+
+/// At startup, bank 1000 of slot 100 freezes on parent 98, which then dies, so slot 100 is
+/// reported forked. Replacement bank 1001 on parent 97 freezes short of its tick and confirms,
+/// and child 101 confirms first. The child waits for the tick, even as the stream's first flush.
+#[tokio::test]
+async fn short_replacement_of_a_forked_slot_flushes_before_its_child_at_startup() {
+    let mut harness = TestHarness::spawn();
+
+    send_to_bank(
+        &harness,
+        make_slot_update(98, 97, SlotStatus::SlotCreatedBank),
+        98,
+    )
+    .await;
+    for update in [
+        make_slot_update(100, 98, SlotStatus::SlotCreatedBank),
+        make_entry_update(100, 0, 0),
+        make_block_meta_update(100, 98, 0, &Hash::new_unique()),
+    ] {
+        send_to_bank(&harness, update, 1000).await;
+    }
+    send_to_bank(&harness, make_slot_update(98, 97, SlotStatus::SlotDead), 98).await;
+
+    let mut block_meta = make_block_meta_update(100, 97, 1, &Hash::new_unique());
+    if let Some(UpdateOneof::BlockMeta(meta)) = block_meta.update_oneof.as_mut() {
+        meta.entries_count = 2;
+    }
+    for update in [
+        make_slot_update(100, 97, SlotStatus::SlotCreatedBank),
+        make_entry_update(100, 0, 1),
+        block_meta,
+        make_slot_update(100, 97, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 1001).await;
+    }
+    for message in [
+        CoordinatorMessage::InstructionParsed {
+            slot: 100,
+            bank_id: 1001,
+            key: InstructionRecordSortKey::new(0, vec![0]),
+            record: "replacement".to_string(),
+        },
+        CoordinatorMessage::TransactionParsed {
+            slot: 100,
+            bank_id: 1001,
+        },
+    ] {
+        harness.parsed_tx.send(message).await.unwrap();
+    }
+    harness.slot(101).parent(100).empty().await.confirm().await;
+    harness.expect_no_flush().await;
+
+    send_to_bank(&harness, make_entry_update(100, 1, 0), 1001).await;
+    harness.expect_flush(100).await.records(&["replacement"]);
     harness.expect_flush(101).await.empty();
 }
 

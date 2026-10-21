@@ -49,12 +49,11 @@ pub struct BlockMachineCoordinator<R> {
 ///
 /// A bank that froze short of entries. LaserStream can send a bank's last entry after its
 /// BlockMeta, and block machine 0.11 freezes on BlockMeta and drops that entry, so the
-/// coordinator counts late entries itself. The bank's commitment statuses wait with it until
-/// the counts match. It counts as a pending bank, so an entry that never comes ends in
-/// `TooManyPendingBanks` rather than a gap.
+/// coordinator counts late entries itself. The bank freezes in the state as usual, but its
+/// commitment statuses wait here until the counts match, so it cannot flush. It counts as a
+/// pending bank, so an entry that never comes ends in `TooManyPendingBanks` rather than a gap.
 ///
 struct ShortBank<R> {
-    metadata: BlockMetadata,
     entries_count: u64,
     entry_indexes: BTreeSet<u64>,
     missing_transactions: u64,
@@ -297,15 +296,16 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                     let observed_tx_count = frozen.entries.iter().try_fold(0_u64, |sum, entry| {
                         sum.checked_add(entry.executed_txn_count)
                     });
+                    let frozen_event = CoordinatorEvent::BlockFrozen {
+                        slot: frozen.slot,
+                        bank_id: frozen.bank_id,
+                        metadata,
+                    };
                     // The block machine keeps one entry per index.
                     if frozen.entries.len() as u64 == frozen.entries_count
                         && observed_tx_count == Some(frozen.executed_transaction_count)
                     {
-                        events.push(CoordinatorEvent::BlockFrozen {
-                            slot: frozen.slot,
-                            bank_id: frozen.bank_id,
-                            metadata,
-                        });
+                        events.push(frozen_event);
                         continue;
                     }
 
@@ -350,9 +350,6 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                         });
                         continue;
                     };
-                    if !self.state.admit_frozen_bank(key) {
-                        continue;
-                    }
                     tracing::debug!(
                         slot = frozen.slot,
                         bank_id = frozen.bank_id,
@@ -361,8 +358,9 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                         missing_transactions,
                         "Block froze short of entries; waiting for late entries"
                     );
+                    // The run loop drops the short bank if the state refuses the freeze.
+                    events.push(frozen_event);
                     self.short_banks.insert(key, ShortBank {
-                        metadata,
                         entries_count: frozen.entries_count,
                         entry_indexes,
                         missing_transactions,
@@ -474,8 +472,8 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         self.release_short_bank(key, complete)
     }
 
-    /// Freeze a short bank or discard it as incomplete, then apply its held statuses. A confirm
-    /// of an incomplete bank discards its slot, as when the bank froze incomplete.
+    /// Release a short bank's held statuses, after discarding it as incomplete unless its counts
+    /// match. A confirm of an incomplete bank discards its slot, as when the bank froze incomplete.
     fn release_short_bank(&mut self, key: BankKey, complete: bool) -> Vec<CoordinatorEvent<R>> {
         let Some(short) = self.short_banks.remove(&key) else {
             return Vec::new();
@@ -485,29 +483,24 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         if self.state.is_invalidated_bank(key) {
             return Vec::new();
         }
-        let first = if complete {
+        if complete {
             tracing::debug!(slot, bank_id, "Late entries completed the block");
-            CoordinatorEvent::BlockFrozen {
-                slot,
-                bank_id,
-                metadata: short.metadata,
-            }
-        } else {
-            tracing::warn!(
-                slot,
-                bank_id,
-                expected_entries = short.entries_count,
-                observed_entries = short.entry_indexes.len(),
-                missing_transactions = short.missing_transactions,
-                "Discarding incomplete block"
-            );
-            CoordinatorEvent::BankDiscarded {
-                slot,
-                bank_id,
-                reason: DiscardReason::Incomplete,
-            }
+            return short.statuses;
+        }
+        tracing::warn!(
+            slot,
+            bank_id,
+            expected_entries = short.entries_count,
+            observed_entries = short.entry_indexes.len(),
+            missing_transactions = short.missing_transactions,
+            "Discarding incomplete block"
+        );
+        let discarded = CoordinatorEvent::BankDiscarded {
+            slot,
+            bank_id,
+            reason: DiscardReason::Incomplete,
         };
-        std::iter::once(first).chain(short.statuses).collect()
+        std::iter::once(discarded).chain(short.statuses).collect()
     }
 
     /// Bank IDs are per node, and one stream comes from one node, so a bank is in one slot.
@@ -550,7 +543,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         if self.state.is_invalidated_bank(key) {
             return Ok(Vec::new());
         }
-        if self.short_banks.contains_key(&key) || self.state.is_bank_frozen_or_confirmed(key) {
+        if self.state.is_bank_frozen_or_confirmed(key) {
             return Err(CoordinatorError::ClearedCommittedBank { slot, bank_id });
         }
         Ok(vec![CoordinatorEvent::BankDiscarded {
