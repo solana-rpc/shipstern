@@ -29,6 +29,11 @@
 | `dead_slot_discarded` | Dead slot removed, no output |
 | `dead_slot_spares_sibling` | A dead slot does not discard its sibling |
 | `incomplete_block_discarded` | BlockMeta without entries is discarded as incomplete |
+| `entry_after_block_meta_flushes` | An entry that arrives after its BlockMeta completes the block, which flushes in order |
+| `confirm_before_late_entry_waits_for_it` | A confirm that comes before the late entry waits for it |
+| `missing_entry_discards_the_block_when_a_later_slot_confirms` | A block still short of entries when a later slot confirms is discarded as incomplete |
+| `late_entry_with_extra_transactions_discards_the_block` | A late entry that overshoots the transaction count discards the block |
+| `update_parent_for_a_bank_waiting_for_entries_stops_coordinator` | Clearing a bank that froze short of entries stops the coordinator |
 | `late_block_meta_for_losing_bank_keeps_confirmed_bank` | Only the confirmed bank of a slot flushes |
 | `lost_parent_block_meta_stops_coordinator` | A parent that never freezes stops the coordinator with `TooManyPendingBanks` instead of a silent stall |
 | `lost_parent_after_a_jump_stops_coordinator` | The same holds for the first bank after a jump |

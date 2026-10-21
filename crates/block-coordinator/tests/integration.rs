@@ -1974,3 +1974,132 @@ async fn cleared_banks_release_payloads_and_ignore_late_callbacks() {
     harness.expect_no_flush().await;
     harness.expect_no_account_flush().await;
 }
+
+///
+/// Freeze slot `slot` (parent `slot - 1`) on BlockMeta with one of its two entries: entry 0 holds
+/// its one transaction, and the tick entry 1 has not arrived. LaserStream can send a bank's last
+/// entry after its BlockMeta.
+///
+async fn freeze_without_last_tick(harness: &TestHarness, slot: u64, record: &str) {
+    let mut block_meta = make_block_meta_update(slot, slot - 1, 1, &Hash::new_unique());
+    if let Some(UpdateOneof::BlockMeta(meta)) = block_meta.update_oneof.as_mut() {
+        meta.entries_count = 2;
+    }
+    for update in [
+        make_slot_update(slot, slot - 1, SlotStatus::SlotCreatedBank),
+        make_entry_update(slot, 0, 1),
+        block_meta,
+    ] {
+        send_to_bank(harness, update, slot).await;
+    }
+    send_record_to_slot(&harness.parsed_tx, slot, record).await;
+}
+
+async fn send_late_tick(harness: &TestHarness, slot: u64) {
+    send_to_bank(harness, make_entry_update(slot, 1, 0), slot).await;
+}
+
+async fn confirm_slot(harness: &TestHarness, slot: u64) {
+    send_to_bank(
+        harness,
+        make_slot_update(slot, slot - 1, SlotStatus::SlotConfirmed),
+        slot,
+    )
+    .await;
+}
+
+/// The late tick completes slot 100 before its confirm, so the slot flushes in order.
+#[tokio::test]
+async fn entry_after_block_meta_flushes() {
+    let mut harness = TestHarness::spawn();
+    harness.slot(99).parent(98).empty().await.confirm().await;
+    harness.expect_flush(99).await.empty();
+
+    freeze_without_last_tick(&harness, 100, "a").await;
+    send_late_tick(&harness, 100).await;
+    confirm_slot(&harness, 100).await;
+    harness.expect_flush(100).await.parent(99).records(&["a"]);
+
+    harness.slot(101).parent(100).empty().await.confirm().await;
+    harness.expect_flush(101).await.empty();
+}
+
+/// Slot 100 confirms before its late tick. The confirm waits for the tick.
+#[tokio::test]
+async fn confirm_before_late_entry_waits_for_it() {
+    let mut harness = TestHarness::spawn();
+    harness.slot(99).parent(98).empty().await.confirm().await;
+    harness.expect_flush(99).await.empty();
+
+    freeze_without_last_tick(&harness, 100, "a").await;
+    confirm_slot(&harness, 100).await;
+    harness.expect_no_flush().await;
+
+    send_late_tick(&harness, 100).await;
+    harness.expect_flush(100).await.records(&["a"]);
+}
+
+/// The tick of slot 100 never comes, as when the stream starts mid-slot. Its confirm waits until
+/// the next slot confirms, then the slot is discarded as incomplete and its child flushes.
+#[tokio::test]
+async fn missing_entry_discards_the_block_when_a_later_slot_confirms() {
+    let mut harness = TestHarness::spawn();
+    harness.slot(99).parent(98).empty().await.confirm().await;
+    harness.expect_flush(99).await.empty();
+
+    freeze_without_last_tick(&harness, 100, "lost").await;
+    confirm_slot(&harness, 100).await;
+    harness.expect_no_flush().await;
+
+    harness.slot(101).parent(100).empty().await.confirm().await;
+    harness.expect_flush(101).await.parent(100).empty();
+
+    // A tick after the discard cannot bring the slot back.
+    send_late_tick(&harness, 100).await;
+    harness.expect_no_flush().await;
+}
+
+/// A late entry with more transactions than the BlockMeta counts can never match it.
+#[tokio::test]
+async fn late_entry_with_extra_transactions_discards_the_block() {
+    let mut harness = TestHarness::spawn();
+    harness.slot(99).parent(98).empty().await.confirm().await;
+    harness.expect_flush(99).await.empty();
+
+    freeze_without_last_tick(&harness, 100, "lost").await;
+    send_to_bank(&harness, make_entry_update(100, 1, 1), 100).await;
+    confirm_slot(&harness, 100).await;
+    harness.expect_no_flush().await;
+
+    harness.slot(101).parent(100).empty().await.confirm().await;
+    harness.expect_flush(101).await.empty();
+}
+
+/// A bank that froze short of entries has frozen, so clearing it stops the coordinator.
+#[tokio::test]
+async fn update_parent_for_a_bank_waiting_for_entries_stops_coordinator() {
+    let harness = TestHarness::spawn();
+    freeze_without_last_tick(&harness, 100, "a").await;
+    harness
+        .input_tx
+        .send(CoordinatorInput::GeyserUpdate(Box::new(SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::EntryUpdateParent(
+                SubscribeUpdateEntryUpdateParent {
+                    slot: 100,
+                    cleared_bank_id: 100,
+                    parent_slot: 98,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        })))
+        .await
+        .unwrap();
+    assert!(matches!(
+        harness.expect_stopped().await,
+        CoordinatorError::ClearedCommittedBank {
+            slot: 100,
+            bank_id: 100
+        }
+    ));
+}
