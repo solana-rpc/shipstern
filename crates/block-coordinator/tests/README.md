@@ -63,6 +63,13 @@
 | `unfrozen_bank_of_forked_slot_can_still_win` | A bank that has not frozen survives a fork report and can win |
 | `bank_frozen_after_fork_report_does_not_block` | A bank that freezes after a fork report does not block later slots |
 | `discarded_slot_ignores_parsed_messages` | Messages for discarded slot dropped |
+| `commitment_for_a_cleared_bank_stops_coordinator` | A commitment for a bank that UpdateParent cleared stops the coordinator |
+| `finalized_child_waits_for_parent_bank_named_by_hash` | A finalized child commits the parent bank its parent blockhash names, not the only candidate seen so far |
+| `finalized_child_selects_parent_after_delayed_winning_metadata` | The same when only the winner's BlockMeta is late |
+| `finalized_child_waits_for_hash_selected_parents_late_entries` | The same when only the winner's entries are late |
+| `finalized_child_verifies_grandparent_before_promoting_sole_candidate` | Finality reaches the block machine only once every ancestor is linked by blockhash |
+| `finalized_child_selects_replacement_after_explicit_parent_clear` | A cleared bank does not hide its replacement from the child's parent blockhash |
+| `child_with_conflicting_published_parent_hash_stops_before_output` | A child naming another block than the published parent stops the coordinator |
 | `cleared_banks_release_payloads_and_ignore_late_callbacks` | Explicit invalidations release records immediately and preserve replacement banks |
 
 ### Fork Handling

@@ -154,6 +154,13 @@ impl<R> CoordinatorState<R> {
 
     pub fn last_account_flushed_slot(&self) -> Option<Slot> { self.last_account_flushed_slot }
 
+    /// The slot both drains flushed through.
+    pub(crate) fn flushed_through(&self) -> Option<Slot> {
+        self.last_instruction_flushed_slot
+            .zip(self.last_account_flushed_slot)
+            .map(|(instructions, accounts)| instructions.min(accounts))
+    }
+
     /// For backwards compatibility / observability: the minimum of the two flush slots.
     pub fn last_flushed_slot(&self) -> Option<Slot> {
         match (

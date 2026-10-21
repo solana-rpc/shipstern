@@ -90,6 +90,13 @@ pub enum CoordinatorError {
         slot: Slot,
         bank_id: u64,
     },
+    /// The stream contradicts itself about which block a slot holds: two committed banks in one
+    /// slot, a BlockMeta that changed, a parent blockhash that names another bank, or a commitment
+    /// for a bank it invalidated. Restart from the last checkpoint.
+    ConflictingBlockIdentity {
+        slot: Slot,
+        bank_id: u64,
+    },
 }
 
 impl fmt::Display for CoordinatorError {
@@ -129,6 +136,11 @@ impl fmt::Display for CoordinatorError {
                 f,
                 "UpdateParent cleared bank {bank_id} of slot {slot}, which had already frozen or \
                  confirmed"
+            ),
+            Self::ConflictingBlockIdentity { slot, bank_id } => write!(
+                f,
+                "Bank {bank_id} of slot {slot} contradicts the chain the stream reported; restart \
+                 from the last checkpoint"
             ),
         }
     }

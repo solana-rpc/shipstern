@@ -1,4 +1,5 @@
 pub mod buffer;
+mod commitments;
 pub mod coordinator;
 pub mod fixtures;
 pub mod source;
