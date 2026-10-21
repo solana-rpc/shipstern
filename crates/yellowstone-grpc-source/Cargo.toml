@@ -22,4 +22,3 @@ clap = { workspace = true, features = ["derive", "cargo", "wrap_help"] }
 
 [dev-dependencies]
 toml = { workspace = true }
-rustls = { workspace = true, features = ["ring"] }

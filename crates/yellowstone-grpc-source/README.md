@@ -87,8 +87,8 @@ there widens the whole bundle. `handle.filters().parser_ids()` reports the keys
 that exist. Only the newest set matters: two updates in quick
 succession may reach the source as the second alone, and a set the sink rejects
 is dropped with a warning while `filters()` still reports it. A stream with a
-live `RuntimeHandle` can reconnect at confirmed/finalized commitment. Every
-processed stream stops on loss.
+live `RuntimeHandle` does not reconnect, because the client cannot replay a
+changed request.
 
 The server applies the new set promptly once it has it, but two different lags
 sit in front of that. The source awaits the runtime buffer inside the same
@@ -119,9 +119,10 @@ infrastructure that does not forward them.
 
 ## Reconnect
 
-With `auto-reconnect` on, confirmed and finalized streams resume after loss.
-Recovery uses `reconnect-max-retries` and needs a server that stores slots: if
-it no longer holds the slot to resume from, the run ends with `OutOfRange`.
+With `auto-reconnect` on, a lost stream is recovered in one of two ways, picked
+by the commitment. Both share `reconnect-max-retries` and the backoff, and both
+need a server that stores slots: if it no longer holds the slot to resume from,
+the run ends with `OutOfRange`.
 
 **Confirmed or finalized: resume from the last slot.** The source subscribes
 again from the last slot it saw, with the newest filter set, and drops that
@@ -130,11 +131,27 @@ these commitments never changes once delivered, so nothing is missed and
 nothing repeats. A `from_slot` and a `RuntimeHandle` are both fine here. The
 budget starts over once the new stream delivers an update.
 
-**Processed: stop on stream loss.** Every processed stream ends the run when
-its connection is lost, even with `auto-reconnect = true`. The runtime cannot
-retract already delivered records from an invalidated bank or verify complete
-replacement delivery. Run the source under a supervisor that restarts it with
-fresh temporary state, or use confirmed/finalized delivery for automatic resume.
+**Processed: the client replays banks.** A slot can have several banks at
+processed, so only the client's bank replay can retract the one that was cut
+off. It takes only a processed stream with no `from_slot` and no
+`RuntimeHandle`, because it cannot verify a changed request. The server must
+send bank IDs (Geyser proto 13 or newer):
+
+- An account update with no `bank_id` ends the run with `FailedPrecondition`.
+- During a reconnect, a finalized slot with no `bank_id` ends the run with
+  `FailedPrecondition`.
+
+The client adds its own `blocks_meta` and `slots` filters. A server that allows
+one filter of a kind refuses a run that also has a block-meta or slot pipeline.
+Set `auto-reconnect = false` for such a server, and for a server on Geyser
+proto 12.7 or older.
+
+A replay repeats the bank that was cut off, so handlers can see its updates
+twice. On a Yellowstone server older than 16.1.2, the bank in progress when the
+client subscribes again can also lose its first updates, with no error
+([rpcpool/yellowstone-grpc#915](https://github.com/rpcpool/yellowstone-grpc/pull/915)).
+A processed stream with a `from_slot` or a `RuntimeHandle` does not reconnect,
+so run it under a supervisor that restarts it.
 
 ## Banks at processed
 
