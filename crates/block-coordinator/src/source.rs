@@ -9,17 +9,19 @@ use std::{path::PathBuf, time::Duration};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use shipstern::{
-    sources::{stream_error, FromConfig, SourceContext, SourceExitStatus, SourceTrait},
+    sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     Error as ShipsternError,
 };
 use shipstern_core::CommitmentLevel;
-use shipstern_yellowstone_grpc_source::{
-    build_subscribe_request, open_stream, YellowstoneGrpcConfig,
-};
+use shipstern_yellowstone_grpc_source::YellowstoneGrpcConfig;
 use tokio::sync::mpsc::Sender;
-use yellowstone_grpc_proto::geyser::{
-    subscribe_update::UpdateOneof, SlotStatus, SubscribeRequest, SubscribeRequestFilterBlocksMeta,
-    SubscribeRequestFilterEntry, SubscribeUpdate,
+use yellowstone_grpc_client::GeyserGrpcClient;
+use yellowstone_grpc_proto::{
+    geyser::{
+        subscribe_update::UpdateOneof, SlotStatus, SubscribeRequest,
+        SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry, SubscribeUpdate,
+    },
+    tonic::transport::ClientTlsConfig,
 };
 
 use crate::{fixtures::FixtureWriter, types::CoordinatorInput};
@@ -160,14 +162,32 @@ impl SourceTrait for CoordinatorSource {
             .source_label
             .as_deref()
             .unwrap_or("CoordinatorSource");
+        let timeout = Duration::from_secs(config.timeout);
 
-        // The gRPC source's builder applies the config's data slice.
-        let mut subscribe_request = build_subscribe_request(filters, config);
+        let builder = GeyserGrpcClient::build_from_shared(config.endpoint.clone())?
+            .x_token(config.x_token.clone())?
+            .max_decoding_message_size(config.max_decoding_message_size.unwrap_or(usize::MAX))
+            .accept_compressed(config.accept_compression.unwrap_or_default().into())
+            .connect_timeout(timeout)
+            .timeout(timeout)
+            .tls_config(ClientTlsConfig::new().with_native_roots())?;
+
+        // Neither reconnect mode fits. Slot resume needs confirmed or finalized, but the
+        // coordinator runs at processed where a slot can have several banks. The client's
+        // bank replay rejects a from_slot and re-sends banks the coordinator already froze.
+        if config.auto_reconnect {
+            tracing::info!(
+                source_label,
+                "Coordinator source does not reconnect; it stops on stream loss"
+            );
+        }
+
+        let mut client = builder.connect().await?;
+
+        let mut subscribe_request = SubscribeRequest::from(filters);
         add_coordinator_subscriptions(&mut subscribe_request);
-        subscribe_request.from_slot = config.from_slot;
-
-        // Processed whatever the config says: the two-gate flush needs every
-        // transaction before the confirmation.
+        subscribe_request.from_slot = config.from_slot.or(subscribe_request.from_slot);
+        // Processed: the two-gate flush needs every transaction before the confirmation.
         subscribe_request.commitment = Some(CommitmentLevel::Processed as i32);
 
         tracing::info!(
@@ -181,8 +201,11 @@ impl SourceTrait for CoordinatorSource {
             "subscribing to gRPC stream"
         );
 
-        // Checks the config before dialing. The sink stays open for the whole run.
-        let (_sink, mut stream) = open_stream(config, subscribe_request).await?;
+        let (_sub_tx, stream) = client
+            .subscribe_with_request(Some(subscribe_request))
+            .await?;
+
+        let mut stream = std::pin::pin!(stream);
 
         tracing::info!(source_label, "gRPC stream started");
 
@@ -332,7 +355,10 @@ impl SourceTrait for CoordinatorSource {
                 },
                 Err(status) => {
                     tracing::warn!(code = ?status.code(), message = %status.message(), "Received error status from stream");
-                    break stream_error(&tx, status.clone()).await;
+                    let code = status.code();
+                    let message = status.message().to_string();
+                    let _ = tx.send(Err(status.clone())).await;
+                    break SourceExitStatus::StreamError { code, message };
                 },
             }
 

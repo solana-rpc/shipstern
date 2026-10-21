@@ -6851,6 +6851,7 @@ dependencies = [
  "tokio",
  "tracing",
  "yellowstone-block-machine",
+ "yellowstone-grpc-client",
  "yellowstone-grpc-proto",
 ]
 
@@ -7323,7 +7324,6 @@ dependencies = [
  "async-trait",
  "clap 4.6.6",
  "futures-util",
- "rustls",
  "serde",
  "shipstern",
  "shipstern-core",

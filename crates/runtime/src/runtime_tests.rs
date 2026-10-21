@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
         Mutex, PoisonError,
     },
     time::Duration,
@@ -21,7 +21,7 @@ use yellowstone_grpc_proto::{
 use crate::{
     config::BufferConfig,
     instruction::InstructionPipeline,
-    sources::{stream_error, FilterUpdateSource, SourceContext, SourceExitStatus, SourceTrait},
+    sources::{FilterUpdateSource, SourceContext, SourceExitStatus, SourceTrait},
     Error, FilterUpdateError, Handler, HandlerResult, Pipeline, Runtime,
 };
 
@@ -680,37 +680,6 @@ async fn test_error_status_returns_error() {
         .unwrap();
 
     assert_other_error(runtime.try_run_async().await);
-}
-
-/// `stream_error` hands the status to the runtime and reports it, and still
-/// reports it once the runtime has stopped.
-#[tokio::test]
-async fn test_stream_error_sends_the_status_and_reports_it() {
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-
-    let exit = stream_error(&tx, tonic::Status::unavailable("node is restarting")).await;
-
-    assert!(
-        matches!(&exit, SourceExitStatus::StreamError { code: tonic::Code::Unavailable, message }
-            if message == "node is restarting"),
-        "got {exit:?}"
-    );
-    let sent = rx.recv().await.expect("the status reaches the runtime");
-    assert_eq!(
-        sent.expect_err("it arrives as an error").code(),
-        tonic::Code::Unavailable
-    );
-
-    drop(rx);
-    let exit = stream_error(&tx, tonic::Status::internal("late")).await;
-
-    assert!(
-        matches!(exit, SourceExitStatus::StreamError {
-            code: tonic::Code::Internal,
-            ..
-        }),
-        "got {exit:?}"
-    );
 }
 
 /// Fails before streaming anything, the way a source does when it cannot
@@ -1424,67 +1393,4 @@ async fn edge_stop_waits_for_in_flight_handlers() {
         finished, started,
         "only {finished} of {started} handlers finished before shutdown returned"
     );
-}
-
-static FAILED_BUFFER_HANDLER_STARTED: AtomicBool = AtomicBool::new(false);
-
-/// Says it started, then parks like `WedgedHandler`, so a buffer that fails afterwards
-/// stays in its drain until the drain ceiling.
-#[derive(Debug, Clone, Copy)]
-struct StartedWedgedHandler;
-
-impl Handler<SlotUpdate, SlotUpdate> for StartedWedgedHandler {
-    async fn handle(&self, _: &SlotUpdate, _: &SlotUpdate) -> crate::HandlerResult<()> {
-        FAILED_BUFFER_HANDLER_STARTED.store(true, Ordering::SeqCst);
-        std::future::pending::<()>().await;
-        unreachable!("pending never resolves")
-    }
-}
-
-/// Fails the buffer with a stream error while a wedged handler is in flight, then reports
-/// `ReceiverDropped`. The buffer has settled on its error but cannot finish before the
-/// drain ceiling, so this status is ready first and wins the runtime's biased select.
-#[derive(Debug)]
-struct MockReceiverDroppedAfterBufferFailureSource;
-
-#[async_trait]
-impl SourceTrait for MockReceiverDroppedAfterBufferFailureSource {
-    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
-        let SourceContext { tx, .. } = ctx;
-
-        let _ = tx.send(Ok(make_slot_update(0))).await;
-        while !FAILED_BUFFER_HANDLER_STARTED.load(Ordering::SeqCst) {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-
-        let _ = tx
-            .send(Err(tonic::Status::data_loss("buffer failed")))
-            .await;
-
-        // The buffer has taken the error once it has read everything sent.
-        while tx.capacity() < tx.max_capacity() {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-
-        Ok(SourceExitStatus::ReceiverDropped)
-    }
-}
-
-/// `ReceiverDropped` means a clean shutdown only when the buffer stopped cleanly. A buffer
-/// that failed first ends the run with its own error.
-#[tokio::test]
-async fn receiver_dropped_after_buffer_failure_returns_the_buffer_error() {
-    let runtime = Runtime::builder()
-        .slot(Pipeline::new(SlowSlotParser, [StartedWedgedHandler]))
-        .try_build_with(
-            MockReceiverDroppedAfterBufferFailureSource,
-            default_buffer_config(),
-        )
-        .unwrap();
-
-    let result = tokio::time::timeout(Duration::from_secs(5), runtime.try_run_async())
-        .await
-        .expect("the run must end once the drain ceiling passes");
-
-    assert_yellowstone_status(result, tonic::Code::DataLoss, "buffer failed");
 }

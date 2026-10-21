@@ -15,8 +15,20 @@ x-token = "<X-TOKEN>"
 # This defines how long to wait for a connection before timing out.
 timeout = 60
 
-# The source does not reconnect: a lost stream ends the run at every commitment,
-# so run it under a supervisor that restarts it.
+# Built-in auto-reconnect (default true). A confirmed or finalized stream resumes from
+# the last slot it saw. A processed stream reconnects only with no from-slot and no
+# RuntimeHandle. Set it to false for a server on Geyser proto 12.7 or older, or one
+# without replay_stored_slots.
+#auto-reconnect = true
+
+# Maximum reconnect attempts before the stream gives up. The count starts over at
+# every delivered update. Only applies when auto-reconnect is enabled. Defaults to
+# 10. A confirmed or finalized stream waits 500ms, doubling up to 10s, so the
+# retries span about 65 seconds; raise this for a server that holds slots longer.
+# A processed stream hands the budget to the client, where it is uncapped and
+# spans about 8.5 minutes. Recovery also needs the server to still hold the
+# missed slots, or the run ends with OutOfRange.
+#reconnect-max-retries = 10
 
 # Windows of account data to receive in place of the whole account.
 # Applies to the whole subscription rather than to one parser, so every account

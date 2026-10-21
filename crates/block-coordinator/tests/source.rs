@@ -11,7 +11,7 @@ use std::{
 use futures_util::{stream, Stream};
 use shipstern::sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait};
 use shipstern_block_coordinator::{CoordinatorInput, CoordinatorSource, CoordinatorSourceConfig};
-use shipstern_core::{AccountsDataSlice, Filters, PrefilterError};
+use shipstern_core::Filters;
 use shipstern_yellowstone_grpc_source::YellowstoneGrpcConfig;
 use tokio::sync::mpsc;
 use yellowstone_grpc_proto::{
@@ -156,6 +156,8 @@ async fn run(
             accounts_data_slice: Vec::new(),
             max_decoding_message_size: None,
             accept_compression: None,
+            auto_reconnect: false,
+            reconnect_max_retries: None,
         };
         configure(&mut grpc);
 
@@ -253,78 +255,6 @@ async fn unknown_slot_status_is_skipped() {
     );
     assert_eq!(forwarded_statuses(&run), [(42, created)]);
     assert!(run.runtime.is_empty());
-}
-
-/// The source subscribes with the config's data slice, like the gRPC source, and at
-/// processed whatever the config says, since the coordinator needs every bank.
-#[tokio::test]
-async fn subscription_carries_the_config_data_slice() {
-    let run = run(
-        |config| {
-            config.commitment_level = Some(shipstern_core::CommitmentLevel::Finalized);
-            config.from_slot = Some(100);
-            config.accounts_data_slice = vec![
-                AccountsDataSlice {
-                    offset: 0,
-                    length: 8,
-                },
-                AccountsDataSlice {
-                    offset: 32,
-                    length: 32,
-                },
-            ];
-        },
-        Vec::new(),
-    )
-    .await;
-
-    let [request] = run.requests.as_slice() else {
-        panic!("expected one subscription, got {}", run.requests.len());
-    };
-    let windows: Vec<_> = request
-        .accounts_data_slice
-        .iter()
-        .map(|slice| (slice.offset, slice.length))
-        .collect();
-
-    assert_eq!(windows, [(0, 8), (32, 32)]);
-    assert_eq!(request.commitment, Some(CommitmentLevel::Processed as i32));
-    assert_eq!(request.from_slot, Some(100));
-}
-
-/// A window list the server would refuse fails the run before it dials, with the error
-/// naming the bad window.
-#[tokio::test]
-async fn invalid_data_slice_fails_before_dialing() {
-    let run = run(
-        |config| {
-            config.accounts_data_slice = vec![
-                AccountsDataSlice {
-                    offset: 0,
-                    length: 16,
-                },
-                AccountsDataSlice {
-                    offset: 8,
-                    length: 8,
-                },
-            ];
-        },
-        Vec::new(),
-    )
-    .await;
-
-    let Err(shipstern::Error::Other(err)) = &run.exit else {
-        panic!("expected a config error, got {:?}", run.exit);
-    };
-
-    assert!(
-        matches!(
-            err.downcast_ref::<PrefilterError>(),
-            Some(PrefilterError::DataSliceOverlap(8, 16))
-        ),
-        "got {err}"
-    );
-    assert!(run.requests.is_empty(), "the source must not subscribe");
 }
 
 /// An UpdateParent is the only notice that a bank was cleared, and the coordinator

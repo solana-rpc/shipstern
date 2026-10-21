@@ -86,8 +86,9 @@ Naming an individual instruction parser is refused as unknown, and widening
 there widens the whole bundle. `handle.filters().parser_ids()` reports the keys
 that exist. Only the newest set matters: two updates in quick
 succession may reach the source as the second alone, and a set the sink rejects
-is dropped with a warning while `filters()` still reports it. A live
-`RuntimeHandle` does not keep a lost stream alive: see [Stream loss](#stream-loss).
+is dropped with a warning while `filters()` still reports it. A stream with a
+live `RuntimeHandle` does not reconnect, because the client cannot replay a
+changed request.
 
 The server applies the new set promptly once it has it, but two different lags
 sit in front of that. The source awaits the runtime buffer inside the same
@@ -116,22 +117,41 @@ also depends on the provider. Both `yellowstone-grpc-geyser` and `richat` apply
 mid-stream requests to a live subscription, but a deployment can sit behind
 infrastructure that does not forward them.
 
-## Stream loss
+## Reconnect
 
-The source never reconnects. At every commitment, a lost stream ends the run
-after one subscription: with `StreamEnded` when the server closes the stream,
-and with `StreamError` when it sends a status. Records delivered before the
-loss stay delivered, and none is repeated or retracted.
+With `auto-reconnect` on, a lost stream is recovered in one of two ways, picked
+by the commitment. Both share `reconnect-max-retries` and the backoff, and both
+need a server that stores slots: if it no longer holds the slot to resume from,
+the run ends with `OutOfRange`.
 
-Run the source under a supervisor that restarts it with fresh state. A restart
-alone does not make delivery gap-free, and it does not undo what handlers
-already wrote.
+**Confirmed or finalized: resume from the last slot.** The source subscribes
+again from the last slot it saw, with the newest filter set, and drops that
+slot's repeats by signature, pubkey and write version, or status. A slot at
+these commitments never changes once delivered, so nothing is missed and
+nothing repeats. A `from_slot` and a `RuntimeHandle` are both fine here. The
+budget starts over once the new stream delivers an update.
 
-Earlier versions resumed a lost stream on their own. That resume could miss or
-repeat data, so it is gone, and so are the `auto-reconnect` and
-`reconnect-max-retries` options. A config file that still sets them loads with
-the keys ignored, the CLI flags are rejected, and the `AUTO_RECONNECT` and
-`RECONNECT_MAX_RETRIES` env vars are no longer read.
+**Processed: the client replays banks.** A slot can have several banks at
+processed, so only the client's bank replay can retract the one that was cut
+off. It takes only a processed stream with no `from_slot` and no
+`RuntimeHandle`, because it cannot verify a changed request. The server must
+send bank IDs (Geyser proto 13 or newer):
+
+- An account update with no `bank_id` ends the run with `FailedPrecondition`.
+- During a reconnect, a finalized slot with no `bank_id` ends the run with
+  `FailedPrecondition`.
+
+The client adds its own `blocks_meta` and `slots` filters. A server that allows
+one filter of a kind refuses a run that also has a block-meta or slot pipeline.
+Set `auto-reconnect = false` for such a server, and for a server on Geyser
+proto 12.7 or older.
+
+A replay repeats the bank that was cut off, so handlers can see its updates
+twice. On a Yellowstone server older than 16.1.2, the bank in progress when the
+client subscribes again can also lose its first updates, with no error
+([rpcpool/yellowstone-grpc#915](https://github.com/rpcpool/yellowstone-grpc/pull/915)).
+A processed stream with a `from_slot` or a `RuntimeHandle` does not reconnect,
+so run it under a supervisor that restarts it.
 
 ## Banks at processed
 

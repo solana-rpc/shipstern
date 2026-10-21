@@ -5,7 +5,7 @@ use bytesize::ByteSize;
 use clap::ValueEnum;
 use futures_util::StreamExt;
 use shipstern::{
-    sources::{stream_error, FromConfig, SourceContext, SourceExitStatus, SourceTrait},
+    sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     CommitmentLevel, Error as ShipsternError,
 };
 use yellowstone_fumarole_client::{
@@ -69,6 +69,18 @@ impl From<FumaroleConfig> for yellowstone_fumarole_client::config::FumaroleConfi
             initial_stream_window_size: ByteSize::mib(9),
         }
     }
+}
+
+/// Keep the gRPC code of a stream error, so an auth failure does not read as an internal one.
+fn status_of(error: &(dyn std::error::Error + 'static)) -> Status {
+    let mut source = Some(error);
+    while let Some(err) = source {
+        if let Some(status) = err.downcast_ref::<Status>() {
+            return status.clone();
+        }
+        source = err.source();
+    }
+    Status::internal(error.to_string())
 }
 
 impl FromConfig for YellowstoneFumaroleSource {
@@ -145,12 +157,12 @@ impl SourceTrait for YellowstoneFumaroleSource {
                 },
                 Some(Ok(FumaroleEvent::SlotEnded { .. })) => {},
                 Some(Err(error)) => {
-                    // Keep the gRPC code of a stream error, so an auth failure does not read
-                    // as an internal one.
-                    let status = Status::try_from_error(Box::new(error))
-                        .unwrap_or_else(|error| Status::internal(error.to_string()));
-
-                    break stream_error(&tx, status).await;
+                    let status = status_of(&error);
+                    let _ = tx.send(Err(status.clone())).await;
+                    break SourceExitStatus::StreamError {
+                        code: status.code(),
+                        message: status.message().to_string(),
+                    };
                 },
                 None => {
                     tracing::info!("Source returned None, exiting");
