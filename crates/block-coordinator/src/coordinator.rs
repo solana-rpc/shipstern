@@ -267,12 +267,18 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         {
             return Ok(self.add_late_entry(entry));
         }
+        let dead_slot = matches!(
+            &info,
+            GeyserEventInfo::Slot(status) if matches!(status.status, SlotStatusKind::Dead)
+        )
+        .then(|| info.slot());
         // The wrapper rejects only an event for a discarded or already frozen bank, or a
         // commitment with no bank ID. None removes the slot, so do not discard its other banks.
         if self.wrapper.handle_new_geyser_event(info).is_err() {
             return Ok(events);
         }
 
+        let mut dead_slot_reported = false;
         while let Some(output) = self.wrapper.pop_next_state_machine_output() {
             match output {
                 BlockStateMachineOutput::FrozenBlock(frozen) => {
@@ -384,6 +390,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                     }
                 },
                 BlockStateMachineOutput::DeadSlotDetected(dead) => {
+                    dead_slot_reported |= dead_slot == Some(dead.slot);
                     events.push(CoordinatorEvent::SlotDiscarded {
                         slot: dead.slot,
                         reason: DiscardReason::Dead,
@@ -404,6 +411,27 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                         reason: DiscardReason::Forked,
                     });
                 },
+            }
+        }
+
+        // Block machine 0.11 reports a slot's death only once. A later death, of a repair bank,
+        // still discards the slot's banks inside it, so discard them here too, or they stay pending.
+        if let Some(slot) = dead_slot
+            && !dead_slot_reported
+        {
+            let bank_ids: Vec<u64> = self
+                .state
+                .banks_of(slot)
+                .into_iter()
+                .map(|key| key.bank_id)
+                .filter(|&bank_id| !self.wrapper.sm.is_bank_trackable(bank_id))
+                .collect();
+            if !bank_ids.is_empty() {
+                events.push(CoordinatorEvent::SlotDiscarded {
+                    slot,
+                    reason: DiscardReason::Dead,
+                    bank_ids,
+                });
             }
         }
 

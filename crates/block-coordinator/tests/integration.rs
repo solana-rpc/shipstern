@@ -2178,6 +2178,55 @@ async fn late_entry_of_a_repair_bank_flushes_before_its_child() {
     harness.expect_flush(101).await.empty();
 }
 
+/// Slot 100 dies, repair bank 11 freezes short of its tick, then the slot dies again. Block
+/// machine 0.11 reports only the first death, so the coordinator drops bank 11 itself, and the
+/// chain continues past the dead slot.
+#[tokio::test]
+async fn second_death_drops_the_held_repair_bank() {
+    let mut harness = TestHarness::spawn();
+    flush_slot_99(&mut harness).await;
+
+    let dead = || {
+        let mut update = make_slot_update(100, 99, SlotStatus::SlotDead);
+        if let Some(UpdateOneof::Slot(status)) = update.update_oneof.as_mut() {
+            status.bank_id = None;
+        }
+        update
+    };
+    let mut block_meta = make_block_meta_update(100, 99, 0, &Hash::new_unique());
+    if let Some(UpdateOneof::BlockMeta(meta)) = block_meta.update_oneof.as_mut() {
+        meta.entries_count = 2;
+    }
+    send_to_bank(
+        &harness,
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        10,
+    )
+    .await;
+    send_to_bank(&harness, dead(), 10).await;
+    for update in [
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        make_entry_update(100, 0, 0),
+        block_meta,
+    ] {
+        send_to_bank(&harness, update, 11).await;
+    }
+    send_to_bank(
+        &harness,
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        12,
+    )
+    .await;
+    harness
+        .input_tx
+        .send(CoordinatorInput::GeyserUpdate(Box::new(dead())))
+        .await
+        .unwrap();
+
+    harness.slot(101).parent(99).empty().await.confirm().await;
+    harness.expect_flush(101).await.parent(99).empty();
+}
+
 /// A late entry with more transactions than the BlockMeta counts can never match it.
 #[tokio::test]
 async fn late_entry_with_extra_transactions_discards_the_block() {

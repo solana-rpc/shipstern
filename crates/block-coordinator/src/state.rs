@@ -699,7 +699,7 @@ impl<R> CoordinatorState<R> {
     }
 
     /// Every bank of `slot` that has a buffer or an account count.
-    fn banks_of(&self, slot: Slot) -> BTreeSet<BankKey> {
+    pub(crate) fn banks_of(&self, slot: Slot) -> BTreeSet<BankKey> {
         let range = BankKey::slot_range(slot);
         self.buffer
             .range(range.clone())
