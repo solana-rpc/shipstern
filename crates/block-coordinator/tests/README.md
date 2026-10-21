@@ -36,6 +36,7 @@
 | `first_block_of_a_stream_started_mid_slot_is_discarded` | Before the first flush, a block missing its CreatedBank and first entry is discarded and does not block its child |
 | `block_meta_before_every_entry_at_startup_waits_for_them` | At startup, a block whose CreatedBank was seen waits for entries that all come after its BlockMeta |
 | `second_death_drops_the_held_repair_bank` | A second death of a slot, which block machine 0.11 does not report, still drops its held repair bank |
+| `repair_after_a_second_death_flushes_before_its_child` | Dropping banks after an unreported second death keeps the slot open, so a later repair flushes before its child |
 | `late_entry_of_a_repair_bank_flushes_before_its_child` | A held repair bank puts its dead slot back on the chain, so its child waits for the late entry |
 | `late_entry_with_extra_transactions_discards_the_block` | A late entry that overshoots the transaction count discards the block |
 | `update_parent_for_a_bank_waiting_for_entries_stops_coordinator` | Clearing a bank that froze short of entries stops the coordinator |

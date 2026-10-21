@@ -416,23 +416,26 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
 
         // Block machine 0.11 reports a slot's death only once. A later death, of a repair bank,
         // still discards the slot's banks inside it, so discard them here too, or they stay pending.
+        // Drop only the banks: marking the slot dead again would let a child flush past the next
+        // repair before its BlockMeta.
         if let Some(slot) = dead_slot
             && !dead_slot_reported
         {
-            let bank_ids: Vec<u64> = self
+            let dropped: Vec<BankKey> = self
                 .state
                 .banks_of(slot)
                 .into_iter()
-                .map(|key| key.bank_id)
-                .filter(|&bank_id| !self.wrapper.sm.is_bank_trackable(bank_id))
+                .filter(|key| !self.wrapper.sm.is_bank_trackable(key.bank_id))
                 .collect();
-            if !bank_ids.is_empty() {
-                events.push(CoordinatorEvent::SlotDiscarded {
-                    slot,
-                    reason: DiscardReason::Dead,
-                    bank_ids,
-                });
-            }
+            events.extend(
+                dropped
+                    .into_iter()
+                    .map(|key| CoordinatorEvent::BankDiscarded {
+                        slot,
+                        bank_id: key.bank_id,
+                        reason: DiscardReason::Dead,
+                    }),
+            );
         }
 
         // Each discarded bank also comes out as BankDiscarded above. Drain the queue so it
