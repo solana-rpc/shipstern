@@ -111,9 +111,9 @@
 //! └─────────────────────────────────────────────────────────────────────────────┘
 //!
 //! NOTE:
-//!   The implementation uses two independent drains. Instruction path applies
-//!   gap/parent checks. Account path does not use parent-gap checks; it only
-//!   requires account_gate_reached and ascending slot order.
+//!   The implementation uses two independent drains with the same parent
+//!   check: a slot flushes after its parent flushed or left the chain dead or
+//!   incomplete. Instructions need the tx gate, accounts the account gate.
 //!   When `require_tx_gate=false`, `expected_tx_count` is forced to 0, so
 //!   `tx_parse_complete` is immediately true once BlockFrozen is seen.
 //!

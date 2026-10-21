@@ -72,7 +72,7 @@ pub enum CoordinatorEvent<R> {
 pub struct CoordinatorState<R> {
     buffer: BTreeMap<BankKey, SlotRecordBuffer<R>>,
     /// Slots off the chain, with why. A new frozen bank clears a dead or incomplete slot. A forked
-    /// slot waits for a confirm of itself or of a child, or for the coordinator to report it
+    /// slot waits for a confirm of itself or of a child, or for its confirmed bank to prove
     /// incomplete, because no dead report follows a fork report.
     discarded_slots: BTreeMap<Slot, DiscardReason>,
     discarded_banks: BTreeMap<BankKey, DiscardReason>,
@@ -709,8 +709,8 @@ impl<R> CoordinatorState<R> {
             return;
         }
         let was_known_discarded = self.discarded_slots.contains_key(&slot);
-        // Forked sticks over a dead report, since none follows a fork report. Incomplete is the
-        // coordinator's own verdict that the slot never resolved, so it ends the fork wait.
+        // Forked sticks over a dead report, since none follows a fork report. Incomplete means
+        // the slot's confirmed bank misses data, so the slot is final and ends the fork wait.
         let stored = self.discarded_slots.entry(slot).or_insert(reason);
         if !matches!(stored, DiscardReason::Forked) || matches!(reason, DiscardReason::Incomplete) {
             *stored = reason;
@@ -977,7 +977,7 @@ mod tests {
         assert_eq!(slots, [42, 43]);
     }
 
-    /// The coordinator reports a fork-reported parent incomplete once its confirm is overdue.
+    /// A fork-reported parent whose confirmed bank misses data is discarded as incomplete.
     /// That ends the child's wait, or the pipeline would stall on it forever.
     #[test]
     fn incomplete_report_ends_the_wait_for_a_fork_reported_parent() {
