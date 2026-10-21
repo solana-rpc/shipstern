@@ -128,7 +128,9 @@
 //! │     Sibling finalized ──► ForksDetected ──► skip the slot until it confirms │
 //! │                                                                             │
 //! │  3. INCOMPLETE BLOCK                   [incomplete_block_discarded]         │
-//! │     BlockMeta with missing entries ──► BankDiscarded                        │
+//! │     BlockMeta with surplus entries ──► BankDiscarded                        │
+//! │     BlockMeta with missing entries ──► wait for them (pending bank)         │
+//! │     Startup, missing CreatedBank and entry 0 ──► BankDiscarded              │
 //! │                                                                             │
 //! │  discard_slot() actions:                                                    │
 //! │    • Add to discarded_slots with the reason                                 │
@@ -2077,19 +2079,103 @@ async fn entry_that_never_comes_stops_coordinator() {
     assert_stopped_behind(freeze_until_stopped(harness, 101).await, 100);
 }
 
-/// The stream started inside slot 100, so it missed entry 0. Nothing flushed yet, so the slot is
-/// discarded and its child flushes.
+/// The stream started inside slot 100, so it missed its CreatedBank and entry 0. Nothing flushed
+/// yet, so the slot is discarded and its child flushes.
 #[tokio::test]
 async fn first_block_of_a_stream_started_mid_slot_is_discarded() {
     let mut harness = TestHarness::spawn();
 
-    freeze_with_entry(&harness, 100, 1).await;
+    let mut block_meta = make_block_meta_update(100, 99, 0, &Hash::new_unique());
+    if let Some(UpdateOneof::BlockMeta(meta)) = block_meta.update_oneof.as_mut() {
+        meta.entries_count = 2;
+    }
+    send_to_bank(&harness, make_entry_update(100, 1, 0), 100).await;
+    send_to_bank(&harness, block_meta, 100).await;
     send_record_to_slot(&harness.parsed_tx, 100, "lost").await;
     confirm_slot(&harness, 100).await;
 
     harness.slot(101).parent(100).empty().await.confirm().await;
     harness.expect_flush(101).await.parent(100).empty();
     harness.expect_no_flush().await;
+}
+
+/// At startup the stream saw slot 100's CreatedBank, so its entries are coming even though
+/// BlockMeta arrives before all of them.
+#[tokio::test]
+async fn block_meta_before_every_entry_at_startup_waits_for_them() {
+    let mut harness = TestHarness::spawn();
+
+    let mut block_meta = make_block_meta_update(100, 99, 1, &Hash::new_unique());
+    if let Some(UpdateOneof::BlockMeta(meta)) = block_meta.update_oneof.as_mut() {
+        meta.entries_count = 2;
+    }
+    for update in [
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        block_meta,
+        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 100).await;
+    }
+    send_record_to_slot(&harness.parsed_tx, 100, "a").await;
+    harness.expect_no_flush().await;
+
+    send_to_bank(&harness, make_entry_update(100, 0, 1), 100).await;
+    send_late_tick(&harness, 100).await;
+    harness.expect_flush(100).await.records(&["a"]);
+}
+
+/// Bank 10 of slot 100 dies, and repair bank 11 freezes short of its tick. The repair puts the
+/// slot back on the chain, so child 101 waits for the tick instead of flushing past a dead slot.
+#[tokio::test]
+async fn late_entry_of_a_repair_bank_flushes_before_its_child() {
+    let mut harness = TestHarness::spawn();
+    flush_slot_99(&mut harness).await;
+
+    send_to_bank(
+        &harness,
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        10,
+    )
+    .await;
+    send_to_bank(
+        &harness,
+        make_slot_update(100, 99, SlotStatus::SlotDead),
+        10,
+    )
+    .await;
+
+    let mut block_meta = make_block_meta_update(100, 99, 1, &Hash::new_unique());
+    if let Some(UpdateOneof::BlockMeta(meta)) = block_meta.update_oneof.as_mut() {
+        meta.entries_count = 2;
+    }
+    for update in [
+        make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        make_entry_update(100, 0, 1),
+        block_meta,
+        make_slot_update(100, 99, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 11).await;
+    }
+    for message in [
+        CoordinatorMessage::InstructionParsed {
+            slot: 100,
+            bank_id: 11,
+            key: InstructionRecordSortKey::new(0, vec![0]),
+            record: "repair".to_string(),
+        },
+        CoordinatorMessage::TransactionParsed {
+            slot: 100,
+            bank_id: 11,
+        },
+    ] {
+        harness.parsed_tx.send(message).await.unwrap();
+    }
+    harness.slot(101).parent(100).empty().await.confirm().await;
+    harness.expect_no_flush().await;
+
+    send_to_bank(&harness, make_entry_update(100, 1, 0), 11).await;
+    harness.expect_flush(100).await.records(&["repair"]);
+    harness.expect_flush(101).await.empty();
 }
 
 /// A late entry with more transactions than the BlockMeta counts can never match it.

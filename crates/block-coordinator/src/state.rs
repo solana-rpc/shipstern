@@ -132,11 +132,17 @@ impl<R> CoordinatorState<R> {
                 .is_some_and(|buf| buf.parent_slot().is_some())
     }
 
-    /// Keep `key` pending with no records yet, so it counts toward the pending-bank limit until
-    /// it flushes or is dropped. False when the bank can never flush.
-    pub(crate) fn track_bank(&mut self, key: BankKey) -> bool {
+    /// Keep a bank that froze pending, even with no records or block metadata yet, so it counts
+    /// toward the pending-bank limit until it flushes or is dropped. A new bank puts a dead or
+    /// incomplete slot back on the chain, so its children wait for it. False when the bank can
+    /// never flush.
+    pub(crate) fn admit_frozen_bank(&mut self, key: BankKey) -> bool {
+        let BankKey { slot, bank_id } = key;
         if self.is_discarded(key) || self.is_behind_instruction_frontier(key, "BlockFrozen") {
             return false;
+        }
+        if !self.is_forked(slot) && self.discarded_slots.remove(&slot).is_some() {
+            tracing::info!(slot, bank_id, "New bank froze for a discarded slot");
         }
         self.buffer.entry(key).or_default();
         true
@@ -177,15 +183,12 @@ impl<R> CoordinatorState<R> {
                 metadata,
             } => {
                 let key = BankKey::new(slot, bank_id);
-                if self.is_discarded(key) || self.is_behind_instruction_frontier(key, "BlockFrozen")
-                {
-                    return Ok(());
+                if self.admit_frozen_bank(key) {
+                    self.buffer
+                        .entry(key)
+                        .or_default()
+                        .set_block_metadata(metadata);
                 }
-                if !self.is_forked(slot) && self.discarded_slots.remove(&slot).is_some() {
-                    tracing::info!(slot, bank_id, "New bank froze for a discarded slot");
-                }
-                let buf = self.buffer.entry(key).or_default();
-                buf.set_block_metadata(metadata);
             },
             CoordinatorEvent::SlotConfirmed { slot, bank_id } => {
                 let key = BankKey::new(slot, bank_id);

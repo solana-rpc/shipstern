@@ -1,11 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use solana_clock::Slot;
 use solana_commitment_config::CommitmentLevel;
 use solana_hash::Hash;
 use tokio::sync::mpsc;
 use yellowstone_block_machine::{
-    event::{EntryEvInfo, GeyserEventAdapter, GeyserEventInfo},
+    event::{EntryEvInfo, GeyserEventAdapter, GeyserEventInfo, SlotStatusKind},
     state_machine::BlockStateMachineOutput,
     wrapper::{BlockMachineConfig, BlocksStateMachineWrapper},
 };
@@ -42,6 +42,8 @@ pub struct BlockMachineCoordinator<R> {
     bank_slots: [HashMap<u64, Slot>; 2],
     /// Banks that froze before all their entries arrived.
     short_banks: BTreeMap<BankKey, ShortBank<R>>,
+    /// Banks whose CreatedBank came before anything flushed, so the stream saw them from the start.
+    created_at_startup: HashSet<BankKey>,
 }
 
 ///
@@ -91,6 +93,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
             max_pending_banks,
             bank_slots: Default::default(),
             short_banks: BTreeMap::new(),
+            created_at_startup: HashSet::new(),
         }
     }
 
@@ -190,6 +193,9 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
 
             // The state drops a bank's buffer when the bank can no longer flush.
             self.short_banks.retain(|&key, _| self.state.has_bank(key));
+            if self.state.last_flushed_slot().is_some() {
+                self.created_at_startup = HashSet::new();
+            }
 
             let pending = self.state.pending_bank_count();
             if pending > self.max_pending_banks {
@@ -245,6 +251,14 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                 return Ok(events);
             }
         }
+        if let GeyserEventInfo::Slot(status) = &info
+            && let (SlotStatusKind::CreatedBank, Some(bank_id)) = (status.status, status.bank_id)
+            && self.state.last_flushed_slot().is_none()
+            && self.created_at_startup.len() < BANK_SLOT_CAPACITY
+        {
+            self.created_at_startup
+                .insert(BankKey::new(status.slot, bank_id));
+        }
         // The wrapper drops an entry for a frozen bank, so count a short bank's late entry here.
         if let GeyserEventInfo::Entry(entry) = &info
             && self
@@ -290,16 +304,18 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                     }
 
                     // The block machine freezes a bank even when entries are missing. Only missing
-                    // entries can still arrive, so a surplus is final. A bank in flight when the
-                    // stream started lacks its first entries, and it freezes before anything
-                    // flushes.
+                    // entries can still arrive, so a surplus is final. Policy for a bank that was
+                    // in flight when the stream started: before anything flushes, a bank with
+                    // neither its CreatedBank nor its first entry seen is taken to have started
+                    // before the stream and is discarded, or its child would wait for it forever.
                     let entry_indexes: BTreeSet<u64> = frozen
                         .entries
                         .iter()
                         .map(|entry| entry.entry_index)
                         .collect();
-                    let started_mid_slot =
-                        self.state.last_flushed_slot().is_none() && !entry_indexes.contains(&0);
+                    let started_mid_slot = self.state.last_flushed_slot().is_none()
+                        && !self.created_at_startup.contains(&key)
+                        && !entry_indexes.contains(&0);
                     let can_complete = !started_mid_slot
                         && (entry_indexes.len() as u64) < frozen.entries_count
                         && entry_indexes
@@ -328,7 +344,7 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                         });
                         continue;
                     };
-                    if !self.state.track_bank(key) {
+                    if !self.state.admit_frozen_bank(key) {
                         continue;
                     }
                     tracing::debug!(

@@ -33,7 +33,9 @@
 | `confirm_before_late_entry_waits_for_it` | A confirm that comes before the late entry waits for it |
 | `late_entry_after_the_child_confirms_still_flushes` | A child confirm does not end the wait; the parent flushes first once its entry comes |
 | `entry_that_never_comes_stops_coordinator` | A block whose entry never comes counts as pending, even with no records, and stops the coordinator |
-| `first_block_of_a_stream_started_mid_slot_is_discarded` | Before the first flush, a block missing its first entry is discarded and does not block its child |
+| `first_block_of_a_stream_started_mid_slot_is_discarded` | Before the first flush, a block missing its CreatedBank and first entry is discarded and does not block its child |
+| `block_meta_before_every_entry_at_startup_waits_for_them` | At startup, a block whose CreatedBank was seen waits for entries that all come after its BlockMeta |
+| `late_entry_of_a_repair_bank_flushes_before_its_child` | A held repair bank puts its dead slot back on the chain, so its child waits for the late entry |
 | `late_entry_with_extra_transactions_discards_the_block` | A late entry that overshoots the transaction count discards the block |
 | `update_parent_for_a_bank_waiting_for_entries_stops_coordinator` | Clearing a bank that froze short of entries stops the coordinator |
 | `late_block_meta_for_losing_bank_keeps_confirmed_bank` | Only the confirmed bank of a slot flushes |
