@@ -12,6 +12,7 @@ use std::{collections::HashMap, env, path::PathBuf};
 use shipstern_block_coordinator::{
     AccountCommitAt, BlockMachineCoordinator, CoordinatorError, CoordinatorInput,
     CoordinatorMessage, FixtureReader, InstructionRecordSortKey, InstructionSlot,
+    DEFAULT_MAX_PENDING_BANKS,
 };
 use tokio::sync::mpsc;
 use yellowstone_grpc_proto::geyser::{subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate};
@@ -144,6 +145,7 @@ async fn run_coordinator_with_updates(updates: &[SubscribeUpdate]) -> Vec<Instru
         None,
         AccountCommitAt::Confirmed,
         true,
+        DEFAULT_MAX_PENDING_BANKS,
     ));
 
     for update in updates {

@@ -65,6 +65,8 @@ impl From<Missing> for ParseError {
 pub struct InstructionShared {
     /// The slot in which the transaction was processed.
     pub slot: u64,
+    /// The bank in which the transaction was processed. Bank IDs are local to a connection.
+    pub bank_id: u64,
     /// The signature of the transaction.
     pub signature: Vec<u8>,
     /// Whether the transaction is a vote transaction.
@@ -303,7 +305,9 @@ impl InstructionUpdate {
     /// form.
     pub fn build_from_txn(txn: &TransactionUpdate) -> Result<Vec<Self>, ParseError> {
         let TransactionUpdate {
-            transaction, slot, ..
+            transaction,
+            slot,
+            bank_id,
         } = txn.clone();
         let SubscribeUpdateTransactionInfo {
             signature,
@@ -348,6 +352,7 @@ impl InstructionUpdate {
 
         let shared = Arc::new(InstructionShared {
             slot,
+            bank_id,
             signature,
             is_vote,
             txn_index: index,
@@ -708,6 +713,32 @@ mod tests {
         assert!(!p2.is_ancestor_of(&p1));
         assert!(!p1.is_ancestor_of(&p3));
         assert!(!p1.is_parent_of(&p1));
+    }
+
+    #[test]
+    fn preserves_bank_identity_for_outer_and_inner_instructions() {
+        let mut txn = transaction_with_nested_inner_instructions();
+        txn.bank_id = 101;
+        let first_bank = InstructionUpdate::build_from_txn(&txn).expect("instructions build");
+        txn.bank_id = 102;
+        let second_bank = InstructionUpdate::build_from_txn(&txn).expect("instructions build");
+
+        let first = first_bank
+            .iter()
+            .flat_map(InstructionUpdate::visit_all)
+            .collect::<Vec<_>>();
+        let second = second_bank
+            .iter()
+            .flat_map(InstructionUpdate::visit_all)
+            .collect::<Vec<_>>();
+        assert!(first.len() > 1, "fixture must exercise inner instructions");
+        assert_eq!(first.len(), second.len());
+        for (first, second) in first.into_iter().zip(second) {
+            assert_eq!(first.shared.slot, second.shared.slot);
+            assert_eq!(first.shared.signature, second.shared.signature);
+            assert_eq!(first.shared.bank_id, 101);
+            assert_eq!(second.shared.bank_id, 102);
+        }
     }
 
     #[test]

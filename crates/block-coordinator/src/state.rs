@@ -72,13 +72,16 @@ pub enum CoordinatorEvent<R> {
 pub struct CoordinatorState<R> {
     buffer: BTreeMap<BankKey, SlotRecordBuffer<R>>,
     /// Slots off the chain, with why. A new frozen bank clears a dead or incomplete slot. A forked
-    /// slot waits for a confirm of itself or of a child, or for the coordinator to report it
+    /// slot waits for a confirm of itself or of a child, or for its confirmed bank to prove
     /// incomplete, because no dead report follows a fork report.
     discarded_slots: BTreeMap<Slot, DiscardReason>,
     discarded_banks: BTreeMap<BankKey, DiscardReason>,
     confirmed_banks: BTreeMap<Slot, u64>,
     last_instruction_flushed_slot: Option<Slot>,
     last_account_flushed_slot: Option<Slot>,
+    /// The lowest slot the stream showed a block of. The first flush may not skip a parent at or
+    /// above it.
+    first_observed_slot: Option<Slot>,
     /// Running count of AccountEventSeen signals per bank.
     /// Frozen as expected_account_count when the account gate is frozen.
     account_event_counts: BTreeMap<BankKey, u64>,
@@ -103,6 +106,7 @@ impl<R> CoordinatorState<R> {
             confirmed_banks: BTreeMap::new(),
             last_instruction_flushed_slot: None,
             last_account_flushed_slot: None,
+            first_observed_slot: None,
             account_event_counts: BTreeMap::new(),
             account_commit_at,
             late_account_record_drops: 0,
@@ -112,22 +116,53 @@ impl<R> CoordinatorState<R> {
 
     pub fn pending_bank_count(&self) -> usize { self.buffer.len() }
 
+    /// The stream showed a block of `slot` start or freeze: its CreatedBank or its BlockMeta.
+    pub(crate) fn note_observed_slot(&mut self, slot: Slot) {
+        self.first_observed_slot = Some(
+            self.first_observed_slot
+                .map_or(slot, |first| first.min(slot)),
+        );
+    }
+
+    /// `slot` is below every block the stream showed, and nothing of it waits here.
+    pub(crate) fn is_before_stream(&self, slot: Slot) -> bool {
+        self.first_observed_slot.is_some_and(|first| slot < first) && self.banks_of(slot).is_empty()
+    }
+
     pub fn discarded_slot_count(&self) -> usize { self.discarded_slots.len() }
 
-    pub(crate) fn is_slot_discarded(&self, slot: Slot) -> bool {
-        self.discarded_slots.contains_key(&slot)
+    /// Reject delayed events for cleared, dead or losing banks. Incomplete banks still need
+    /// their commitment event to discard the incomplete slot.
+    pub(crate) fn is_invalidated_bank(&self, key: BankKey) -> bool {
+        matches!(
+            self.discarded_banks.get(&key),
+            Some(DiscardReason::Dead | DiscardReason::Forked | DiscardReason::Cleared)
+        )
     }
 
-    /// `slot` has a confirmed bank that the flush frontier has not pruned yet.
-    pub(crate) fn is_slot_confirmed(&self, slot: Slot) -> bool {
-        self.confirmed_banks.contains_key(&slot)
+    /// `key` froze or confirmed, so nothing may clear it any more.
+    pub(crate) fn is_bank_frozen_or_confirmed(&self, key: BankKey) -> bool {
+        self.confirmed_banks.get(&key.slot) == Some(&key.bank_id)
+            || self
+                .buffer
+                .get(&key)
+                .is_some_and(|buf| buf.parent_slot().is_some())
     }
+
+    pub(crate) fn has_bank(&self, key: BankKey) -> bool { self.buffer.contains_key(&key) }
 
     pub fn last_instruction_flushed_slot(&self) -> Option<Slot> {
         self.last_instruction_flushed_slot
     }
 
     pub fn last_account_flushed_slot(&self) -> Option<Slot> { self.last_account_flushed_slot }
+
+    /// The slot both drains flushed through.
+    pub(crate) fn flushed_through(&self) -> Option<Slot> {
+        self.last_instruction_flushed_slot
+            .zip(self.last_account_flushed_slot)
+            .map(|(instructions, accounts)| instructions.min(accounts))
+    }
 
     /// For backwards compatibility / observability: the minimum of the two flush slots.
     pub fn last_flushed_slot(&self) -> Option<Slot> {
@@ -160,6 +195,7 @@ impl<R> CoordinatorState<R> {
                 {
                     return Ok(());
                 }
+                // A new bank puts a dead or incomplete slot back on the chain.
                 if !self.is_forked(slot) && self.discarded_slots.remove(&slot).is_some() {
                     tracing::info!(slot, bank_id, "New bank froze for a discarded slot");
                 }
@@ -318,7 +354,7 @@ impl<R> CoordinatorState<R> {
             };
             let key = BankKey::new(slot, bank_id);
             // A winner that a BankDiscarded dropped after its confirm has no buffer.
-            let Some(buf) = self.buffer.get_mut(&key) else {
+            let Some(buf) = self.buffer.get(&key) else {
                 continue;
             };
             // Stop at the first non-ready slot to maintain ordering.
@@ -329,24 +365,14 @@ impl<R> CoordinatorState<R> {
             let parent_slot = buf
                 .parent_slot()
                 .ok_or(CoordinatorError::ReadySlotMissingMetadata { slot })?;
-
-            let is_first = self.last_instruction_flushed_slot.is_none();
-            // A fork-reported parent is on the chain once a child confirms, and its own confirm
-            // follows the child's, so the child waits for it.
-            let parent_ok = self
-                .last_instruction_flushed_slot
-                .is_some_and(|last| parent_slot <= last)
-                || matches!(
-                    self.discarded_slots.get(&parent_slot),
-                    Some(DiscardReason::Dead | DiscardReason::Incomplete)
-                );
-
-            if !is_first && !parent_ok {
+            if !self.parent_flushed(parent_slot, self.last_instruction_flushed_slot) {
                 break;
             }
 
-            let ix_slot = buf
-                .drain_instruction_records(slot)
+            let ix_slot = self
+                .buffer
+                .get_mut(&key)
+                .and_then(|buf| buf.drain_instruction_records(slot, bank_id))
                 .ok_or(CoordinatorError::ReadySlotMissingMetadata { slot })?;
             self.last_instruction_flushed_slot = Some(slot);
             flushed.push(ix_slot);
@@ -373,17 +399,33 @@ impl<R> CoordinatorState<R> {
                 break;
             };
             let key = BankKey::new(slot, bank_id);
-            let Some(buf) = self.buffer.get_mut(&key) else {
+            let Some(buf) = self.buffer.get(&key) else {
                 continue;
             };
-            if buf.accounts_drained() || !buf.account_gate_reached() {
-                if !buf.accounts_drained() {
-                    break;
-                }
+            if buf.accounts_drained() {
                 continue;
             }
+            if !buf.account_gate_reached() {
+                break;
+            }
 
-            let acct_slot = buf.drain_account_records(slot);
+            // Accounts follow the chain like instructions. Otherwise a child that confirms before
+            // its fork-reported parent flushes first, and cleanup then drops the parent's accounts.
+            // The output carries the block's identity, so a bank waits for its BlockMeta.
+            let Some(parent) = buf.parent_slot() else {
+                break;
+            };
+            if !self.parent_flushed(parent, self.last_account_flushed_slot) {
+                break;
+            }
+
+            let Some(acct_slot) = self
+                .buffer
+                .get_mut(&key)
+                .and_then(|buf| buf.drain_account_records(slot, bank_id))
+            else {
+                break;
+            };
             self.last_account_flushed_slot = Some(slot);
             flushed.push(acct_slot);
         }
@@ -420,6 +462,28 @@ impl<R> CoordinatorState<R> {
                 .account_event_counts
                 .split_off(&BankKey::first(last.saturating_add(1)));
         }
+    }
+
+    /// A slot flushes after its parent, so output follows the chain: the parent is behind the
+    /// drain's frontier, or was discarded incomplete. Before the first flush, only a parent from
+    /// before the stream started, with nothing of it waiting, can be missing. A node replays a child
+    /// only on a frozen parent, so a child of a dead slot waits for the repair's BlockMeta, which
+    /// can come after the child's. A fork-reported parent's own confirm follows its child's, so
+    /// the child waits too.
+    fn parent_flushed(&self, parent_slot: Slot, frontier: Option<Slot>) -> bool {
+        let flushed = match frontier {
+            Some(last) => parent_slot <= last,
+            None => {
+                self.first_observed_slot
+                    .is_none_or(|first| parent_slot < first)
+                    && self.banks_of(parent_slot).is_empty()
+            },
+        };
+        flushed
+            || matches!(
+                self.discarded_slots.get(&parent_slot),
+                Some(DiscardReason::Incomplete)
+            )
     }
 
     /// Guard for SlotFinalized and AccountEventSeen: drop an event for a slot that both
@@ -615,9 +679,15 @@ impl<R> CoordinatorState<R> {
         let BankKey { slot, bank_id } = key;
         let newly_discarded = !self.discarded_banks.contains_key(&key);
         let record_count = self.drop_bank(key, reason);
-        if newly_discarded {
-            tracing::warn!(slot, bank_id, %reason, record_count, "Discarding bank");
+        if !newly_discarded {
+            return;
         }
+        // A fast leader handover clears a bank routinely, so that is not a warning.
+        if matches!(reason, DiscardReason::Cleared) {
+            tracing::debug!(slot, bank_id, record_count, "Bank cleared by UpdateParent");
+            return;
+        }
+        tracing::warn!(slot, bank_id, %reason, record_count, "Discarding bank");
     }
 
     /// Tombstone `key` and drop its records. Returns how many records it held.
@@ -652,7 +722,7 @@ impl<R> CoordinatorState<R> {
     }
 
     /// Every bank of `slot` that has a buffer or an account count.
-    fn banks_of(&self, slot: Slot) -> BTreeSet<BankKey> {
+    pub(crate) fn banks_of(&self, slot: Slot) -> BTreeSet<BankKey> {
         let range = BankKey::slot_range(slot);
         self.buffer
             .range(range.clone())
@@ -677,8 +747,8 @@ impl<R> CoordinatorState<R> {
             return;
         }
         let was_known_discarded = self.discarded_slots.contains_key(&slot);
-        // Forked sticks over a dead report, since none follows a fork report. Incomplete is the
-        // coordinator's own verdict that the slot never resolved, so it ends the fork wait.
+        // Forked sticks over a dead report, since none follows a fork report. Incomplete means
+        // the slot's confirmed bank misses data, so the slot is final and ends the fork wait.
         let stored = self.discarded_slots.entry(slot).or_insert(reason);
         if !matches!(stored, DiscardReason::Forked) || matches!(reason, DiscardReason::Incomplete) {
             *stored = reason;
@@ -702,7 +772,7 @@ impl<R> CoordinatorState<R> {
                 match reason {
                     DiscardReason::Incomplete => true,
                     DiscardReason::Dead => frozen || reported.contains(key),
-                    DiscardReason::Forked => false,
+                    DiscardReason::Forked | DiscardReason::Cleared => false,
                 }
             })
             .collect();
@@ -734,11 +804,19 @@ impl<R> CoordinatorState<R> {
         );
     }
 
-    /// Remove markers far behind `last_flushed_slot`; recent ones still drop late records.
-    /// Past `MAX_DISCARDED_SLOTS` it only warns, since evicting could stall the pipeline.
+    ///
+    /// Remove markers far behind both flush frontiers; recent ones still drop late records.
+    /// While one frontier is unset, at startup, its drain can still need a confirm, so nothing is
+    /// pruned. Past `MAX_DISCARDED_SLOTS` it only warns, since evicting could stall the pipeline.
+    ///
     fn prune_discarded_slots(&mut self) {
-        if let Some(last) = self.last_flushed_slot() {
-            let min_retained = last.saturating_sub(Self::DISCARDED_SLOT_RETENTION_BEHIND_FLUSH);
+        if let (Some(ix), Some(acct)) = (
+            self.last_instruction_flushed_slot,
+            self.last_account_flushed_slot,
+        ) {
+            let min_retained = ix
+                .min(acct)
+                .saturating_sub(Self::DISCARDED_SLOT_RETENTION_BEHIND_FLUSH);
             let first_kept = min_retained.saturating_add(1);
             self.discarded_slots = self.discarded_slots.split_off(&first_kept);
             self.discarded_banks = self.discarded_banks.split_off(&BankKey::first(first_kept));
@@ -821,7 +899,8 @@ mod tests {
                 bank_ids: vec![0],
             })
             .unwrap();
-        apply_ready_slot(&mut state, 43, 42, 0);
+        // Slot 43 skips the dead slot, so the instruction frontier passes it.
+        apply_ready_slot(&mut state, 43, 41, 0);
         assert_eq!(drain_both(&mut state).unwrap().len(), 2);
 
         state
@@ -937,7 +1016,7 @@ mod tests {
         assert_eq!(slots, [42, 43]);
     }
 
-    /// The coordinator reports a fork-reported parent incomplete once its confirm is overdue.
+    /// A fork-reported parent whose confirmed bank misses data is discarded as incomplete.
     /// That ends the child's wait, or the pipeline would stall on it forever.
     #[test]
     fn incomplete_report_ends_the_wait_for_a_fork_reported_parent() {
@@ -973,6 +1052,13 @@ mod tests {
     #[test]
     fn finalized_mode_flushes_only_confirmed_bank_accounts() {
         let mut state = CoordinatorState::<String>::new(AccountCommitAt::Finalized);
+        state
+            .apply(CoordinatorEvent::BlockFrozen {
+                slot: 42,
+                bank_id: 8,
+                metadata: metadata(41, 0),
+            })
+            .unwrap();
         // The loser goes last with the same key, so a leak into bank 8 replaces its record.
         for bank_id in [8, 7] {
             state
@@ -1021,6 +1107,8 @@ mod tests {
         assert_eq!(slots, vec![100, 101, 102, 103]);
     }
 
+    /// A node replays a child only on a frozen parent, so a child of a dead slot waits for the
+    /// repair, whose BlockMeta can come after the child's, and flushes after it.
     #[test]
     fn gap_invariant_holds() {
         let mut state = CoordinatorState::<String>::default();
@@ -1039,10 +1127,15 @@ mod tests {
                 bank_ids: vec![],
             })
             .unwrap();
+        assert!(drain_both(&mut state).unwrap().is_empty());
 
-        let flushed = drain_both(&mut state).unwrap();
-        assert_eq!(flushed.len(), 1);
-        assert_eq!(flushed[0].slot, 102);
+        apply_ready_slot(&mut state, 101, 100, 0);
+        let slots: Vec<_> = drain_both(&mut state)
+            .unwrap()
+            .iter()
+            .map(|s| s.slot)
+            .collect();
+        assert_eq!(slots, [101, 102]);
     }
 
     #[test]
@@ -1179,7 +1272,8 @@ mod tests {
                 .unwrap();
         }
 
-        apply_ready_slot(&mut state, 1200, 1000, 0);
+        // Slot 1200 skips the dead slots.
+        apply_ready_slot(&mut state, 1200, 900, 0);
 
         let flushed = drain_both(&mut state).unwrap();
         assert_eq!(flushed.len(), 1);
@@ -1488,38 +1582,15 @@ mod tests {
             })
             .unwrap();
 
-        // A later slot advances only the instruction frontier.
-        state
-            .apply(CoordinatorEvent::BlockFrozen {
-                slot: 200,
-                bank_id: 0,
-                metadata: metadata(199, 0),
-            })
-            .unwrap();
-        state
-            .apply(CoordinatorEvent::SlotConfirmed {
-                slot: 200,
-                bank_id: 0,
-            })
-            .unwrap();
+        // Instructions advance along the chain while accounts wait for finalized.
+        apply_ready_slot(&mut state, 100, 99, 0);
+        assert_eq!(state.drain_instruction_flushable().unwrap()[0].slot, 100);
+        apply_ready_slot(&mut state, 200, 100, 0);
         let ix_flushed = state.drain_instruction_flushable().unwrap();
         assert_eq!(ix_flushed.len(), 1);
         assert_eq!(ix_flushed[0].slot, 200);
 
-        // Now freeze account gate for slot 100 at finalized.
-        state
-            .apply(CoordinatorEvent::BlockFrozen {
-                slot: 100,
-                bank_id: 0,
-                metadata: metadata(99, 0),
-            })
-            .unwrap();
-        state
-            .apply(CoordinatorEvent::SlotConfirmed {
-                slot: 100,
-                bank_id: 0,
-            })
-            .unwrap();
+        // Slot 100's account gate freezes only after the instruction frontier moved on.
         state
             .apply(CoordinatorEvent::SlotFinalized {
                 slot: 100,
@@ -1786,5 +1857,120 @@ mod tests {
         assert_eq!(acct.len(), 1);
         // Now buffer entry removed.
         assert_eq!(state.pending_bank_count(), 0);
+    }
+
+    fn account_record(state: &mut CoordinatorState<String>, slot: Slot, record: &str) {
+        state
+            .apply(CoordinatorEvent::AccountEventSeen { slot, bank_id: 0 })
+            .unwrap();
+        state
+            .apply(CoordinatorEvent::AccountRecordParsed {
+                slot,
+                bank_id: 0,
+                key: AccountRecordSortKey::new(1, [slot as u8; 32]),
+                record: record.to_string(),
+            })
+            .unwrap();
+    }
+
+    /// A fork-reported parent's own confirm follows its child's. The child's accounts wait for
+    /// the parent's, or the cleanup after both drains pass the parent drops its accounts.
+    #[test]
+    fn account_drain_waits_for_a_fork_reported_parent() {
+        let mut state = CoordinatorState::<String>::default();
+        apply_ready_slot(&mut state, 41, 40, 0);
+        let _ = drain_both(&mut state).unwrap();
+
+        account_record(&mut state, 42, "parent");
+        state
+            .apply(CoordinatorEvent::SlotDiscarded {
+                slot: 42,
+                reason: DiscardReason::Forked,
+                bank_ids: vec![],
+            })
+            .unwrap();
+        account_record(&mut state, 43, "child");
+        apply_ready_slot(&mut state, 43, 42, 0);
+        assert!(state.drain_instruction_flushable().unwrap().is_empty());
+        assert!(
+            state.drain_account_flushable().is_empty(),
+            "the child waits for its parent"
+        );
+
+        state
+            .apply(CoordinatorEvent::BlockFrozen {
+                slot: 42,
+                bank_id: 0,
+                metadata: metadata(41, 0),
+            })
+            .unwrap();
+        state
+            .apply(CoordinatorEvent::SlotConfirmed {
+                slot: 42,
+                bank_id: 0,
+            })
+            .unwrap();
+
+        let instructions: Vec<Slot> = state
+            .drain_instruction_flushable()
+            .unwrap()
+            .iter()
+            .map(|ix_slot| ix_slot.slot)
+            .collect();
+        let accounts: Vec<(Slot, Vec<String>)> = state
+            .drain_account_flushable()
+            .into_iter()
+            .map(|acct_slot| (acct_slot.slot, acct_slot.records))
+            .collect();
+        assert_eq!(instructions, [42, 43]);
+        assert_eq!(accounts, [
+            (42, vec!["parent".to_string()]),
+            (43, vec!["child".to_string()]),
+        ]);
+    }
+
+    /// Finalized mode before the first account flush: instructions run past the marker
+    /// retention while slot 100 waits for its last account record. Slot 100 must keep its
+    /// confirm, or the account drain stops at it for good.
+    #[test]
+    fn first_account_slot_keeps_its_confirm_while_instructions_run_ahead() {
+        let mut state = CoordinatorState::<String>::new(AccountCommitAt::Finalized);
+        state
+            .apply(CoordinatorEvent::AccountEventSeen {
+                slot: 100,
+                bank_id: 0,
+            })
+            .unwrap();
+        apply_ready_slot(&mut state, 100, 99, 0);
+        state
+            .apply(CoordinatorEvent::SlotFinalized {
+                slot: 100,
+                bank_id: 0,
+            })
+            .unwrap();
+
+        let last = 200 + CoordinatorState::<String>::DISCARDED_SLOT_RETENTION_BEHIND_FLUSH;
+        for slot in 101..=last {
+            account_record(&mut state, slot, "later");
+            apply_ready_slot(&mut state, slot, slot - 1, 0);
+            state
+                .apply(CoordinatorEvent::SlotFinalized { slot, bank_id: 0 })
+                .unwrap();
+            let _ = drain_both(&mut state).unwrap();
+        }
+        assert_eq!(state.last_instruction_flushed_slot(), Some(last));
+        assert_eq!(state.last_account_flushed_slot(), None);
+
+        state
+            .apply(CoordinatorEvent::AccountRecordParsed {
+                slot: 100,
+                bank_id: 0,
+                key: AccountRecordSortKey::new(1, [100; 32]),
+                record: "late".to_string(),
+            })
+            .unwrap();
+        let flushed = state.drain_account_flushable();
+        assert_eq!(flushed.first().map(|acct_slot| acct_slot.slot), Some(100));
+        assert_eq!(flushed.len() as u64, last - 99);
     }
 }

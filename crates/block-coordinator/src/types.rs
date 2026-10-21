@@ -39,6 +39,9 @@ pub enum DiscardReason {
     Dead,
     Forked,
     Incomplete,
+    /// An UpdateParent abandoned the bank, and its slot replays under a new bank ID. Bank-scoped
+    /// only: the slot itself stays live.
+    Cleared,
 }
 
 impl fmt::Display for DiscardReason {
@@ -47,6 +50,7 @@ impl fmt::Display for DiscardReason {
             Self::Dead => "dead",
             Self::Forked => "forked",
             Self::Incomplete => "incomplete",
+            Self::Cleared => "cleared",
         };
         f.write_str(label)
     }
@@ -71,6 +75,27 @@ pub enum CoordinatorError {
     },
     AccountOutputChannelClosed {
         slot: Slot,
+    },
+    /// More banks wait to flush than the limit allows, so output stopped behind a slot that
+    /// never resolves: a lost BlockMeta, a missing commitment, or records for a slot the block
+    /// machine never saw. Restart from the last checkpoint to replay it.
+    TooManyPendingBanks {
+        pending: usize,
+        limit: usize,
+        oldest_slot: Option<Slot>,
+    },
+    /// An UpdateParent cleared a bank that had already frozen or confirmed. Agave clears only a
+    /// bank still replaying, so the stream is inconsistent.
+    ClearedCommittedBank {
+        slot: Slot,
+        bank_id: u64,
+    },
+    /// The stream contradicts itself about which block a slot holds: two committed banks in one
+    /// slot, a BlockMeta that changed, a parent blockhash that names another bank, or a commitment
+    /// for a bank it invalidated. Restart from the last checkpoint.
+    ConflictingBlockIdentity {
+        slot: Slot,
+        bank_id: u64,
     },
 }
 
@@ -98,6 +123,25 @@ impl fmt::Display for CoordinatorError {
             Self::AccountOutputChannelClosed { slot } => {
                 write!(f, "Account output channel closed while sending slot {slot}")
             },
+            Self::TooManyPendingBanks {
+                pending,
+                limit,
+                oldest_slot,
+            } => write!(
+                f,
+                "{pending} banks are pending, over the limit of {limit}; output stopped behind \
+                 slot {oldest_slot:?}"
+            ),
+            Self::ClearedCommittedBank { slot, bank_id } => write!(
+                f,
+                "UpdateParent cleared bank {bank_id} of slot {slot}, which had already frozen or \
+                 confirmed"
+            ),
+            Self::ConflictingBlockIdentity { slot, bank_id } => write!(
+                f,
+                "Bank {bank_id} of slot {slot} contradicts the chain the stream reported; restart \
+                 from the last checkpoint"
+            ),
         }
     }
 }
@@ -249,6 +293,8 @@ pub enum AccountMode {
 /// An instruction slot ready for downstream consumption (e.g., Kafka write).
 pub struct InstructionSlot<R> {
     pub slot: Slot,
+    /// The node-local bank that confirmed for `slot`.
+    pub bank_id: u64,
     pub parent_slot: Slot,
     pub blockhash: Hash,
     pub executed_transaction_count: u64,
@@ -262,6 +308,11 @@ pub struct InstructionSlot<R> {
 /// An account slot ready for downstream consumption.
 pub struct AccountSlot<R> {
     pub slot: Slot,
+    /// The node-local bank that confirmed for `slot`.
+    pub bank_id: u64,
+    /// With `blockhash`, lets a consumer check that consecutive slots chain.
+    pub parent_slot: Slot,
+    pub blockhash: Hash,
     pub records: Vec<R>,
     pub decoded_account_count: u64,
     pub filtered_account_count: u64,
