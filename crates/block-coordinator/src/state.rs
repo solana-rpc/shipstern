@@ -79,6 +79,9 @@ pub struct CoordinatorState<R> {
     confirmed_banks: BTreeMap<Slot, u64>,
     last_instruction_flushed_slot: Option<Slot>,
     last_account_flushed_slot: Option<Slot>,
+    /// The lowest slot the stream showed a block of. The first flush may not skip a parent at or
+    /// above it.
+    first_observed_slot: Option<Slot>,
     /// Running count of AccountEventSeen signals per bank.
     /// Frozen as expected_account_count when the account gate is frozen.
     account_event_counts: BTreeMap<BankKey, u64>,
@@ -103,6 +106,7 @@ impl<R> CoordinatorState<R> {
             confirmed_banks: BTreeMap::new(),
             last_instruction_flushed_slot: None,
             last_account_flushed_slot: None,
+            first_observed_slot: None,
             account_event_counts: BTreeMap::new(),
             account_commit_at,
             late_account_record_drops: 0,
@@ -111,6 +115,16 @@ impl<R> CoordinatorState<R> {
     }
 
     pub fn pending_bank_count(&self) -> usize { self.buffer.len() }
+
+    /// The stream showed a block of `slot`: its CreatedBank, an entry or its BlockMeta.
+    pub(crate) fn note_observed_slot(&mut self, slot: Slot) {
+        self.first_observed_slot = Some(
+            self.first_observed_slot
+                .map_or(slot, |first| first.min(slot)),
+        );
+    }
+
+    pub(crate) fn first_observed_slot(&self) -> Option<Slot> { self.first_observed_slot }
 
     pub fn discarded_slot_count(&self) -> usize { self.discarded_slots.len() }
 
@@ -441,15 +455,18 @@ impl<R> CoordinatorState<R> {
     }
 
     /// A slot flushes after its parent, so output follows the chain: the parent is behind the
-    /// drain's frontier, or was discarded incomplete. The first flush has no frontier. A node
-    /// replays a child only on a frozen parent, so a child of a dead slot waits for the repair's
-    /// BlockMeta, which can come after the child's. A fork-reported parent's own confirm follows
-    /// its child's, so the child waits for it too.
+    /// drain's frontier, or was discarded incomplete. Before the first flush, only a parent from
+    /// before the stream started can be missing. A node replays a child only on a frozen parent,
+    /// so a child of a dead slot waits for the repair's BlockMeta, which can come after the
+    /// child's. A fork-reported parent's own confirm follows its child's, so the child waits too.
     fn parent_flushed(&self, parent_slot: Slot, frontier: Option<Slot>) -> bool {
-        let Some(last) = frontier else {
-            return true;
+        let flushed = match frontier {
+            Some(last) => parent_slot <= last,
+            None => self
+                .first_observed_slot
+                .is_none_or(|first| parent_slot < first),
         };
-        parent_slot <= last
+        flushed
             || matches!(
                 self.discarded_slots.get(&parent_slot),
                 Some(DiscardReason::Incomplete)

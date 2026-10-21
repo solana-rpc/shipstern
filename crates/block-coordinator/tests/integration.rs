@@ -1544,6 +1544,11 @@ async fn malformed_block_meta_or_entry_is_skipped() {
             .unwrap();
     }
 
+    // The stream saw slot 50's entry, so its child waits for a valid BlockMeta.
+    let recovered = harness.slot(50).parent(49).empty().await;
+    recovered.confirm().await;
+    harness.expect_flush(50).await.empty();
+
     let slot = harness.slot(51).parent(50).empty().await;
     slot.confirm().await;
     harness.expect_flush(51).await;
@@ -2355,6 +2360,72 @@ async fn short_replacement_of_a_forked_slot_flushes_before_its_child_at_startup(
     send_to_bank(&harness, make_entry_update(100, 1, 0), 1001).await;
     harness.expect_flush(100).await.records(&["replacement"]);
     harness.expect_flush(101).await.empty();
+}
+
+///
+/// At startup, bank 3000 of slot 30 sits on slot 29, which dies, so slot 30 is reported forked.
+/// Replacement bank 3001 of slot 30, on slot 27, has a record but freezes after child 31
+/// confirms. The stream saw slot 30, so the child's first flush must not skip it.
+///
+#[tokio::test]
+async fn first_flush_waits_for_a_parent_the_stream_saw() {
+    let mut harness = TestHarness::spawn();
+
+    send_to_bank(
+        &harness,
+        make_slot_update(29, 27, SlotStatus::SlotCreatedBank),
+        2900,
+    )
+    .await;
+    for status in [SlotStatus::SlotCreatedBank, SlotStatus::SlotProcessed] {
+        send_to_bank(&harness, make_slot_update(30, 29, status), 3000).await;
+    }
+    send_to_bank(
+        &harness,
+        make_slot_update(30, 27, SlotStatus::SlotCreatedBank),
+        3001,
+    )
+    .await;
+    for message in [
+        CoordinatorMessage::InstructionParsed {
+            slot: 30,
+            bank_id: 3001,
+            key: InstructionRecordSortKey::new(0, vec![0]),
+            record: "parent".to_string(),
+        },
+        CoordinatorMessage::TransactionParsed {
+            slot: 30,
+            bank_id: 3001,
+        },
+    ] {
+        harness.parsed_tx.send(message).await.unwrap();
+    }
+    send_to_bank(
+        &harness,
+        make_slot_update(29, 27, SlotStatus::SlotDead),
+        2900,
+    )
+    .await;
+
+    for update in [
+        make_slot_update(31, 30, SlotStatus::SlotCreatedBank),
+        make_entry_update(31, 0, 0),
+        make_block_meta_update(31, 30, 0, &Hash::new_unique()),
+        make_slot_update(31, 30, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 3100).await;
+    }
+    harness.expect_no_flush().await;
+
+    for update in [
+        make_entry_update(30, 0, 1),
+        make_block_meta_update(30, 27, 1, &Hash::new_unique()),
+        make_slot_update(30, 27, SlotStatus::SlotConfirmed),
+    ] {
+        send_to_bank(&harness, update, 3001).await;
+    }
+    harness.expect_flush(30).await.records(&["parent"]);
+    harness.expect_flush(31).await.empty();
 }
 
 /// A late entry with more transactions than the BlockMeta counts can never match it.

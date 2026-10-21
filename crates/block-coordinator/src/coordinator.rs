@@ -250,6 +250,15 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                 return Ok(events);
             }
         }
+        // Only a block's own events show the stream saw it. A commitment can name an older slot.
+        let shows_block = match &info {
+            GeyserEventInfo::Slot(status) => matches!(status.status, SlotStatusKind::CreatedBank),
+            GeyserEventInfo::Entry(_) | GeyserEventInfo::BlockMeta(_) => true,
+            _ => false,
+        };
+        if shows_block {
+            self.state.note_observed_slot(info.slot());
+        }
         if let GeyserEventInfo::Slot(status) = &info
             && let (SlotStatusKind::CreatedBank, Some(bank_id)) = (status.status, status.bank_id)
             && self.state.last_flushed_slot().is_none()

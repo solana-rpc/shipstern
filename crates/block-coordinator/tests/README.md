@@ -33,6 +33,7 @@
 | `confirm_before_late_entry_waits_for_it` | A confirm that comes before the late entry waits for it |
 | `late_entry_after_the_child_confirms_still_flushes` | A child confirm does not end the wait; the parent flushes first once its entry comes |
 | `entry_that_never_comes_stops_coordinator` | A block whose entry never comes counts as pending, even with no records, and stops the coordinator |
+| `first_flush_waits_for_a_parent_the_stream_saw` | The first flush skips only a parent from before the stream started |
 | `first_block_of_a_stream_started_mid_slot_is_discarded` | Before the first flush, a block missing its CreatedBank and first entry is discarded and does not block its child |
 | `block_meta_before_every_entry_at_startup_waits_for_them` | At startup, a block whose CreatedBank was seen waits for entries that all come after its BlockMeta |
 | `second_death_drops_the_held_repair_bank` | A second death of a slot, which block machine 0.11 does not report, still drops its held repair bank |
