@@ -28,10 +28,12 @@
 |------|----------|
 | `dead_slot_discarded` | Dead slot removed, no output |
 | `dead_slot_spares_sibling` | A dead slot does not discard its sibling |
-| `incomplete_block_discarded` | BlockMeta without entries is discarded as incomplete |
+| `incomplete_block_discarded` | A block with more entries than its BlockMeta counts is discarded as incomplete |
 | `entry_after_block_meta_flushes` | An entry that arrives after its BlockMeta completes the block, which flushes in order |
 | `confirm_before_late_entry_waits_for_it` | A confirm that comes before the late entry waits for it |
-| `missing_entry_discards_the_block_when_a_later_slot_confirms` | A block still short of entries when a later slot confirms is discarded as incomplete |
+| `late_entry_after_the_child_confirms_still_flushes` | A child confirm does not end the wait; the parent flushes first once its entry comes |
+| `entry_that_never_comes_stops_coordinator` | A block whose entry never comes counts as pending, even with no records, and stops the coordinator |
+| `first_block_of_a_stream_started_mid_slot_is_discarded` | Before the first flush, a block missing its first entry is discarded and does not block its child |
 | `late_entry_with_extra_transactions_discards_the_block` | A late entry that overshoots the transaction count discards the block |
 | `update_parent_for_a_bank_waiting_for_entries_stops_coordinator` | Clearing a bank that froze short of entries stops the coordinator |
 | `late_block_meta_for_losing_bank_keeps_confirmed_bank` | Only the confirmed bank of a slot flushes |

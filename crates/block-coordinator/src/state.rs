@@ -132,6 +132,18 @@ impl<R> CoordinatorState<R> {
                 .is_some_and(|buf| buf.parent_slot().is_some())
     }
 
+    /// Keep `key` pending with no records yet, so it counts toward the pending-bank limit until
+    /// it flushes or is dropped. False when the bank can never flush.
+    pub(crate) fn track_bank(&mut self, key: BankKey) -> bool {
+        if self.is_discarded(key) || self.is_behind_instruction_frontier(key, "BlockFrozen") {
+            return false;
+        }
+        self.buffer.entry(key).or_default();
+        true
+    }
+
+    pub(crate) fn has_bank(&self, key: BankKey) -> bool { self.buffer.contains_key(&key) }
+
     pub fn last_instruction_flushed_slot(&self) -> Option<Slot> {
         self.last_instruction_flushed_slot
     }

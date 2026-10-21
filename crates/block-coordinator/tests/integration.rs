@@ -869,9 +869,11 @@ async fn incomplete_block_discarded() {
     first.confirm().await;
     harness.expect_flush(99).await.empty();
 
-    // Freeze slot 100 with no entries, so the coordinator discards it.
+    // Freeze slot 100 with two entries where its BlockMeta counts one. A surplus is final.
     for update in [
         make_slot_update(100, 99, SlotStatus::SlotCreatedBank),
+        make_entry_update(100, 0, 0),
+        make_entry_update(100, 1, 0),
         make_block_meta_update(100, 99, 0, &Hash::new_unique()),
     ] {
         send_to_bank(&harness, update, 100).await;
@@ -1976,22 +1978,26 @@ async fn cleared_banks_release_payloads_and_ignore_late_callbacks() {
 }
 
 ///
-/// Freeze slot `slot` (parent `slot - 1`) on BlockMeta with one of its two entries: entry 0 holds
-/// its one transaction, and the tick entry 1 has not arrived. LaserStream can send a bank's last
-/// entry after its BlockMeta.
+/// Freeze slot `slot` (parent `slot - 1`) on BlockMeta with one of its two entries. Entry 0 holds
+/// the slot's one transaction and entry 1 is a tick. LaserStream can send a bank's last entry
+/// after its BlockMeta, and a stream that starts mid-slot misses the first ones.
 ///
-async fn freeze_without_last_tick(harness: &TestHarness, slot: u64, record: &str) {
+async fn freeze_with_entry(harness: &TestHarness, slot: u64, index: u64) {
     let mut block_meta = make_block_meta_update(slot, slot - 1, 1, &Hash::new_unique());
     if let Some(UpdateOneof::BlockMeta(meta)) = block_meta.update_oneof.as_mut() {
         meta.entries_count = 2;
     }
     for update in [
         make_slot_update(slot, slot - 1, SlotStatus::SlotCreatedBank),
-        make_entry_update(slot, 0, 1),
+        make_entry_update(slot, index, u64::from(index == 0)),
         block_meta,
     ] {
         send_to_bank(harness, update, slot).await;
     }
+}
+
+async fn freeze_without_last_tick(harness: &TestHarness, slot: u64, record: &str) {
+    freeze_with_entry(harness, slot, 0).await;
     send_record_to_slot(&harness.parsed_tx, slot, record).await;
 }
 
@@ -2008,12 +2014,17 @@ async fn confirm_slot(harness: &TestHarness, slot: u64) {
     .await;
 }
 
+/// Flush slot 99, so later slots cannot pass as the stream's first flush.
+async fn flush_slot_99(harness: &mut TestHarness) {
+    harness.slot(99).parent(98).empty().await.confirm().await;
+    harness.expect_flush(99).await.empty();
+}
+
 /// The late tick completes slot 100 before its confirm, so the slot flushes in order.
 #[tokio::test]
 async fn entry_after_block_meta_flushes() {
     let mut harness = TestHarness::spawn();
-    harness.slot(99).parent(98).empty().await.confirm().await;
-    harness.expect_flush(99).await.empty();
+    flush_slot_99(&mut harness).await;
 
     freeze_without_last_tick(&harness, 100, "a").await;
     send_late_tick(&harness, 100).await;
@@ -2028,8 +2039,7 @@ async fn entry_after_block_meta_flushes() {
 #[tokio::test]
 async fn confirm_before_late_entry_waits_for_it() {
     let mut harness = TestHarness::spawn();
-    harness.slot(99).parent(98).empty().await.confirm().await;
-    harness.expect_flush(99).await.empty();
+    flush_slot_99(&mut harness).await;
 
     freeze_without_last_tick(&harness, 100, "a").await;
     confirm_slot(&harness, 100).await;
@@ -2039,23 +2049,46 @@ async fn confirm_before_late_entry_waits_for_it() {
     harness.expect_flush(100).await.records(&["a"]);
 }
 
-/// The tick of slot 100 never comes, as when the stream starts mid-slot. Its confirm waits until
-/// the next slot confirms, then the slot is discarded as incomplete and its child flushes.
+/// A later slot's confirm does not prove the tick is lost, so the child waits for it.
 #[tokio::test]
-async fn missing_entry_discards_the_block_when_a_later_slot_confirms() {
+async fn late_entry_after_the_child_confirms_still_flushes() {
     let mut harness = TestHarness::spawn();
-    harness.slot(99).parent(98).empty().await.confirm().await;
-    harness.expect_flush(99).await.empty();
+    flush_slot_99(&mut harness).await;
 
-    freeze_without_last_tick(&harness, 100, "lost").await;
+    freeze_without_last_tick(&harness, 100, "a").await;
     confirm_slot(&harness, 100).await;
+    harness.slot(101).parent(100).empty().await.confirm().await;
     harness.expect_no_flush().await;
+
+    send_late_tick(&harness, 100).await;
+    harness.expect_flush(100).await.records(&["a"]);
+    harness.expect_flush(101).await.empty();
+}
+
+/// The tick of slot 100 never comes. The bank counts as pending even with no records, so the
+/// coordinator stops behind it instead of skipping it.
+#[tokio::test]
+async fn entry_that_never_comes_stops_coordinator() {
+    let mut harness = TestHarness::spawn_with_max_pending_banks(TEST_PENDING_LIMIT);
+    flush_slot_99(&mut harness).await;
+
+    freeze_with_entry(&harness, 100, 0).await;
+    confirm_slot(&harness, 100).await;
+    assert_stopped_behind(freeze_until_stopped(harness, 101).await, 100);
+}
+
+/// The stream started inside slot 100, so it missed entry 0. Nothing flushed yet, so the slot is
+/// discarded and its child flushes.
+#[tokio::test]
+async fn first_block_of_a_stream_started_mid_slot_is_discarded() {
+    let mut harness = TestHarness::spawn();
+
+    freeze_with_entry(&harness, 100, 1).await;
+    send_record_to_slot(&harness.parsed_tx, 100, "lost").await;
+    confirm_slot(&harness, 100).await;
 
     harness.slot(101).parent(100).empty().await.confirm().await;
     harness.expect_flush(101).await.parent(100).empty();
-
-    // A tick after the discard cannot bring the slot back.
-    send_late_tick(&harness, 100).await;
     harness.expect_no_flush().await;
 }
 
@@ -2063,8 +2096,7 @@ async fn missing_entry_discards_the_block_when_a_later_slot_confirms() {
 #[tokio::test]
 async fn late_entry_with_extra_transactions_discards_the_block() {
     let mut harness = TestHarness::spawn();
-    harness.slot(99).parent(98).empty().await.confirm().await;
-    harness.expect_flush(99).await.empty();
+    flush_slot_99(&mut harness).await;
 
     freeze_without_last_tick(&harness, 100, "lost").await;
     send_to_bank(&harness, make_entry_update(100, 1, 1), 100).await;
