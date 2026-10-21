@@ -247,6 +247,7 @@ mod tests {
 
         TransactionUpdate {
             slot: 1,
+            bank_id: 0,
             transaction: Some(SubscribeUpdateTransactionInfo {
                 signature: vec![1; 64],
                 is_vote: false,

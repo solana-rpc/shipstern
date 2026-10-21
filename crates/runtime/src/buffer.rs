@@ -138,6 +138,19 @@ async fn run_job(pipelines: &PipelineSets, job: Job) {
                 .instrument(tracing::info_span!("shipstern.process.block_meta"))
                 .await;
         },
+        UpdateOneof::BlockFooter(f) => {
+            pipelines
+                .block_footer
+                .get_handlers(&filters)
+                .run(
+                    span,
+                    &f,
+                    #[cfg(feature = "prometheus")]
+                    update_type,
+                )
+                .instrument(tracing::info_span!("shipstern.process.block_footer"))
+                .await;
+        },
         UpdateOneof::Block(b) => {
             pipelines
                 .block

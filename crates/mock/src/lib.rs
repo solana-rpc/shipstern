@@ -60,6 +60,7 @@ impl From<AccountInfo> for SubscribeUpdateAccount {
         Self {
             is_startup: false,
             slot: 0,
+            bank_id: Some(0),
             account: Some(SubscribeUpdateAccountInfo {
                 txn_signature: None,
                 write_version: 0,

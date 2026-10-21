@@ -33,11 +33,11 @@ use yellowstone_grpc_proto::geyser::{
     subscribe_request_filter_accounts_filter_memcmp as wire_memcmp, CuckooFilter, SubscribeRequest,
     SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
     SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
-    SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
-    SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
+    SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlockFooter,
+    SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterSlots,
     SubscribeRequestFilterTransactions, SubscribeUpdateAccount, SubscribeUpdateAccountInfo,
-    SubscribeUpdateBlock, SubscribeUpdateBlockMeta, SubscribeUpdateSlot,
-    SubscribeUpdateTransaction, TokenAccountExpansionControlFlag,
+    SubscribeUpdateBlock, SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta,
+    SubscribeUpdateSlot, SubscribeUpdateTransaction, TokenAccountExpansionControlFlag,
 };
 
 pub extern crate bs58;
@@ -92,6 +92,8 @@ pub type AccountUpdateInfo = SubscribeUpdateAccountInfo;
 pub type TransactionUpdate = SubscribeUpdateTransaction;
 /// A block meta update from Yellowstone.
 pub type BlockMetaUpdate = SubscribeUpdateBlockMeta;
+/// A block footer update from Yellowstone. (post Alpenglow)
+pub type BlockFooterUpdate = SubscribeUpdateBlockFooter;
 /// A block update from Yellowstone.
 pub type BlockUpdate = SubscribeUpdateBlock;
 /// A slot update from Yellowstone.
@@ -189,6 +191,8 @@ pub struct Prefilter {
     pub transaction: Option<TransactionPrefilter>,
     /// Filters for block meta updates.
     pub block_meta: Option<BlockMetaPrefilter>,
+    /// Filters for block footer updates.
+    pub block_footer: Option<BlockFooterPrefilter>,
     /// Filters for block updates.
     pub block: Option<BlockPrefilter>,
     /// Filters for slot updates.
@@ -320,12 +324,18 @@ impl Prefilter {
             account,
             transaction,
             block_meta,
+            block_footer,
             block,
             slot,
         } = self;
         merge_opt(account, other.account, AccountPrefilter::merge);
         merge_opt(transaction, other.transaction, TransactionPrefilter::merge);
         merge_opt(block_meta, other.block_meta, BlockMetaPrefilter::merge);
+        merge_opt(
+            block_footer,
+            other.block_footer,
+            BlockFooterPrefilter::merge,
+        );
         merge_opt(block, other.block, BlockPrefilter::merge);
         merge_opt(slot, other.slot, SlotPrefilter::merge);
     }
@@ -603,6 +613,20 @@ impl BlockMetaPrefilter {
     /// Merge another block metadata prefilter into this one.
     /// This function currently does nothing as the struct has no fields.
     pub fn merge(_lhs: &mut Self, _rhs: Self) {}
+}
+
+/// A prefilter for matching block footer updates. (post Alpenglow)
+#[derive(Debug, Default, Clone, PartialEq, Copy)]
+pub struct BlockFooterPrefilter {
+    /// Also receive the vote certificates of the block.
+    pub include_certificates: bool,
+}
+
+impl BlockFooterPrefilter {
+    /// Merge another block footer prefilter into this one.
+    pub fn merge(lhs: &mut Self, rhs: Self) {
+        lhs.include_certificates |= rhs.include_certificates;
+    }
 }
 
 /// A prefilter for matching block updates.
@@ -1210,6 +1234,8 @@ pub struct PrefilterBuilder {
     error: Option<PrefilterError>,
     slots: bool,
     block_metas: bool,
+    /// Matching [`BlockFooterPrefilter::include_certificates`]
+    block_footers: Option<bool>,
     /// Matching [`BlockPrefilter::accounts`]
     block_accounts_include: Option<HashSet<Pubkey>>,
     /// Matching [`BlockPrefilter::include_accounts`]
@@ -1284,6 +1310,7 @@ impl PrefilterBuilder {
             account_owners,
             slots,
             block_metas,
+            block_footers,
             block_accounts_include,
             block_include_accounts,
             block_include_entries,
@@ -1355,6 +1382,9 @@ impl PrefilterBuilder {
             account,
             transaction: (transaction != TransactionPrefilter::default()).then_some(transaction),
             block_meta: block_metas.then_some(block_meta),
+            block_footer: block_footers.map(|include_certificates| BlockFooterPrefilter {
+                include_certificates,
+            }),
             block: (block != BlockPrefilter::default()).then_some(block),
             // `interslot_updates` alone still asks for slots. Not `!= default()`:
             // `filter_by_commitment` defaults to true, so `slots()` alone is the default.
@@ -1513,6 +1543,18 @@ impl PrefilterBuilder {
         self.mutate(|this| {
             this.block_metas = true;
             Ok(())
+        })
+    }
+
+    /// Set prefilter will request block footer updates. `include_certificates` also
+    /// asks for the vote certificates of each block.
+    pub fn block_footers(self, include_certificates: bool) -> Self {
+        self.mutate(|this| {
+            set_opt(
+                &mut this.block_footers,
+                "block_footers",
+                include_certificates,
+            )
         })
     }
 
@@ -1874,6 +1916,16 @@ impl From<Filters> for SubscribeRequest {
                 })
                 .collect(),
             entry: [].into_iter().collect(),
+            block_footer: value
+                .parsers_filters
+                .iter()
+                .filter_map(|(k, v)| {
+                    let v = v.block_footer?;
+                    Some((k.clone(), SubscribeRequestFilterBlockFooter {
+                        include_certificates: Some(v.include_certificates),
+                    }))
+                })
+                .collect(),
             commitment: None,
             // Request-level rather than per-parser, so it is set by the source
             // from its configuration after this conversion.
@@ -2037,6 +2089,25 @@ mod tests {
                 .build()
                 .expect("prefilter must build"),
         )
+    }
+
+    #[test]
+    fn block_footer_filter_keeps_certificates_on_merge() {
+        let mut prefilter = Prefilter::builder()
+            .block_footers(false)
+            .build()
+            .expect("prefilter must build");
+        prefilter.merge(
+            Prefilter::builder()
+                .block_footers(true)
+                .build()
+                .expect("prefilter must build"),
+        );
+
+        assert_eq!(
+            one(prefilter).block_footer["p"].include_certificates,
+            Some(true)
+        );
     }
 
     /// Every field #303 listed has to survive the conversion, so one assertion
@@ -2257,6 +2328,7 @@ mod tests {
         assert!(accounts.filters.is_empty());
         assert_eq!(accounts.nonempty_txn_signature, None);
         assert!(request.accounts_data_slice.is_empty());
+        assert!(request.block_footer.is_empty());
 
         // The account-only prefilter above leaves `transactions` and `slots`
         // empty, so the defaults on those two need their own request.
