@@ -99,6 +99,21 @@ impl Commitments {
 
     pub fn contains(&self, key: BankKey) -> bool { self.levels.contains_key(&key) }
 
+    /// How many banks above `frontier` the ledger tracks, and the oldest one's slot. A stream
+    /// that commits or describes banks that never flush must still reach the pending-bank limit.
+    pub fn unflushed(&self, frontier: Option<Slot>) -> (usize, Option<Slot>) {
+        let from = BankKey::first(frontier.map_or(0, |last| last.saturating_add(1)));
+        let mut keys: Vec<BankKey> = self
+            .identities
+            .range(from..)
+            .map(|(&key, _)| key)
+            .chain(self.levels.range(from..).map(|(&key, _)| key))
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        (keys.len(), keys.first().map(|key| key.slot))
+    }
+
     /// Whether the block machine's status for `key` at `level` is one the coordinator verified.
     pub fn allows(&self, key: BankKey, level: CommitmentLevel) -> bool {
         self.levels
@@ -183,18 +198,15 @@ impl Commitments {
         }
 
         let mut forwards = Vec::new();
-        let keys: Vec<BankKey> = self
-            .levels
-            .keys()
-            .copied()
-            .filter(|key| pending(key.slot))
-            .collect();
-        for &key in &keys {
+        let keys: Vec<BankKey> = self.levels.keys().copied().collect();
+        for &key in keys.iter().filter(|key| pending(key.slot)) {
             if let Entry::Vacant(forwarded) = self.forwarded.entry(key) {
                 forwarded.insert(CommitmentLevel::Confirmed);
                 forwards.push(self.forward(key, SlotStatusKind::Confirmed));
             }
         }
+        // Finality of a bank that already flushed at confirmed still roots the block machine's
+        // fork graph, which only shrinks behind a root.
         for key in keys {
             if self.levels.get(&key) == Some(&CommitmentLevel::Finalized)
                 && self.forwarded.get(&key) != Some(&CommitmentLevel::Finalized)

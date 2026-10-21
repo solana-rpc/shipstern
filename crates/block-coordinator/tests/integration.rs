@@ -1467,7 +1467,7 @@ async fn lost_parent_after_a_jump_stops_coordinator() {
 }
 
 /// Slot 42's bank 1 froze but lost. The confirmed bank 2 never gets its BlockMeta, so its child
-/// 43 waits; the loser is dropped once bank 2 confirms, and the coordinator stops behind 43.
+/// 43 waits, and the coordinator stops behind bank 2's slot 42.
 #[tokio::test]
 async fn lost_block_meta_of_winning_bank_stops_coordinator() {
     let mut harness = TestHarness::spawn_with_max_pending_banks(TEST_PENDING_LIMIT);
@@ -1498,7 +1498,7 @@ async fn lost_block_meta_of_winning_bank_stops_coordinator() {
     .await;
     harness.expect_no_flush().await;
 
-    assert_stopped_behind(freeze_until_stopped(harness, 44).await, 43);
+    assert_stopped_behind(freeze_until_stopped(harness, 44).await, 42);
 }
 
 /// Slot 42's BlockMeta arrives after its child 43 and 7 more slots froze. That is under the
@@ -2440,6 +2440,39 @@ async fn first_flush_waits_for_a_parent_the_stream_saw() {
     }
     harness.expect_flush(30).await.records(&["parent"]);
     harness.expect_flush(31).await.empty();
+}
+
+/// The stream starts after slot 99's BlockMeta but before its late tick. That entry does not
+/// show the stream saw slot 99, so child 100 still flushes first.
+#[tokio::test]
+async fn late_entry_from_before_the_stream_does_not_block_the_start() {
+    let mut harness = TestHarness::spawn();
+    send_to_bank(&harness, make_entry_update(99, 3, 0), 99).await;
+
+    harness.slot(100).parent(99).empty().await.confirm().await;
+    harness.expect_flush(100).await.parent(99).empty();
+}
+
+/// Confirmed statuses keep coming for banks whose BlockMeta never does, and nothing has records.
+/// The commitments still count as pending, so the coordinator stops instead of growing.
+#[tokio::test]
+async fn commitments_that_never_flush_stop_coordinator() {
+    let harness = TestHarness::spawn_with_max_pending_banks(TEST_PENDING_LIMIT);
+    for slot in 100..100 + 4 * TEST_PENDING_LIMIT as u64 {
+        if harness.coordinator.is_finished() {
+            break;
+        }
+        let _ = harness
+            .input_tx
+            .send(CoordinatorInput::GeyserUpdate(Box::new(make_slot_update(
+                slot,
+                slot - 1,
+                SlotStatus::SlotConfirmed,
+            ))))
+            .await;
+        tokio::task::yield_now().await;
+    }
+    assert_stopped_behind(harness.expect_stopped().await, 100);
 }
 
 /// A late entry with more transactions than the BlockMeta counts can never match it.

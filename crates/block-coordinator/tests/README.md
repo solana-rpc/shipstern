@@ -34,6 +34,8 @@
 | `late_entry_after_the_child_confirms_still_flushes` | A child confirm does not end the wait; the parent flushes first once its entry comes |
 | `entry_that_never_comes_stops_coordinator` | A block whose entry never comes counts as pending, even with no records, and stops the coordinator |
 | `first_flush_waits_for_a_parent_the_stream_saw` | The first flush skips only a parent from before the stream started |
+| `late_entry_from_before_the_stream_does_not_block_the_start` | A late entry of a block that froze before the stream does not hold back the first flush |
+| `commitments_that_never_flush_stop_coordinator` | Commitments for banks that never freeze count toward the pending-bank limit |
 | `first_block_of_a_stream_started_mid_slot_is_discarded` | Before the first flush, a block missing its CreatedBank and first entry is discarded and does not block its child |
 | `block_meta_before_every_entry_at_startup_waits_for_them` | At startup, a block whose CreatedBank was seen waits for entries that all come after its BlockMeta |
 | `second_death_drops_the_held_repair_bank` | A second death of a slot, which block machine 0.11 does not report, still drops its held repair bank |
@@ -46,7 +48,7 @@
 | `late_block_meta_for_losing_bank_keeps_confirmed_bank` | Only the confirmed bank of a slot flushes |
 | `lost_parent_block_meta_stops_coordinator` | A parent that never freezes stops the coordinator with `TooManyPendingBanks` instead of a silent stall |
 | `lost_parent_after_a_jump_stops_coordinator` | The same holds for the first bank after a jump |
-| `lost_block_meta_of_winning_bank_stops_coordinator` | A winning bank whose BlockMeta never comes stops the coordinator behind its child |
+| `lost_block_meta_of_winning_bank_stops_coordinator` | A winning bank whose BlockMeta never comes stops the coordinator at its slot |
 | `late_parent_block_meta_flushes` | A parent BlockMeta that arrives under the pending limit still flushes, parent first |
 | `record_for_a_seen_skipped_slot_does_not_block` | A skipped slot whose bank the block machine saw is discarded when its child confirms |
 | `record_for_an_unseen_skipped_slot_stops_coordinator` | A record for a slot the block machine never saw stops the coordinator |

@@ -203,12 +203,19 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                 self.created_at_startup = HashSet::new();
             }
 
-            let pending = self.state.pending_bank_count();
+            let (unflushed, oldest_unflushed) =
+                self.commitments.unflushed(self.state.flushed_through());
+            let pending = self.state.pending_bank_count().max(unflushed);
             if pending > self.max_pending_banks {
                 return Err(CoordinatorError::TooManyPendingBanks {
                     pending,
                     limit: self.max_pending_banks,
-                    oldest_slot: self.state.oldest_pending_slot(),
+                    oldest_slot: self
+                        .state
+                        .oldest_pending_slot()
+                        .into_iter()
+                        .chain(oldest_unflushed)
+                        .min(),
                 });
             }
         }
@@ -271,10 +278,11 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                 return Ok(events);
             }
         }
-        // Only a block's own events show the stream saw it. A commitment can name an older slot.
+        // The stream saw a block if it saw the block start or freeze. A commitment can name an
+        // older slot, and a late entry can trail a BlockMeta from before the stream.
         let shows_block = match &info {
             GeyserEventInfo::Slot(status) => matches!(status.status, SlotStatusKind::CreatedBank),
-            GeyserEventInfo::Entry(_) | GeyserEventInfo::BlockMeta(_) => true,
+            GeyserEventInfo::BlockMeta(_) => true,
             _ => false,
         };
         if shows_block {
@@ -862,6 +870,76 @@ mod tests {
             .fork_graph()
             .oldest_rooted_slot()
             .is_some_and(|oldest| oldest > 1));
+        assert!(coordinator.wrapper.fork_graph().len() < 1500);
+    }
+
+    /// At confirmed, both outputs flush before the bank's finality arrives. That finality still
+    /// reaches the block machine, so its fork graph stays bounded.
+    #[test]
+    fn finality_after_a_confirmed_flush_still_prunes_the_wrapper_fork_graph() {
+        use yellowstone_grpc_proto::geyser::{
+            SlotStatus, SubscribeUpdateBlockMeta, SubscribeUpdateSlot,
+        };
+
+        let (_, input_rx) = mpsc::channel(1);
+        let (_, parsed_rx) = mpsc::channel(1);
+        let mut coordinator = BlockMachineCoordinator::<()>::new(
+            input_rx,
+            parsed_rx,
+            None,
+            None,
+            AccountCommitAt::Confirmed,
+            false,
+            DEFAULT_MAX_PENDING_BANKS,
+        );
+        let feed = |coordinator: &mut BlockMachineCoordinator<()>, update| {
+            for event in coordinator
+                .convert_geyser_update(&SubscribeUpdate {
+                    update_oneof: Some(update),
+                    ..Default::default()
+                })
+                .unwrap()
+            {
+                coordinator.state.apply(event).unwrap();
+            }
+            coordinator.state.drain_instruction_flushable().unwrap();
+            coordinator.state.drain_account_flushable();
+            if let Some(through) = coordinator.state.flushed_through() {
+                coordinator.commitments.prune_through(through);
+            }
+        };
+        let status = |slot: Slot, status: SlotStatus| {
+            UpdateOneof::Slot(SubscribeUpdateSlot {
+                slot,
+                bank_id: Some(slot),
+                parent: Some(slot - 1),
+                status: status as i32,
+                ..Default::default()
+            })
+        };
+        let hash = |slot: Slot| Hash::new_from_array([slot as u8; 32]);
+        for slot in 1..=1500 {
+            feed(
+                &mut coordinator,
+                UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
+                    slot,
+                    bank_id: slot,
+                    parent_slot: slot - 1,
+                    blockhash: hash(slot).to_string(),
+                    parent_blockhash: hash(slot - 1).to_string(),
+                    ..Default::default()
+                }),
+            );
+            feed(&mut coordinator, status(slot, SlotStatus::SlotConfirmed));
+            // Finality trails confirmation by a few slots.
+            if slot > 32 {
+                feed(
+                    &mut coordinator,
+                    status(slot - 32, SlotStatus::SlotFinalized),
+                );
+            }
+        }
+        assert_eq!(coordinator.state.last_account_flushed_slot(), Some(1500));
         assert!(coordinator.wrapper.fork_graph().len() < 1500);
     }
 }

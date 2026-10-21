@@ -116,7 +116,7 @@ impl<R> CoordinatorState<R> {
 
     pub fn pending_bank_count(&self) -> usize { self.buffer.len() }
 
-    /// The stream showed a block of `slot`: its CreatedBank, an entry or its BlockMeta.
+    /// The stream showed a block of `slot` start or freeze: its CreatedBank or its BlockMeta.
     pub(crate) fn note_observed_slot(&mut self, slot: Slot) {
         self.first_observed_slot = Some(
             self.first_observed_slot
