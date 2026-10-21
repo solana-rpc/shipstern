@@ -348,7 +348,7 @@ impl<R> CoordinatorState<R> {
             let ix_slot = self
                 .buffer
                 .get_mut(&key)
-                .and_then(|buf| buf.drain_instruction_records(slot))
+                .and_then(|buf| buf.drain_instruction_records(slot, bank_id))
                 .ok_or(CoordinatorError::ReadySlotMissingMetadata { slot })?;
             self.last_instruction_flushed_slot = Some(slot);
             flushed.push(ix_slot);
@@ -387,18 +387,21 @@ impl<R> CoordinatorState<R> {
 
             // Accounts follow the chain like instructions. Otherwise a child that confirms before
             // its fork-reported parent flushes first, and cleanup then drops the parent's accounts.
-            // A bank whose BlockFrozen came behind the instruction frontier has no parent to check.
-            let parent_flushed = buf
-                .parent_slot()
-                .is_none_or(|parent| self.parent_flushed(parent, self.last_account_flushed_slot));
-            if !parent_flushed {
+            // The output carries the block's identity, so a bank waits for its BlockMeta.
+            let Some(parent) = buf.parent_slot() else {
+                break;
+            };
+            if !self.parent_flushed(parent, self.last_account_flushed_slot) {
                 break;
             }
 
-            let Some(buf) = self.buffer.get_mut(&key) else {
-                continue;
+            let Some(acct_slot) = self
+                .buffer
+                .get_mut(&key)
+                .and_then(|buf| buf.drain_account_records(slot, bank_id))
+            else {
+                break;
             };
-            let acct_slot = buf.drain_account_records(slot);
             self.last_account_flushed_slot = Some(slot);
             flushed.push(acct_slot);
         }
@@ -1019,6 +1022,13 @@ mod tests {
     #[test]
     fn finalized_mode_flushes_only_confirmed_bank_accounts() {
         let mut state = CoordinatorState::<String>::new(AccountCommitAt::Finalized);
+        state
+            .apply(CoordinatorEvent::BlockFrozen {
+                slot: 42,
+                bank_id: 8,
+                metadata: metadata(41, 0),
+            })
+            .unwrap();
         // The loser goes last with the same key, so a leak into bank 8 replaces its record.
         for bank_id in [8, 7] {
             state
@@ -1542,38 +1552,15 @@ mod tests {
             })
             .unwrap();
 
-        // A later slot advances only the instruction frontier.
-        state
-            .apply(CoordinatorEvent::BlockFrozen {
-                slot: 200,
-                bank_id: 0,
-                metadata: metadata(199, 0),
-            })
-            .unwrap();
-        state
-            .apply(CoordinatorEvent::SlotConfirmed {
-                slot: 200,
-                bank_id: 0,
-            })
-            .unwrap();
+        // Instructions advance along the chain while accounts wait for finalized.
+        apply_ready_slot(&mut state, 100, 99, 0);
+        assert_eq!(state.drain_instruction_flushable().unwrap()[0].slot, 100);
+        apply_ready_slot(&mut state, 200, 100, 0);
         let ix_flushed = state.drain_instruction_flushable().unwrap();
         assert_eq!(ix_flushed.len(), 1);
         assert_eq!(ix_flushed[0].slot, 200);
 
-        // Now freeze account gate for slot 100 at finalized.
-        state
-            .apply(CoordinatorEvent::BlockFrozen {
-                slot: 100,
-                bank_id: 0,
-                metadata: metadata(99, 0),
-            })
-            .unwrap();
-        state
-            .apply(CoordinatorEvent::SlotConfirmed {
-                slot: 100,
-                bank_id: 0,
-            })
-            .unwrap();
+        // Slot 100's account gate freezes only after the instruction frontier moved on.
         state
             .apply(CoordinatorEvent::SlotFinalized {
                 slot: 100,

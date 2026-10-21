@@ -281,6 +281,8 @@ pub enum AccountMode {
 /// An instruction slot ready for downstream consumption (e.g., Kafka write).
 pub struct InstructionSlot<R> {
     pub slot: Slot,
+    /// The node-local bank that confirmed for `slot`.
+    pub bank_id: u64,
     pub parent_slot: Slot,
     pub blockhash: Hash,
     pub executed_transaction_count: u64,
@@ -294,6 +296,11 @@ pub struct InstructionSlot<R> {
 /// An account slot ready for downstream consumption.
 pub struct AccountSlot<R> {
     pub slot: Slot,
+    /// The node-local bank that confirmed for `slot`.
+    pub bank_id: u64,
+    /// With `blockhash`, lets a consumer check that consecutive slots chain.
+    pub parent_slot: Slot,
+    pub blockhash: Hash,
     pub records: Vec<R>,
     pub decoded_account_count: u64,
     pub filtered_account_count: u64,
