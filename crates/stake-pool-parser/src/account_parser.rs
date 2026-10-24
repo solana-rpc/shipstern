@@ -1,9 +1,8 @@
 use shipstern_core::{AccountUpdate, ParseError, ParseResult, Parser, Prefilter, ProgramParser};
 use shipstern_proc_macro::shipstern;
-use spl_stake_pool::{
-    solana_program::{borsh1::try_from_slice_unchecked, program_error},
-    state::{StakePool, ValidatorList},
-};
+use solana_borsh::v1::try_from_slice_unchecked;
+use solana_program_error::ProgramError;
+use spl_stake_pool::state::{StakePool, ValidatorList};
 
 #[shipstern]
 #[derive(Clone, PartialEq)]
@@ -114,10 +113,7 @@ impl Parser for AccountParser {
     }
 
     async fn parse(&self, acct: &AccountUpdate) -> ParseResult<Self::Output> {
-        let inner = acct
-            .account
-            .as_ref()
-            .ok_or(program_error::ProgramError::InvalidArgument)?;
+        let inner = acct.account.as_ref().ok_or(ProgramError::InvalidArgument)?;
         NativeStakePoolState::try_unpack_proto(&inner.data)
     }
 }
