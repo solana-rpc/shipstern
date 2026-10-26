@@ -68,6 +68,25 @@ ignore = [
     # debug-formatting an Atomic/Shared holding an invalid pointer, which this
     # workspace never does; 0.9.18 is the latest release on the pinned line.
     "RUSTSEC-2026-0204",
+    # crypto-bigint 0.5.5 comes through k256 0.13 in solana-secp256k1-program 3.0.1
+    # and solana-secp256k1-recover 3.3.0. The fix is only on 0.7 (>= 0.7.6).
+    # secp256k1-program 3.1.1 and secp256k1-recover 3.3.1 move to k256 0.14, but
+    # program 3.1.1 needs solana-signature ^3.6, and Agave 4.2.2 (solana-runtime,
+    # solana-ledger) pins solana-signature below 3.5. Check again at the Agave 4.3
+    # bump. Nothing in this workspace signs with secp256k1.
+    "RUSTSEC-2026-0387",
+
+    # zstd 0.13.3 and zstd-safe 7.3.0 come through Agave (agave-snapshots,
+    # solana-storage-bigtable, solana-account-decoder and its client-types crate),
+    # tonic and the workspace zstd ^0.13 pin. jetstreamer-firehose accepts any zstd
+    # 0.x, so a lock update can move it to 0.13.3 too. Agave 4.3.2 still asks for
+    # zstd ^0.13.3, and the fixes are only in zstd 0.14.3 and zstd-safe 8.2.0.
+    # 0391: no crate here calls the zstd `with_context` constructors. 0398: the
+    # `seekable` feature is off. 0403: every zstd decoder here, jetstreamer-firehose
+    # included, is `stream::read::Decoder`, which the advisory lists as not affected.
+    "RUSTSEC-2026-0391",
+    "RUSTSEC-2026-0398",
+    "RUSTSEC-2026-0403",
 
     # h2 0.4.x is pinned at 0.4.17, above the 0.4.16 fix, leaving only h2 0.3.27.
     # Its direct parents are hyper 0.14, reqwest 0.11 and tonic 0.9, all reached
@@ -89,6 +108,13 @@ deny = [
     # and so cannot be limited to the one version that needs it. h2 0.3.27 stays
     # allowed because it has nowhere to go; a vulnerable 0.4.x fails the build.
     { name = "h2", version = ">=0.4.0, <0.4.16", reason = "RUSTSEC-2026-0258: the 0.4 line must stay at or above the 0.4.16 patch" },
+    # Guards for the zstd and crypto-bigint ignores above. The zstd entries fail a
+    # version below the fix on its line. The crypto-bigint entry fails all of 0.6,
+    # which has no fix, and 0.7 below 0.7.6. The ranges match releases only, not
+    # pre-releases.
+    { name = "zstd", version = ">=0.14.0, <0.14.3", reason = "RUSTSEC-2026-0391: the 0.14 line must stay at or above 0.14.3" },
+    { name = "zstd-safe", version = ">=8.0.0, <8.2.0", reason = "RUSTSEC-2026-0398 and RUSTSEC-2026-0403: the 8.x line must stay at or above 8.2.0" },
+    { name = "crypto-bigint", version = ">=0.6.0, <0.7.6", reason = "RUSTSEC-2026-0387: 0.6 has no fix, and 0.7 must be 0.7.6 or later" },
 ]
 
 [licenses]
