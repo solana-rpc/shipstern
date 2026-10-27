@@ -65,6 +65,8 @@ impl From<Missing> for ParseError {
 pub struct InstructionShared {
     /// The slot in which the transaction was processed.
     pub slot: u64,
+    /// The bank in which the transaction was processed. Bank IDs are local to a connection.
+    pub bank_id: u64,
     /// The signature of the transaction.
     pub signature: Vec<u8>,
     /// Whether the transaction is a vote transaction.
@@ -302,7 +304,11 @@ impl InstructionUpdate {
     /// Returns an error if the transaction update received is in an unbuildable
     /// form.
     pub fn build_from_txn(txn: &TransactionUpdate) -> Result<Vec<Self>, ParseError> {
-        let TransactionUpdate { transaction, slot } = txn.clone();
+        let TransactionUpdate {
+            transaction,
+            slot,
+            bank_id,
+        } = txn.clone();
         let SubscribeUpdateTransactionInfo {
             signature,
             is_vote,
@@ -346,6 +352,7 @@ impl InstructionUpdate {
 
         let shared = Arc::new(InstructionShared {
             slot,
+            bank_id,
             signature,
             is_vote,
             txn_index: index,
@@ -709,6 +716,32 @@ mod tests {
     }
 
     #[test]
+    fn preserves_bank_identity_for_outer_and_inner_instructions() {
+        let mut txn = transaction_with_nested_inner_instructions();
+        txn.bank_id = 101;
+        let first_bank = InstructionUpdate::build_from_txn(&txn).expect("instructions build");
+        txn.bank_id = 102;
+        let second_bank = InstructionUpdate::build_from_txn(&txn).expect("instructions build");
+
+        let first = first_bank
+            .iter()
+            .flat_map(InstructionUpdate::visit_all)
+            .collect::<Vec<_>>();
+        let second = second_bank
+            .iter()
+            .flat_map(InstructionUpdate::visit_all)
+            .collect::<Vec<_>>();
+        assert!(first.len() > 1, "fixture must exercise inner instructions");
+        assert_eq!(first.len(), second.len());
+        for (first, second) in first.into_iter().zip(second) {
+            assert_eq!(first.shared.slot, second.shared.slot);
+            assert_eq!(first.shared.signature, second.shared.signature);
+            assert_eq!(first.shared.bank_id, 101);
+            assert_eq!(second.shared.bank_id, 102);
+        }
+    }
+
+    #[test]
     fn derives_nested_paths_from_stack_heights() {
         use super::derive_paths_from_stackheights;
 
@@ -862,6 +895,7 @@ mod tests {
     fn transaction_with_missing_inner_stack_heights() -> TransactionUpdate {
         TransactionUpdate {
             slot: 1,
+            bank_id: 0,
             transaction: Some(SubscribeUpdateTransactionInfo {
                 signature: vec![9; 64],
                 is_vote: false,
@@ -915,6 +949,7 @@ mod tests {
     fn transaction_with_mixed_inner_stack_heights() -> TransactionUpdate {
         TransactionUpdate {
             slot: 1,
+            bank_id: 0,
             transaction: Some(SubscribeUpdateTransactionInfo {
                 signature: vec![9; 64],
                 is_vote: false,
@@ -991,6 +1026,7 @@ mod tests {
     fn transaction_with_nested_inner_instructions() -> TransactionUpdate {
         TransactionUpdate {
             slot: 1,
+            bank_id: 0,
             transaction: Some(SubscribeUpdateTransactionInfo {
                 signature: vec![9; 64],
                 is_vote: false,
@@ -1127,6 +1163,7 @@ mod tests {
     fn transaction_v1_with_inline_budget() -> TransactionUpdate {
         TransactionUpdate {
             slot: 1,
+            bank_id: 0,
             transaction: Some(SubscribeUpdateTransactionInfo {
                 signature: vec![9; 64],
                 is_vote: false,

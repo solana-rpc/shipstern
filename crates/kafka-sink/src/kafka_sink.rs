@@ -973,6 +973,7 @@ mod tests {
     fn transaction_commit_event_counts_decode_and_fallback_explicitly() {
         let ix_slot = InstructionSlot {
             slot: 42,
+            bank_id: 420,
             parent_slot: 41,
             blockhash: Default::default(),
             executed_transaction_count: 10,
@@ -1005,6 +1006,9 @@ mod tests {
     fn account_commit_event_counts_decode_and_fallback_explicitly() {
         let acct_slot = AccountSlot {
             slot: 55,
+            bank_id: 550,
+            parent_slot: 54,
+            blockhash: Default::default(),
             records: vec![
                 record("decoded.accounts", RecordKind::Account, true),
                 record("failed.accounts", RecordKind::Account, false),
@@ -1032,6 +1036,9 @@ mod tests {
     fn passthrough_mode_commits_as_finalized() {
         let acct_slot = AccountSlot {
             slot: 99,
+            bank_id: 990,
+            parent_slot: 98,
+            blockhash: Default::default(),
             records: vec![],
             decoded_account_count: 0,
             filtered_account_count: 0,
@@ -1071,6 +1078,9 @@ mod tests {
     fn completed_json_includes_account_count_fields() {
         let acct_slot = AccountSlot {
             slot: 88,
+            bank_id: 880,
+            parent_slot: 87,
+            blockhash: Default::default(),
             records: vec![
                 record("decoded.accounts", RecordKind::Account, true),
                 record("failed.accounts", RecordKind::Account, false),
