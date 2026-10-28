@@ -48,6 +48,25 @@ pub(crate) enum FeedUpdate {
     Bam(BamUpdate),
 }
 
+impl FeedUpdate {
+    /// A transaction or a slot start proves the stream delivers. A ping or a clip does not, so
+    /// a point of presence that drops after each ping still backs off.
+    pub(crate) fn is_progress(&self) -> bool {
+        match self {
+            Self::Harmonic(update) => matches!(
+                update.payload,
+                Some(
+                    harmonic_update::Payload::Transaction(_)
+                        | harmonic_update::Payload::SlotStart(_)
+                )
+            ),
+            Self::Bam(update) => {
+                matches!(update.payload, Some(bam_update::Payload::Transaction(_)))
+            },
+        }
+    }
+}
+
 /// What a stream dropped or saw, reported when the source exits.
 #[derive(Default, Clone, Copy)]
 pub(crate) struct Counts {
@@ -59,6 +78,7 @@ pub(crate) struct Counts {
     pub clipped: u64,
     pub restarts: u64,
     pub unknown_payload: u64,
+    pub reconnects: u64,
 }
 
 /// The index state of a recent slot.
@@ -66,7 +86,8 @@ pub(crate) struct Counts {
 struct Frame {
     /// The index of the slot's next transaction.
     next: u64,
-    /// Between the slot's start and its end. A BAM slot is open from its first transaction.
+    /// Between the slot's start and its end, or until the stream resubscribes. A BAM transaction
+    /// opens its slot.
     open: bool,
     /// The slot got an end since its last start, so a new start is a restart.
     ended: bool,
@@ -189,6 +210,19 @@ impl Framer {
             Some(bam_update::Payload::Ping(_)) => None,
             None => self.unknown_payload(),
         }
+    }
+
+    /// The stream subscribed again, so its open slots get no end. Harmonic joins at the next slot
+    /// start, and a BAM transaction opens its slot again. Indexes keep counting on both feeds.
+    pub(crate) fn reconnected(&mut self) {
+        // An open slot ended on the lost stream, so a new start for it is a restart.
+        self.frames.values_mut().for_each(|frame| {
+            if frame.open {
+                frame.ended = true;
+            }
+            frame.open = false;
+        });
+        self.counts.reconnects += 1;
     }
 
     /// A payload this crate does not know: the server schema moved ahead of the proto crate.
@@ -606,6 +640,20 @@ mod tests {
         index(&mut framer, 500);
 
         assert_eq!([index(&mut framer, 10), index(&mut framer, 10)], [0, 1]);
+    }
+
+    /// The slot that was open at a drop ended on the lost stream, so its new start is a restart.
+    #[test]
+    fn a_restart_of_the_slot_open_at_a_drop_is_counted() {
+        let mut framer = framer();
+        framer.apply(start(10));
+        let (bytes, _) = fixture(LEGACY);
+        framer.apply(transaction(10, bytes, Some(ExecutionResult::Success)));
+
+        framer.reconnected();
+        framer.apply(start(10));
+
+        assert_eq!(framer.counts.restarts, 1);
     }
 
     /// A payload this crate does not know is counted on both feeds, so a newer server schema

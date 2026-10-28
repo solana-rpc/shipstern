@@ -19,7 +19,7 @@ shipstern-core = { workspace = true }
 solana-message = { workspace = true }
 solana-transaction = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["sync", "time", "macros"] }
 tonic = { workspace = true, features = ["tls-native-roots"] }
 tracing = { workspace = true }
 triton-preconfs-proto = { workspace = true }
@@ -27,7 +27,8 @@ wincode = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros", "net", "sync", "time"] }
+tokio = { workspace = true, features = ["rt", "macros", "net", "sync", "time", "test-util"] }
 base64 = { workspace = true }
 serde_json = { workspace = true }
 solana-pubkey = { workspace = true }
+toml = { workspace = true }

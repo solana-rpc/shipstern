@@ -38,6 +38,8 @@ bam-regions = ["fra", "ams"]
 | `harmonic-regions` | `[]` | Harmonic regions, one stream each |
 | `bam-regions` | `[]` | BAM regions, one stream each; at least one of the two lists needs a region |
 | `timeout` | `10` | seconds for the TCP connect, for TLS and for each subscribe |
+| `auto-reconnect` | `true` | subscribe a dropped stream again, see Reconnect |
+| `reconnect-max-retries` | unset | resubscribes in a row before the source stops; one that works also counts until a transaction or slot start arrives or the stream stays up 60 s; unset has no limit; `0` never resubscribes; use 12 or more to outlast a cooloff, see Reconnect |
 
 Harmonic regions: `ams`, `ewr`, `fra`, `lon`, `tyo`, `sgp`, `slc`. BAM regions: `ams`, `dfw`,
 `dub`, `ewr`, `fra`, `hkg`, `iad`, `lax`, `lon`, `pit`, `sea`, `sin`, `slc`, `sqq`, `tyo`.
@@ -105,8 +107,8 @@ Consequences:
   `revert_on_error`.
 - A gap in `sequence` is not proof of a loss. The node gives one number to each batch it
   schedules, for all the leaders it serves. All transactions of one bundle share a number. These
-  batches leave gaps: batches that no filter of the stream matches, batches the feed clips, and
-  batches of a leader that opted out of preconfs.
+  batches leave gaps: batches that no filter of the stream matches, batches the feed clips,
+  batches of a leader that opted out of preconfs, and batches sent during a reconnect.
 
 ## How a prefilter maps to the feed filter
 
@@ -152,27 +154,28 @@ transaction can arrive twice. A later version of the source can do this swap.
 | a token on an `http` endpoint whose host is not `127.0.0.1`, `localhost` or `[::1]` | `Error::Other` with `ConnectError::PlainTextToken`, before the dial |
 | a token that is not a valid header | `Error::Other` with `ConnectError::Token`, before the dial |
 | a bad endpoint, or a TCP or TLS failure | `Error::Other` with `ConnectError::Transport` |
-| a subscribe fails | `Error::YellowstoneStatus` with the code |
-| a live stream fails | `SourceExitStatus::StreamError` with the code |
-| a live stream ends | `SourceExitStatus::StreamEnded` |
+| the first subscribe of a stream fails, with any code | `Error::YellowstoneStatus` with the code; never retried |
+| a live stream or a resubscribe fails with a code that stops, or the retries run out | `SourceExitStatus::StreamError` with the code |
+| a live stream ends and is not subscribed again | `SourceExitStatus::StreamEnded` |
 | the runtime drops the receiver | `SourceExitStatus::ReceiverDropped` |
 
 The runtime returns each `Err` as it is. It turns `StreamError` into `Error::YellowstoneStatus`
 and `StreamEnded` into `Error::ServerHangup`.
 
-The source does not reconnect. One stream of either feed that ends or fails stops the source, so
-a run never continues on a partial feed. There is no resume: the feed has no `from_slot`.
+| Code | Cause | After the first subscribe, with `auto-reconnect` on |
+|---|---|---|
+| `UNAUTHENTICATED` | no token, an unknown token, or a token without the feed | stop |
+| `INVALID_ARGUMENT` | the feed refuses the request, for example a filter over a limit | stop |
+| `FAILED_PRECONDITION` | the feed does not serve the region | stop |
+| `PERMISSION_DENIED` | the feed was disabled under a live stream | stop |
+| `RESOURCE_EXHAUSTED` | the account was over its coverage share for 30 s, a subscribe came inside the 60 s cooloff that follows, or the source fell behind | subscribe again |
+| `DATA_LOSS` | the source fell so far behind that the server dropped its position | subscribe again |
+| `UNAVAILABLE` | the point of presence is restarting | subscribe again |
+| `DEADLINE_EXCEEDED` | a subscribe did not answer within `timeout` seconds | subscribe again |
+| `INTERNAL`, `UNKNOWN`, `ABORTED`, `CANCELLED` | | subscribe again |
+| any other code, for example `NOT_FOUND` or `UNIMPLEMENTED` | | stop |
 
-| Code | Cause |
-|---|---|
-| `UNAUTHENTICATED` | no token, an unknown token, or a token without the feed |
-| `INVALID_ARGUMENT` | the feed refuses the request, for example a filter over a limit |
-| `FAILED_PRECONDITION` | the feed does not serve the region |
-| `PERMISSION_DENIED` | the feed was disabled under a live stream |
-| `RESOURCE_EXHAUSTED` | the account was over its coverage share for 30 s, a subscribe came inside the 60 s cooloff that follows, or the source fell behind |
-| `DATA_LOSS` | the source fell so far behind that the server dropped its position |
-| `UNAVAILABLE` | the point of presence is restarting |
-| `DEADLINE_EXCEEDED` | a subscribe did not answer within `timeout` seconds |
+With `auto-reconnect` off, every code stops. There is no resume: the feed has no `from_slot`.
 
 ## Coverage share
 
@@ -180,8 +183,41 @@ Each account gets at most 33% of what the feed publishes in a region, counted ov
 60 s window. All streams of the account in that region count against the same share. Harmonic
 and BAM have separate shares. Over the share, the feed withholds transactions and sends a clip
 count, which the source logs at warn. After 30 s over the share, the feed ends the stream with
-`RESOURCE_EXHAUSTED`. A whole-program filter, such as SPL Token or pump.fun, reaches the share
-within a minute.
+`RESOURCE_EXHAUSTED`. Then a 60 s cooloff starts. During the cooloff, the feed refuses each
+subscribe to that region with `RESOURCE_EXHAUSTED`, and the source retries (see Reconnect). A
+whole-program filter, such as SPL Token or pump.fun, reaches the share within a minute.
+
+## Reconnect
+
+With `auto-reconnect` on (the default), the source subscribes a stream again on the same channel
+when the stream ends, or when it fails with a code marked "subscribe again" in Exit. The first
+subscribe at connect is never retried.
+
+The wait before an attempt starts at 100 ms and doubles with each attempt, up to 10 s. A
+transaction or a slot start from the server sets the wait and the attempt count back to the
+start. So does a drop after a stream that stayed up for 60 s. A ping, a clip or a slot end does
+not. A subscribe that does not answer within `timeout` seconds fails with `DEADLINE_EXCEEDED`.
+At connect, this stops the source.
+
+`reconnect-max-retries` bounds the resubscribes in a row. A resubscribe that works also counts,
+until one of the resets above. 0 never resubscribes. The waits before 11 attempts add up to
+52.7 s, inside the 60 s cooloff (see Coverage share), so a bound under 12 cannot outlast a
+cooloff. Unset never gives up, as in Triton's own client. The feed has no resume, so a stop
+cannot save the transactions that a late reconnect loses.
+
+A reconnect loses the transactions between the drop and the new stream. On Harmonic, the open
+slots of that stream get no slot end, and framing starts again at the next slot start. BAM
+resumes the slot in progress. Indexes keep counting on both feeds. While one stream reconnects,
+the other streams keep delivering, so the run is partial until it returns.
+
+Each retry logs a warning with the feed, the code, the message, the attempt and the wait. The
+`reconnects` count in each exit line counts the resubscribes that succeeded. The source has no
+metrics.
+
+When a point of presence restarts (`UNAVAILABLE`), the source subscribes again. Triton states
+that anycast then lands the subscribe on another point of presence. When a feed is down, the
+stream stays open and gets no transactions. There is no error, so the source does not
+reconnect.
 
 ## Manual run
 

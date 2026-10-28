@@ -99,6 +99,23 @@ pub struct PreconfConfig {
     /// Seconds allowed for the TCP connect, again for the TLS handshake, and for each subscribe.
     #[arg(long, env, default_value_t = DEFAULT_TIMEOUT_SECS)]
     pub timeout: u64,
+    /// Resubscribe a stream that ends or fails with a retryable status. Defaults to `true`.
+    #[arg(
+        long,
+        env,
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
+    pub auto_reconnect: bool,
+    /// Resubscribes in a row before the source stops. A resubscribe that works also counts,
+    /// until a transaction or slot start arrives or the stream stays up 60 s. 0 never
+    /// resubscribes, the same as `auto-reconnect = false`, and unset never gives up. Eleven
+    /// waits sum to 52.7 s, inside the 60 s coverage cooloff, so a bound under 12 cannot
+    /// outlast one.
+    #[arg(long, env)]
+    pub reconnect_max_retries: Option<u32>,
 }
 
 // clap does not read `Default`, so keep these equal to the `#[arg]` defaults.
@@ -110,6 +127,8 @@ impl Default for PreconfConfig {
             harmonic_regions: Vec::new(),
             bam_regions: Vec::new(),
             timeout: DEFAULT_TIMEOUT_SECS,
+            auto_reconnect: true,
+            reconnect_max_retries: None,
         }
     }
 }
@@ -123,6 +142,8 @@ impl std::fmt::Debug for PreconfConfig {
             .field("harmonic_regions", &self.harmonic_regions)
             .field("bam_regions", &self.bam_regions)
             .field("timeout", &self.timeout)
+            .field("auto_reconnect", &self.auto_reconnect)
+            .field("reconnect_max_retries", &self.reconnect_max_retries)
             .finish()
     }
 }
@@ -144,6 +165,44 @@ mod tests {
             .expect("the config has an x_token argument");
 
         assert!(token.is_hide_env_values_set());
+    }
+
+    /// A table with only the token and a region gets the documented defaults.
+    #[test]
+    fn a_minimal_table_gets_the_defaults() {
+        let config: PreconfConfig = toml::from_str(
+            r#"
+            x-token = "t"
+            harmonic-regions = ["fra"]
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.endpoint, "https://preconfs.rpcpool.com");
+        assert_eq!(config.timeout, 10);
+        assert!(config.auto_reconnect);
+        assert_eq!(config.reconnect_max_retries, None);
+        assert_eq!(config.harmonic_regions, [HarmonicRegion::Fra]);
+        assert!(config.bam_regions.is_empty());
+    }
+
+    /// `auto-reconnect` is on by default, and the CLI can turn it off.
+    #[test]
+    fn auto_reconnect_can_be_turned_off() {
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            source: PreconfConfig,
+        }
+        let parse = |args: &[&str]| {
+            <Cli as clap::Parser>::try_parse_from(args)
+                .map(|cli| cli.source.auto_reconnect)
+                .unwrap()
+        };
+
+        assert!(parse(&["x"]));
+        assert!(parse(&["x", "--auto-reconnect"]));
+        assert!(!parse(&["x", "--auto-reconnect", "false"]));
     }
 
     /// Each config name must reach the proto value of the same name, or a stream opens on
