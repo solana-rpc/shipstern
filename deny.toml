@@ -63,11 +63,6 @@ ignore = [
     # Both crates are already at the latest compatible releases; track until the
     # Solana/Agave runtime stack removes aquamarine or moves to a replacement.
     "RUSTSEC-2026-0173",
-    # crossbeam-epoch 0.9.18 is pulled transitively (crossbeam-deque / rayon in the
-    # build and Solana stack). The vulnerable fmt::Pointer impl only misbehaves when
-    # debug-formatting an Atomic/Shared holding an invalid pointer, which this
-    # workspace never does; 0.9.18 is the latest release on the pinned line.
-    "RUSTSEC-2026-0204",
     # crypto-bigint 0.5.5 comes through k256 0.13 in solana-secp256k1-program 3.0.1
     # and solana-secp256k1-recover 3.3.0. The fix is only on 0.7 (>= 0.7.6).
     # secp256k1-program 3.1.1 and secp256k1-recover 3.3.1 move to k256 0.14, but
@@ -87,15 +82,6 @@ ignore = [
     "RUSTSEC-2026-0391",
     "RUSTSEC-2026-0398",
     "RUSTSEC-2026-0403",
-
-    # h2 0.4.x is pinned at 0.4.17, above the 0.4.16 fix, leaving only h2 0.3.27.
-    # Its direct parents are hyper 0.14, reqwest 0.11 and tonic 0.9, all reached
-    # through the legacy Solana BigTable and download stacks; 0.3.27 is newest on
-    # that line, so there is no local fix. Low severity. cargo-deny has no
-    # version-scoped form for an advisory ignore, so this entry would also excuse a
-    # 0.4.x below 0.4.16 if the lock ever resolved back onto one; the [bans] entry
-    # below is what keeps the fixed 0.4 line enforced.
-    "RUSTSEC-2026-0258",
 ]
 
 [bans]
@@ -104,10 +90,6 @@ ignore = [
 # the explicit deny list below.
 multiple-versions = "allow"
 deny = [
-    # Guard for the RUSTSEC-2026-0258 ignore above, which is keyed by advisory ID
-    # and so cannot be limited to the one version that needs it. h2 0.3.27 stays
-    # allowed because it has nowhere to go; a vulnerable 0.4.x fails the build.
-    { name = "h2", version = ">=0.4.0, <0.4.16", reason = "RUSTSEC-2026-0258: the 0.4 line must stay at or above the 0.4.16 patch" },
     # Guards for the zstd and crypto-bigint ignores above. The zstd entries fail a
     # version below the fix on its line. The crypto-bigint entry fails all of 0.6,
     # which has no fix, and 0.7 below 0.7.6. The ranges match releases only, not
