@@ -1,0 +1,21 @@
+[package]
+name = "shipstern-example-preconf"
+version.workspace = true
+description = "Example of using the Triton preconfirmations source with Shipstern"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+clap = { workspace = true, features = ["derive", "cargo", "wrap_help"] }
+rustls = { workspace = true }
+shipstern = { workspace = true }
+shipstern-core = { workspace = true }
+shipstern-preconf-source = { workspace = true }
+shipstern-spl-token-parser = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

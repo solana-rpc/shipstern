@@ -1,0 +1,9 @@
+[source]
+endpoint = "https://preconfs.rpcpool.com"
+x-token = "<X-TOKEN>"
+# Harmonic needs the Harmonic feed on the token. For a BAM-only token, use
+# bam-regions = ["fra"] in place of harmonic-regions.
+harmonic-regions = ["fra"]
+
+[buffer]
+jobs = 4

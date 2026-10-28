@@ -6985,6 +6985,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "shipstern-example-preconf"
+version = "0.12.0"
+dependencies = [
+ "clap 4.6.6",
+ "rustls",
+ "shipstern",
+ "shipstern-core",
+ "shipstern-preconf-source",
+ "shipstern-spl-token-parser",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "shipstern-example-prometheus"
 version = "0.0.0"
 dependencies = [
