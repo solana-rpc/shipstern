@@ -12,6 +12,10 @@ on:
       - "main"
   workflow_dispatch:
 
+# No job writes to the repo, so the token gets read access only.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -50,10 +54,13 @@ jobs:
       - name: Run fmt
         run: cargo +nightly-2026-02-25 fmt --all -- --check
 
-      - name: cargo deny check advisories bans
+      # Bans stay here and blocking: they guard lines this repo pins on purpose.
+      # Advisories run in advisories.yml, so a new RustSec entry does not turn
+      # every open PR red.
+      - name: cargo deny check bans
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          command: check advisories bans
+          command: check bans
 
   # The macro reads codama's node types directly, so the pin is a correctness
   # constraint, not hygiene: a second codama version in the graph type-checks and
