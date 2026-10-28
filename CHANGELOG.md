@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `shipstern-preconf-source`: a source for Triton Harmonic preconfirmations. Each preconfirmed transaction arrives as a `SubscribeUpdateTransaction` with a per-slot `index` and a meta that carries only the outcome. A prefilter matches only static account keys, not keys from a lookup table, and the source sends no slot updates ([#359](https://github.com/solana-rpc/shipstern/pull/359) for [#328](https://github.com/solana-rpc/shipstern/issues/328) by @senzenn).
+
 ## [0.12.0] - 2026-10-11
 
 ### Added
