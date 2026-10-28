@@ -11,9 +11,11 @@ use solana_message::{
 use solana_pubkey::Pubkey;
 use solana_transaction::{versioned::VersionedTransaction, Signature};
 use triton_preconfs_proto::preconfs::{
-    harmonic_update::Payload, ExecutionResult, HarmonicSlotEnd, HarmonicSlotStart,
-    HarmonicTransaction, HarmonicUpdate,
+    bam_update, harmonic_update, BamTransaction, BamUpdate, ExecutionResult, HarmonicSlotEnd,
+    HarmonicSlotStart, HarmonicTransaction, HarmonicUpdate,
 };
+
+use crate::framer::FeedUpdate;
 
 pub(crate) const LEGACY: &str =
     "3n9pFv6QzK86Be1gUuefTPHUoWhKskWChXHi32tbY7padzpih5qVwD7QG6gqVDihWm9ZsA3d1gE7tNjGGjJDNhk5";
@@ -58,35 +60,51 @@ pub(crate) fn transaction(
     slot: u64,
     bytes: Vec<u8>,
     result: Option<ExecutionResult>,
-) -> HarmonicUpdate {
-    HarmonicUpdate {
+) -> FeedUpdate {
+    FeedUpdate::Harmonic(HarmonicUpdate {
         filters: vec!["p".to_string()],
-        payload: Some(Payload::Transaction(HarmonicTransaction {
+        payload: Some(harmonic_update::Payload::Transaction(HarmonicTransaction {
             transaction: bytes.into(),
             slot,
             result: result.map(|r| r as i32),
             region: "fra".to_string(),
             seq: 0,
         })),
-    }
+    })
 }
 
-pub(crate) fn start(slot: u64) -> HarmonicUpdate {
-    HarmonicUpdate {
+pub(crate) fn bam_transaction(
+    slot: u64,
+    bytes: Vec<u8>,
+    result: Option<ExecutionResult>,
+) -> FeedUpdate {
+    FeedUpdate::Bam(BamUpdate {
+        filters: vec!["p".to_string()],
+        payload: Some(bam_update::Payload::Transaction(BamTransaction {
+            transaction: bytes.into(),
+            slot,
+            result: result.map(|r| r as i32),
+            ..Default::default()
+        })),
+    })
+}
+
+pub(crate) fn start(slot: u64) -> FeedUpdate {
+    FeedUpdate::Harmonic(HarmonicUpdate {
         filters: vec![],
-        payload: Some(Payload::SlotStart(HarmonicSlotStart {
+        payload: Some(harmonic_update::Payload::SlotStart(HarmonicSlotStart {
             slot,
             region: "fra".to_string(),
         })),
-    }
+    })
 }
 
-pub(crate) fn end(slot: u64) -> HarmonicUpdate {
-    HarmonicUpdate {
+pub(crate) fn end(slot: u64) -> FeedUpdate {
+    FeedUpdate::Harmonic(HarmonicUpdate {
         filters: vec![],
-        payload: Some(Payload::SlotEnd(HarmonicSlotEnd {
+        payload: Some(harmonic_update::Payload::SlotEnd(HarmonicSlotEnd {
             slot,
             region: "fra".to_string(),
         })),
-    }
+    })
 }

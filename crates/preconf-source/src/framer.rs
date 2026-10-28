@@ -1,25 +1,54 @@
-//! The per-region state machine: feed updates in, runtime updates out.
+//! The per-stream state machine: feed updates in, runtime updates out.
 
 use std::collections::{BTreeMap, HashMap};
 
 use triton_preconfs_proto::preconfs::{
-    harmonic_update::Payload, ExecutionResult, HarmonicTransaction, HarmonicUpdate,
+    self, bam_update, harmonic_update, subscribe_request::Region, BamUpdate, ExecutionResult,
+    HarmonicUpdate,
 };
 use yellowstone_grpc_proto::geyser::{
     subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateTransaction,
     SubscribeUpdateTransactionInfo,
 };
 
-use crate::convert;
+use crate::{
+    config::{BamRegion, HarmonicRegion},
+    convert,
+};
 
-/// Slots older than this are gone for good, so their index entries can go. 64 slots is about
-/// 13 s at 200 ms slots, far past a 4-slot leader window.
+/// Slots this far behind the frontier are gone for good, so their index entries go when the
+/// frontier next moves. 64 slots is about 13 s at 200 ms slots, far past a 4-slot leader window.
 const SLOT_RETENTION: u64 = 64;
-/// A hard cap on the index map, so bad slots from the server cannot grow it forever. Normal runs
-/// hold about 64 entries, so the cap fires only after such slots.
+/// A hard cap on the index map, so one bad far slot from the server cannot grow it forever.
+/// Normal runs hold about 64 entries, so the cap fires only after such a slot.
 const MAX_FRAMES: usize = 4 * SLOT_RETENTION as usize;
 
-/// What a region stream dropped or saw, reported when the source exits.
+/// One stream: a feed and its region.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Feed {
+    Harmonic(HarmonicRegion),
+    Bam(BamRegion),
+}
+
+impl Feed {
+    /// The region part of the subscribe request.
+    pub(crate) fn region(self) -> Region {
+        match self {
+            Self::Harmonic(region) => {
+                Region::HarmonicRegion(preconfs::HarmonicRegion::from(region).into())
+            },
+            Self::Bam(region) => Region::BamRegion(preconfs::BamRegion::from(region).into()),
+        }
+    }
+}
+
+/// One update from either feed.
+pub(crate) enum FeedUpdate {
+    Harmonic(HarmonicUpdate),
+    Bam(BamUpdate),
+}
+
+/// What a stream dropped or saw, reported when the source exits.
 #[derive(Default, Clone, Copy)]
 pub(crate) struct Counts {
     pub delivered: u64,
@@ -37,84 +66,47 @@ pub(crate) struct Counts {
 struct Frame {
     /// The index of the slot's next transaction.
     next: u64,
-    /// Between the slot's start and its end.
+    /// Between the slot's start and its end. A BAM slot is open from its first transaction.
     open: bool,
     /// The slot got an end since its last start, so a new start is a restart.
     ended: bool,
 }
 
-/// One per region stream, because the feed frames slots per region.
+/// One per stream, because each stream frames or counts its own slots.
 pub(crate) struct Framer {
+    feed: Feed,
     /// The parsers that asked for votes only (`true`) or no votes (`false`).
     vote_rules: HashMap<String, bool>,
     /// Recent slots; an entry outlives its slot end, so a late transaction never repeats an index.
     frames: BTreeMap<u64, Frame>,
-    /// The highest slot that ended.
-    ended: Option<u64>,
+    /// The highest slot that ended on Harmonic, or that a BAM transaction named.
+    frontier: Option<u64>,
     warned_unknown_result: bool,
     pub(crate) counts: Counts,
 }
 
 impl Framer {
-    pub(crate) fn new(vote_rules: HashMap<String, bool>) -> Self {
+    pub(crate) fn new(feed: Feed, vote_rules: HashMap<String, bool>) -> Self {
         Self {
+            feed,
             vote_rules,
             frames: BTreeMap::new(),
-            ended: None,
+            frontier: None,
             warned_unknown_result: false,
             counts: Counts::default(),
         }
     }
 
-    /// At most one runtime update per feed update; framing, pings, clips and drops give none.
-    pub(crate) fn apply(&mut self, update: HarmonicUpdate) -> Option<SubscribeUpdate> {
-        let HarmonicUpdate { filters, payload } = update;
+    pub(crate) fn feed(&self) -> Feed { self.feed }
 
-        let update = match payload {
-            Some(Payload::Transaction(tx)) => self.transaction(filters, tx),
-            Some(Payload::SlotStart(start)) => {
-                // The proto restarts a slot with a new start after its end. A late start for a
-                // lower slot that never ended is not a restart. Both keep counting the index.
-                let frame = self.frames.entry(start.slot).or_default();
-                if frame.ended {
-                    self.counts.restarts += 1;
-                    tracing::warn!(
-                        slot = start.slot,
-                        region = %start.region,
-                        "A slot started again; the feed can resend or omit earlier transactions"
-                    );
-                }
-                frame.open = true;
-                frame.ended = false;
-                None
-            },
-            Some(Payload::SlotEnd(end)) => {
-                let frame = self.frames.entry(end.slot).or_default();
-                frame.open = false;
-                frame.ended = true;
-                let ended = self.ended.map_or(end.slot, |ended| ended.max(end.slot));
-                self.ended = Some(ended);
-                self.frames = self.frames.split_off(&ended.saturating_sub(SLOT_RETENTION));
-                None
-            },
-            Some(Payload::Clip(clip)) => {
-                self.counts.clipped = self.counts.clipped.saturating_add(clip.transactions);
-                tracing::warn!(
-                    withheld = clip.transactions,
-                    "The feed withheld transactions: the account is over its coverage share"
-                );
-                None
-            },
-            Some(Payload::Ping(_)) => None,
-            // The server schema moved ahead of the proto crate, so count it for the exit summary.
-            None => {
-                self.counts.unknown_payload += 1;
-                tracing::debug!("The feed sent a payload this crate does not know");
-                None
-            },
+    /// At most one runtime update per feed update; framing, pings, clips and drops give none.
+    pub(crate) fn apply(&mut self, update: FeedUpdate) -> Option<SubscribeUpdate> {
+        let update = match update {
+            FeedUpdate::Harmonic(update) => self.harmonic(update),
+            FeedUpdate::Bam(update) => self.bam(update),
         };
 
-        // Only a slot end prunes the map, so a stream that sends no ends needs this bound too.
+        // A bad far slot stops the pruning, so drop the oldest entries past the cap.
         while self.frames.len() > MAX_FRAMES {
             self.frames.pop_first();
         }
@@ -122,34 +114,153 @@ impl Framer {
         update
     }
 
+    fn harmonic(&mut self, update: HarmonicUpdate) -> Option<SubscribeUpdate> {
+        let HarmonicUpdate { filters, payload } = update;
+
+        match payload {
+            Some(harmonic_update::Payload::Transaction(tx)) => {
+                let update =
+                    self.transaction(filters, tx.slot, tx.execution_result(), &tx.transaction);
+                if let Some(signature) = signature(update.as_ref()) {
+                    tracing::debug!(
+                        slot = tx.slot,
+                        signature = %shipstern_core::bs58::encode(signature).into_string(),
+                        seq = tx.seq,
+                        region = %tx.region,
+                        "Harmonic preconf"
+                    );
+                }
+                update
+            },
+            Some(harmonic_update::Payload::SlotStart(start)) => {
+                // The proto restarts a slot with a new start after its end. A late start for a
+                // lower slot that never ended is not a restart. Both keep counting the index.
+                let frame = self.frames.entry(start.slot).or_default();
+                if frame.ended {
+                    self.counts.restarts += 1;
+                    tracing::warn!(
+                        slot = start.slot,
+                        feed = ?self.feed,
+                        "A slot started again; the feed can resend or omit earlier transactions"
+                    );
+                }
+                frame.open = true;
+                frame.ended = false;
+                None
+            },
+            Some(harmonic_update::Payload::SlotEnd(end)) => {
+                let frame = self.frames.entry(end.slot).or_default();
+                frame.open = false;
+                frame.ended = true;
+                self.advance(end.slot);
+                None
+            },
+            Some(harmonic_update::Payload::Clip(clip)) => self.clip(clip.transactions),
+            Some(harmonic_update::Payload::Ping(_)) => None,
+            None => self.unknown_payload(),
+        }
+    }
+
+    fn bam(&mut self, update: BamUpdate) -> Option<SubscribeUpdate> {
+        let BamUpdate { filters, payload } = update;
+
+        match payload {
+            Some(bam_update::Payload::Transaction(tx)) => {
+                // BAM frames no slots: the first transaction opens one, and the newest slot
+                // bounds the index map.
+                self.frames.entry(tx.slot).or_default().open = true;
+                let update =
+                    self.transaction(filters, tx.slot, tx.execution_result(), &tx.transaction);
+                self.advance(tx.slot);
+                if let Some(signature) = signature(update.as_ref()) {
+                    tracing::debug!(
+                        slot = tx.slot,
+                        signature = %shipstern_core::bs58::encode(signature).into_string(),
+                        node = %tx.node,
+                        sequence = tx.sequence,
+                        bundle_position = tx.bundle_position,
+                        revert_on_error = tx.is_revert_on_error,
+                        "BAM preconf"
+                    );
+                }
+                update
+            },
+            Some(bam_update::Payload::Clip(clip)) => self.clip(clip.transactions),
+            Some(bam_update::Payload::Ping(_)) => None,
+            None => self.unknown_payload(),
+        }
+    }
+
+    /// A payload this crate does not know: the server schema moved ahead of the proto crate.
+    fn unknown_payload(&mut self) -> Option<SubscribeUpdate> {
+        self.counts.unknown_payload += 1;
+        tracing::debug!(feed = ?self.feed, "The feed sent a payload this crate does not know");
+        None
+    }
+
+    fn clip(&mut self, withheld: u64) -> Option<SubscribeUpdate> {
+        self.counts.clipped = self.counts.clipped.saturating_add(withheld);
+        tracing::warn!(
+            withheld,
+            feed = ?self.feed,
+            "The feed withheld transactions: the account is over its coverage share"
+        );
+        None
+    }
+
+    /// Move the frontier up and drop the index entries of slots that are gone for good.
+    fn advance(&mut self, slot: u64) {
+        // The cutoff moves only with the frontier, so there is nothing to prune otherwise.
+        if self.frontier.is_some_and(|frontier| slot <= frontier) {
+            return;
+        }
+        self.frontier = Some(slot);
+        self.frames = self.frames.split_off(&slot.saturating_sub(SLOT_RETENTION));
+    }
+
+    fn next_index(&mut self, slot: u64) -> u64 {
+        let frame = self.frames.entry(slot).or_default();
+        // Harmonic opens every slot with a start, and BAM opens it before it indexes, so a
+        // transaction outside an open frame is a Harmonic gap.
+        if !frame.open {
+            self.counts.out_of_frame += 1;
+            tracing::debug!(slot, feed = ?self.feed, "A preconf arrived outside its slot frame");
+        }
+        let index = frame.next;
+        frame.next += 1;
+        index
+    }
+
     fn transaction(
         &mut self,
         mut filters: Vec<String>,
-        tx: HarmonicTransaction,
+        slot: u64,
+        result: Option<ExecutionResult>,
+        bytes: &[u8],
     ) -> Option<SubscribeUpdate> {
         // Unset is unknown, not success. The runtime has no field for unknown.
-        let Some(result) = tx.execution_result() else {
+        let Some(result) = result else {
             self.counts.unknown_result += 1;
             if !self.warned_unknown_result {
                 self.warned_unknown_result = true;
                 tracing::warn!(
-                    slot = tx.slot,
-                    region = %tx.region,
+                    slot,
+                    feed = ?self.feed,
                     "The feed sent a transaction with no result; the source drops these. Only a \
                      prefilter with `failed: None` gets them from the feed"
                 );
             }
-            tracing::debug!(slot = tx.slot, region = %tx.region, "Dropping a preconf with no result");
+            tracing::debug!(slot, feed = ?self.feed, "Dropping a preconf with no result");
             return None;
         };
 
-        let decoded = match convert::decode(&tx.transaction) {
+        let decoded = match convert::decode(bytes) {
             Ok(decoded) => decoded,
             Err(err) => {
                 self.counts.undecodable += 1;
                 tracing::warn!(
-                    slot = tx.slot,
-                    region = %tx.region,
+                    slot,
+                    feed = ?self.feed,
                     err = %err,
                     "The feed sent a transaction that does not decode; skipping it"
                 );
@@ -160,8 +271,8 @@ impl Framer {
         let Some(signature) = decoded.signatures.first() else {
             self.counts.undecodable += 1;
             tracing::warn!(
-                slot = tx.slot,
-                region = %tx.region,
+                slot,
+                feed = ?self.feed,
                 "The feed sent a transaction with no signature; skipping it"
             );
             return None;
@@ -173,7 +284,7 @@ impl Framer {
         // vote-rule drop.
         if filters.is_empty() {
             self.counts.unknown_payload += 1;
-            tracing::debug!(slot = tx.slot, region = %tx.region, "A preconf named no filter");
+            tracing::debug!(slot, feed = ?self.feed, "A preconf named no filter");
             return None;
         }
         filters.retain(|name| {
@@ -183,31 +294,11 @@ impl Framer {
         });
         if filters.is_empty() {
             self.counts.vote_rule_dropped += 1;
-            tracing::debug!(slot = tx.slot, region = %tx.region, is_vote, "No parser wants this preconf");
+            tracing::debug!(slot, feed = ?self.feed, is_vote, "No parser wants this preconf");
             return None;
         }
 
-        let frame = self.frames.entry(tx.slot).or_default();
-        if !frame.open {
-            self.counts.out_of_frame += 1;
-            tracing::debug!(
-                slot = tx.slot,
-                region = %tx.region,
-                "A preconf arrived outside its slot frame"
-            );
-        }
-        let index = frame.next;
-        frame.next += 1;
-
-        // These fields have no place in a `SubscribeUpdateTransaction`, so log them for each
-        // delivered transaction.
-        tracing::debug!(
-            slot = tx.slot,
-            signature = %shipstern_core::bs58::encode(&signature).into_string(),
-            seq = tx.seq,
-            region = %tx.region,
-            "Harmonic preconf"
-        );
+        let index = self.next_index(slot);
         let info = SubscribeUpdateTransactionInfo {
             signature,
             is_vote,
@@ -222,7 +313,7 @@ impl Framer {
         )]
         let transaction = SubscribeUpdateTransaction {
             transaction: Some(info),
-            slot: tx.slot,
+            slot,
             ..Default::default()
         };
         Some(SubscribeUpdate {
@@ -234,25 +325,57 @@ impl Framer {
     }
 }
 
+/// The signature of a delivered transaction. The feed fields have no place in a
+/// `SubscribeUpdateTransaction`, so each feed logs them with it at debug.
+fn signature(update: Option<&SubscribeUpdate>) -> Option<&[u8]> {
+    let Some(UpdateOneof::Transaction(SubscribeUpdateTransaction {
+        transaction: Some(info),
+        ..
+    })) = update.and_then(|update| update.update_oneof.as_ref())
+    else {
+        return None;
+    };
+    Some(&info.signature)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use shipstern_core::{Filters, Prefilter, Pubkey, TransactionPrefilter};
     use triton_preconfs_proto::preconfs::{
-        harmonic_update::Payload, CoverageClip, ExecutionResult, HarmonicUpdate, Ping,
+        self, bam_update, harmonic_update, subscribe_request::Region, BamUpdate, CoverageClip,
+        ExecutionResult, HarmonicUpdate, Ping,
     };
     use yellowstone_grpc_proto::geyser::{
         subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateTransaction,
     };
 
-    use super::{Framer, MAX_FRAMES};
+    use super::{Feed, FeedUpdate, Framer, MAX_FRAMES};
     use crate::{
+        config::{BamRegion, HarmonicRegion},
         filter::vote_rules,
-        test_fixtures::{end, fixture, start, transaction, vote_transaction, LEGACY},
+        test_fixtures::{
+            bam_transaction, end, fixture, start, transaction, vote_transaction, LEGACY,
+        },
     };
 
-    fn framer() -> Framer { Framer::new(HashMap::new()) }
+    fn framer() -> Framer { Framer::new(Feed::Harmonic(HarmonicRegion::Fra), HashMap::new()) }
+
+    fn bam_framer() -> Framer { Framer::new(Feed::Bam(BamRegion::Fra), HashMap::new()) }
+
+    /// Each service rejects the other feed's region, so a feed must name its own oneof.
+    #[test]
+    fn each_feed_names_its_own_region() {
+        assert_eq!(
+            Feed::Harmonic(HarmonicRegion::Fra).region(),
+            Region::HarmonicRegion(preconfs::HarmonicRegion::Fra as i32)
+        );
+        assert_eq!(
+            Feed::Bam(BamRegion::Fra).region(),
+            Region::BamRegion(preconfs::BamRegion::Fra as i32)
+        );
+    }
 
     fn delivered(update: Option<SubscribeUpdate>) -> (Vec<String>, SubscribeUpdateTransaction) {
         let update = update.expect("a transaction update");
@@ -262,10 +385,15 @@ mod tests {
         (update.filters, tx)
     }
 
+    /// Deliver one success on the framer's own feed and return its index.
     fn index(framer: &mut Framer, slot: u64) -> u64 {
         let (bytes, _) = fixture(LEGACY);
-        let update = framer.apply(transaction(slot, bytes, Some(ExecutionResult::Success)));
-        delivered(update).1.transaction.unwrap().index
+        let result = Some(ExecutionResult::Success);
+        let update = match framer.feed {
+            Feed::Harmonic(_) => transaction(slot, bytes, result),
+            Feed::Bam(_) => bam_transaction(slot, bytes, result),
+        };
+        delivered(framer.apply(update)).1.transaction.unwrap().index
     }
 
     /// A success maps to the fields the runtime reads, with no `err`.
@@ -307,16 +435,21 @@ mod tests {
         }
     }
 
-    /// An unset result is unknown, not a success, so it is dropped and counted.
+    /// An unset result is unknown, not a success, so it is dropped and counted on both feeds.
+    /// Only the checked `execution_result()` sees that; prost's `result()` reads unset as a
+    /// success.
     #[test]
     fn an_unknown_result_is_dropped_and_counted() {
-        let (bytes, _) = fixture(LEGACY);
-        let mut framer = framer();
+        for mut framer in [framer(), bam_framer()] {
+            let (bytes, _) = fixture(LEGACY);
+            let update = match framer.feed {
+                Feed::Harmonic(_) => transaction(7, bytes, None),
+                Feed::Bam(_) => bam_transaction(7, bytes, None),
+            };
 
-        let update = framer.apply(transaction(7, bytes, None));
-
-        assert!(update.is_none());
-        assert_eq!(framer.counts.unknown_result, 1);
+            assert!(framer.apply(update).is_none());
+            assert_eq!(framer.counts.unknown_result, 1, "{:?}", framer.feed);
+        }
     }
 
     /// The index counts arrivals per slot. A start for an ended slot is a restart, and the index
@@ -407,18 +540,17 @@ mod tests {
         assert!(framer.frames.len() <= MAX_FRAMES, "{}", framer.frames.len());
     }
 
-    /// A payload this crate does not know is counted, so a newer server schema shows up.
+    /// BAM has no frames, so each slot counts from 0 at its first transaction and no gap is
+    /// counted.
     #[test]
-    fn an_unknown_payload_is_counted() {
-        let mut framer = framer();
+    fn bam_transactions_index_per_slot_without_frames() {
+        let mut framer = bam_framer();
 
-        let update = framer.apply(HarmonicUpdate {
-            filters: vec![],
-            payload: None,
-        });
+        assert_eq!(index(&mut framer, 9), 0);
+        assert_eq!(index(&mut framer, 9), 1);
+        assert_eq!(index(&mut framer, 10), 0);
 
-        assert!(update.is_none());
-        assert_eq!(framer.counts.unknown_payload, 1);
+        assert_eq!(framer.counts.out_of_frame, 0);
     }
 
     /// The server filters on the first signature, so a transaction with none is malformed.
@@ -441,42 +573,107 @@ mod tests {
     fn a_transaction_with_no_filter_names_is_an_unknown_payload() {
         let mut framer = framer();
         let (bytes, _) = fixture(LEGACY);
-        let mut update = transaction(7, bytes, Some(ExecutionResult::Success));
+        let FeedUpdate::Harmonic(mut update) =
+            transaction(7, bytes, Some(ExecutionResult::Success))
+        else {
+            panic!("expected a Harmonic update");
+        };
         update.filters.clear();
 
-        let update = framer.apply(update);
+        let update = framer.apply(FeedUpdate::Harmonic(update));
 
         assert!(update.is_none());
         assert_eq!(framer.counts.unknown_payload, 1);
         assert_eq!(framer.counts.vote_rule_dropped, 0);
     }
 
-    /// A clip only counts, and a ping is not an update.
+    /// Without slot ends, the newest BAM slot bounds the index map.
+    #[test]
+    fn bam_slots_far_behind_the_newest_are_pruned() {
+        let mut framer = bam_framer();
+
+        index(&mut framer, 10);
+        index(&mut framer, 500);
+
+        assert_eq!(framer.frames.keys().copied().collect::<Vec<_>>(), [500]);
+    }
+
+    /// A slot below the cutoff keeps its count until the frontier moves again.
+    #[test]
+    fn a_bam_slot_below_the_cutoff_keeps_counting() {
+        let mut framer = bam_framer();
+
+        index(&mut framer, 500);
+
+        assert_eq!([index(&mut framer, 10), index(&mut framer, 10)], [0, 1]);
+    }
+
+    /// A payload this crate does not know is counted on both feeds, so a newer server schema
+    /// shows up.
+    #[test]
+    fn an_unknown_payload_is_counted() {
+        for mut framer in [framer(), bam_framer()] {
+            let update = match framer.feed {
+                Feed::Harmonic(_) => FeedUpdate::Harmonic(HarmonicUpdate {
+                    filters: vec![],
+                    payload: None,
+                }),
+                Feed::Bam(_) => FeedUpdate::Bam(BamUpdate {
+                    filters: vec![],
+                    payload: None,
+                }),
+            };
+
+            assert!(framer.apply(update).is_none());
+            assert_eq!(framer.counts.unknown_payload, 1, "{:?}", framer.feed);
+        }
+    }
+
+    /// A clip only counts, and a ping is not an update, on both feeds.
     #[test]
     fn a_clip_is_counted_and_a_ping_yields_nothing() {
-        let mut framer = framer();
+        for mut framer in [framer(), bam_framer()] {
+            let clip = CoverageClip { transactions: 5 };
+            let (clip, ping) = match framer.feed {
+                Feed::Harmonic(_) => (
+                    FeedUpdate::Harmonic(HarmonicUpdate {
+                        filters: vec![],
+                        payload: Some(harmonic_update::Payload::Clip(clip)),
+                    }),
+                    FeedUpdate::Harmonic(HarmonicUpdate {
+                        filters: vec![],
+                        payload: Some(harmonic_update::Payload::Ping(Ping {})),
+                    }),
+                ),
+                Feed::Bam(_) => (
+                    FeedUpdate::Bam(BamUpdate {
+                        filters: vec![],
+                        payload: Some(bam_update::Payload::Clip(clip)),
+                    }),
+                    FeedUpdate::Bam(BamUpdate {
+                        filters: vec![],
+                        payload: Some(bam_update::Payload::Ping(Ping {})),
+                    }),
+                ),
+            };
 
-        let clip = framer.apply(HarmonicUpdate {
-            filters: vec![],
-            payload: Some(Payload::Clip(CoverageClip { transactions: 5 })),
-        });
-        let ping = framer.apply(HarmonicUpdate {
-            filters: vec![],
-            payload: Some(Payload::Ping(Ping {})),
-        });
-
-        assert!(clip.is_none());
-        assert!(ping.is_none());
-        assert_eq!(framer.counts.clipped, 5);
+            assert!(framer.apply(clip).is_none());
+            assert!(framer.apply(ping).is_none());
+            assert_eq!(framer.counts.clipped, 5, "{:?}", framer.feed);
+        }
     }
 
     /// Clip counts come from the server, so two large clips must not overflow.
     #[test]
     fn clip_counts_saturate() {
         let mut framer = framer();
-        let clip = |n| HarmonicUpdate {
-            filters: vec![],
-            payload: Some(Payload::Clip(CoverageClip { transactions: n })),
+        let clip = |n| {
+            FeedUpdate::Harmonic(HarmonicUpdate {
+                filters: vec![],
+                payload: Some(harmonic_update::Payload::Clip(CoverageClip {
+                    transactions: n,
+                })),
+            })
         };
 
         framer.apply(clip(u64::MAX));
@@ -508,11 +705,17 @@ mod tests {
         ];
         let vote = wincode::serialize(&vote_transaction()).unwrap();
         let (transfer, _) = fixture(LEGACY);
-        let mut framer = Framer::new(vote_rules(&filters));
+        let mut framer = Framer::new(Feed::Harmonic(HarmonicRegion::Fra), vote_rules(&filters));
         let deliver = |framer: &mut Framer, bytes: Vec<u8>, names: Vec<String>| {
-            let mut update = transaction(7, bytes, Some(ExecutionResult::Success));
+            let FeedUpdate::Harmonic(mut update) =
+                transaction(7, bytes, Some(ExecutionResult::Success))
+            else {
+                unreachable!()
+            };
             update.filters = names;
-            framer.apply(update).map(|u| u.filters)
+            framer
+                .apply(FeedUpdate::Harmonic(update))
+                .map(|u| u.filters)
         };
 
         assert_eq!(

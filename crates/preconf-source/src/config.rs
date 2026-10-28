@@ -34,25 +34,84 @@ impl From<HarmonicRegion> for preconfs::HarmonicRegion {
     }
 }
 
-/// Triton preconfs connection configuration.
-#[derive(Clone, serde::Deserialize, clap::Args)]
+/// A BAM region. As for Harmonic, each region carries the slots of the leaders its nodes serve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
+pub enum BamRegion {
+    Ams,
+    Dfw,
+    Dub,
+    Ewr,
+    Fra,
+    Hkg,
+    Iad,
+    Lax,
+    Lon,
+    Pit,
+    Sea,
+    Sin,
+    Slc,
+    Sqq,
+    Tyo,
+}
+
+impl From<BamRegion> for preconfs::BamRegion {
+    fn from(region: BamRegion) -> Self {
+        match region {
+            BamRegion::Ams => Self::Ams,
+            BamRegion::Dfw => Self::Dfw,
+            BamRegion::Dub => Self::Dub,
+            BamRegion::Ewr => Self::Ewr,
+            BamRegion::Fra => Self::Fra,
+            BamRegion::Hkg => Self::Hkg,
+            BamRegion::Iad => Self::Iad,
+            BamRegion::Lax => Self::Lax,
+            BamRegion::Lon => Self::Lon,
+            BamRegion::Pit => Self::Pit,
+            BamRegion::Sea => Self::Sea,
+            BamRegion::Sin => Self::Sin,
+            BamRegion::Slc => Self::Slc,
+            BamRegion::Sqq => Self::Sqq,
+            BamRegion::Tyo => Self::Tyo,
+        }
+    }
+}
+
+/// Triton preconfs connection configuration. At least one region of either feed is needed. A
+/// region named twice in one list opens one stream; the same region in both lists opens one
+/// stream per feed.
+#[derive(Clone, serde::Deserialize, clap::Args)]
+#[serde(default, rename_all = "kebab-case")]
 pub struct PreconfConfig {
     /// The Triton preconfs endpoint.
     #[arg(long, env, default_value = DEFAULT_ENDPOINT)]
-    #[serde(default = "default_endpoint")]
     pub endpoint: String,
-    /// The Triton token. The preconf feed must be enabled on it.
+    /// The Triton token. Each feed is enabled on it separately.
     // Without `hide_env_values`, `--help` prints the value of `X_TOKEN`.
     #[arg(long, env, hide_env_values = true)]
     pub x_token: Option<String>,
-    /// Harmonic regions to stream, one stream each. A region named twice opens one stream.
+    /// Harmonic regions to stream, one stream each.
     #[arg(long, env, value_delimiter = ',')]
     pub harmonic_regions: Vec<HarmonicRegion>,
+    /// BAM regions to stream, one stream each.
+    #[arg(long, env, value_delimiter = ',')]
+    pub bam_regions: Vec<BamRegion>,
     /// Seconds allowed for the TCP connect, again for the TLS handshake, and for each subscribe.
     #[arg(long, env, default_value_t = DEFAULT_TIMEOUT_SECS)]
-    #[serde(default = "default_timeout")]
     pub timeout: u64,
+}
+
+// clap does not read `Default`, so keep these equal to the `#[arg]` defaults.
+impl Default for PreconfConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: DEFAULT_ENDPOINT.to_string(),
+            x_token: None,
+            harmonic_regions: Vec::new(),
+            bam_regions: Vec::new(),
+            timeout: DEFAULT_TIMEOUT_SECS,
+        }
+    }
 }
 
 // Written by hand so a `{config:?}` never prints the token.
@@ -62,21 +121,18 @@ impl std::fmt::Debug for PreconfConfig {
             .field("endpoint", &self.endpoint)
             .field("x_token", &self.x_token.as_ref().map(|_| "<redacted>"))
             .field("harmonic_regions", &self.harmonic_regions)
+            .field("bam_regions", &self.bam_regions)
             .field("timeout", &self.timeout)
             .finish()
     }
 }
-
-fn default_endpoint() -> String { DEFAULT_ENDPOINT.to_string() }
-
-fn default_timeout() -> u64 { DEFAULT_TIMEOUT_SECS }
 
 #[cfg(test)]
 mod tests {
     use clap::{Args, ValueEnum};
     use triton_preconfs_proto::preconfs;
 
-    use super::{HarmonicRegion, PreconfConfig};
+    use super::{BamRegion, HarmonicRegion, PreconfConfig};
 
     /// The help text shows the env var name for the token, never its value.
     #[test]
@@ -105,8 +161,20 @@ mod tests {
             }
         }
 
+        check("BAM_REGION", |r: BamRegion| {
+            preconfs::BamRegion::from(r).as_str_name()
+        });
         check("HARMONIC_REGION", |r: HarmonicRegion| {
             preconfs::HarmonicRegion::from(r).as_str_name()
         });
+    }
+
+    /// A BAM-only token sets only `bam-regions`, so `harmonic-regions` must stay optional.
+    #[test]
+    fn a_table_with_only_bam_regions_parses() {
+        let config: PreconfConfig = serde_json::from_str(r#"{"bam-regions": ["fra"]}"#).unwrap();
+
+        assert!(config.harmonic_regions.is_empty());
+        assert_eq!(config.bam_regions, [BamRegion::Fra]);
     }
 }
