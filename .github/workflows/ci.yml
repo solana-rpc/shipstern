@@ -12,6 +12,10 @@ on:
       - "main"
   workflow_dispatch:
 
+# No job writes to the repo, so the token gets read access only.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
