@@ -1,0 +1,38 @@
+name: advisories
+
+# A new RustSec advisory lands about weekly. On a pull request it is an
+# annotation, not a red check, so unrelated PRs stay green. The push run on
+# main and the daily run stay red until the bump PR lands.
+on:
+  pull_request:
+    paths:
+      - "**/Cargo.lock"
+      - "**/Cargo.toml"
+      - "deny.toml"
+      - ".github/workflows/advisories.yml"
+  push:
+    branches:
+      - "main"
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  advisories:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cargo deny check advisories
+        uses: EmbarkStudios/cargo-deny-action@v2
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        with:
+          command: check advisories
+
+      # The events test workspace has its own lock. The fmt job never checked it.
+      - name: cargo deny check advisories bans (events lock)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        with:
+          manifest-path: tests/proc-macro-events/Cargo.toml
+          command: check advisories bans
