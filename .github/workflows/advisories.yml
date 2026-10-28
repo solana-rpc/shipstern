@@ -17,6 +17,10 @@ on:
     - cron: "17 6 * * *"
   workflow_dispatch:
 
+# The job only reads the repo and the advisory database.
+permissions:
+  contents: read
+
 jobs:
   advisories:
     runs-on: ubuntu-24.04
