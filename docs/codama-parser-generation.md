@@ -102,6 +102,12 @@ changing it will not affect the generated parser.
 Ignored: `pdas` and `docs` are not read at all. `errors` is only normalised on load, where a
 string `"code": "6000"` is coerced to a number; it is never rendered into the parser.
 
+A trailing run of required accounts with fixed public-key defaults may be omitted, even
+when extra accounts follow it. The parser consumes a trailing fixed account only when
+the next key matches its default; otherwise it fills the default without consuming a key.
+Unconsumed keys stay in `remaining_accounts` in order. Filled addresses come from the IDL,
+not the transaction. Accounts before that fixed tail keep their positional interpretation.
+
 ### Discriminators
 
 Instructions and accounts do not accept the same discriminator kinds.
