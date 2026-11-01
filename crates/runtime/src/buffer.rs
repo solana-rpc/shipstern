@@ -164,7 +164,8 @@ async fn run_job(pipelines: &PipelineSets, job: Job) {
                 .instrument(tracing::info_span!("shipstern.process.slot"))
                 .await;
         },
-        UpdateOneof::Ping(SubscribeUpdatePing {}) => (),
+        UpdateOneof::Ping(_) => (),
+        UpdateOneof::Pong(_) => (),
         var => warn!(?var, "Unknown update variant"),
     }
 }
