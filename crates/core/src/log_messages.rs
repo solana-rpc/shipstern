@@ -2,6 +2,7 @@
 //! to individual instructions.
 
 use super::instruction::InstructionUpdate;
+use crate::Pubkey;
 
 /// Structural shape of a Solana log line. Matching is on the line's structure,
 /// not substrings, so a `Program log:` payload containing `invoke [2]` is `Other`.
@@ -76,8 +77,24 @@ pub(crate) fn assign_log_messages(logs: &[String], outer: &mut [InstructionUpdat
     let mut cursor = 0;
 
     for ix in outer.iter_mut() {
+        // A precompile runs without an invoke line, so an outer instruction only
+        // takes the next invoke line if that line names its program.
+        let named = find_invoke(logs, cursor).and_then(|pos| invoked_program(&logs[pos]));
+        if named != Some(ix.program) {
+            continue;
+        }
+
         cursor = assign_logs_recursive(logs, cursor, ix);
     }
+}
+
+/// The program that a `Program <pubkey> invoke [<n>]` line names.
+fn invoked_program(line: &str) -> Option<Pubkey> {
+    line.strip_prefix("Program ")?
+        .split_once(' ')?
+        .0
+        .parse()
+        .ok()
 }
 
 /// Recursively assign log lines to an instruction and its inner instructions.
@@ -139,8 +156,9 @@ fn find_invoke(logs: &[String], start: usize) -> Option<usize> {
 ///
 /// Split transaction logs by outer instruction index.
 ///
-/// Returns a vec where entry `i` contains the log lines for outer instruction `i`
-/// (from its `Program ... invoke [1]` through its `Program ... success`/`failed`).
+/// Returns one entry per `Program ... invoke [1]` line, from that line through
+/// its `Program ... success`/`failed`. A precompile writes no lines, so entry `i`
+/// is not always outer instruction `i`.
 ///
 #[must_use]
 pub fn split_logs_by_outer_ix(logs: &[String]) -> Vec<Vec<String>> {
@@ -191,13 +209,13 @@ mod tests {
     #[test]
     fn test_assign_log_messages() {
         let logs: Vec<String> = vec![
-            "Program ABC invoke [1]",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
             "Program log: outer hello",
             "Program DEF invoke [2]",
             "Program log: inner hello",
             "Program DEF success",
-            "Program ABC consumed 5000 units",
-            "Program ABC success",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi consumed 5000 units",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
         ]
         .into_iter()
         .map(String::from)
@@ -231,8 +249,14 @@ mod tests {
 
         // Outer instruction gets all logs (invoke through success, inclusive)
         assert_eq!(outer[0].log_messages().len(), 7);
-        assert_eq!(outer[0].log_messages()[0], "Program ABC invoke [1]");
-        assert_eq!(outer[0].log_messages()[6], "Program ABC success");
+        assert_eq!(
+            outer[0].log_messages()[0],
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]"
+        );
+        assert_eq!(
+            outer[0].log_messages()[6],
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success"
+        );
 
         // Inner instruction gets its own slice
         assert_eq!(outer[0].inner[0].log_messages().len(), 3);
@@ -246,12 +270,12 @@ mod tests {
     #[test]
     fn test_assign_log_messages_multiple_outer() {
         let logs: Vec<String> = vec![
-            "Program ABC invoke [1]",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
             "Program log: first",
-            "Program ABC success",
-            "Program DEF invoke [1]",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
+            "Program 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR invoke [1]",
             "Program log: second",
-            "Program DEF success",
+            "Program 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR success",
         ]
         .into_iter()
         .map(String::from)
@@ -297,13 +321,13 @@ mod tests {
     #[test]
     fn direct_log_messages_excludes_inner_cpi_lines() {
         let logs: Vec<String> = vec![
-            "Program RAY invoke [1]",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
             "Program log: ray_log: swap-base-in",
             "Program TOKEN invoke [2]",
             "Program log: Instruction: Transfer",
             "Program TOKEN success",
             "Program log: ray_log: swap done",
-            "Program RAY success",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
         ]
         .into_iter()
         .map(String::from)
@@ -339,10 +363,10 @@ mod tests {
         assert_eq!(
             direct,
             vec![
-                "Program RAY invoke [1]",
+                "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
                 "Program log: ray_log: swap-base-in",
                 "Program log: ray_log: swap done",
-                "Program RAY success",
+                "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
             ],
             "direct_log_messages must skip inner CPI lines"
         );
@@ -365,11 +389,11 @@ mod tests {
     #[test]
     fn direct_log_messages_handles_failed_inner_cpi() {
         let logs: Vec<String> = vec![
-            "Program RAY invoke [1]",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
             "Program TOKEN invoke [2]",
             "Program TOKEN failed: custom error",
             "Program log: ray_log: recovering",
-            "Program RAY success",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
         ]
         .into_iter()
         .map(String::from)
@@ -402,9 +426,9 @@ mod tests {
 
         let direct: Vec<&str> = outer[0].direct_log_messages().collect();
         assert_eq!(direct, vec![
-            "Program RAY invoke [1]",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
             "Program log: ray_log: recovering",
-            "Program RAY success",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
         ]);
     }
 
@@ -412,10 +436,10 @@ mod tests {
     #[test]
     fn direct_log_messages_flat_ix_equals_log_messages() {
         let logs: Vec<String> = vec![
-            "Program SOLO invoke [1]",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
             "Program log: nothing nested here",
             "Program log: another line",
-            "Program SOLO success",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
         ]
         .into_iter()
         .map(String::from)
@@ -447,7 +471,7 @@ mod tests {
     #[test]
     fn direct_log_messages_filters_three_deep_cpi() {
         let logs: Vec<String> = vec![
-            "Program A invoke [1]",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
             "Program log: A start",
             "Program B invoke [2]",
             "Program log: B start",
@@ -457,7 +481,7 @@ mod tests {
             "Program log: B middle",
             "Program B success",
             "Program log: A end",
-            "Program A success",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
         ]
         .into_iter()
         .map(String::from)
@@ -498,10 +522,10 @@ mod tests {
 
         let direct: Vec<&str> = outer[0].direct_log_messages().collect();
         assert_eq!(direct, vec![
-            "Program A invoke [1]",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
             "Program log: A start",
             "Program log: A end",
-            "Program A success",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
         ]);
     }
 
@@ -510,12 +534,12 @@ mod tests {
     #[test]
     fn direct_log_messages_keeps_own_program_data_drops_inner() {
         let logs: Vec<String> = vec![
-            "Program OUTER invoke [1]",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
             "Program data: OUTER_PAYLOAD_BASE64==",
             "Program INNER invoke [2]",
             "Program data: INNER_PAYLOAD_BASE64==",
             "Program INNER success",
-            "Program OUTER success",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
         ]
         .into_iter()
         .map(String::from)
@@ -561,9 +585,9 @@ mod tests {
     #[test]
     fn direct_log_messages_keeps_program_return() {
         let logs: Vec<String> = vec![
-            "Program OUTER invoke [1]",
-            "Program return: OUTER 8fo2SxUAAAA=",
-            "Program OUTER success",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
+            "Program return: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi 8fo2SxUAAAA=",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
         ]
         .into_iter()
         .map(String::from)
@@ -588,9 +612,9 @@ mod tests {
 
         let direct: Vec<&str> = outer[0].direct_log_messages().collect();
         assert_eq!(direct, vec![
-            "Program OUTER invoke [1]",
-            "Program return: OUTER 8fo2SxUAAAA=",
-            "Program OUTER success",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
+            "Program return: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi 8fo2SxUAAAA=",
+            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
         ]);
     }
 
@@ -647,14 +671,21 @@ mod tests {
             ..InstructionShared::default()
         });
 
-        let mut outer = (0..3u8)
-            .map(|i| InstructionUpdate {
-                program: KeyBytes::new([i + 1; 32]),
+        let programs = [
+            "ComputeBudget111111111111111111111111111111",
+            "ComputeBudget111111111111111111111111111111",
+            "3ZZuTbwC6aJbvteyVxXUS7gtFYdf7AuXeitx6VyvjvUp",
+        ];
+        let mut outer = programs
+            .iter()
+            .zip(0u32..)
+            .map(|(program, i)| InstructionUpdate {
+                program: program.parse().unwrap(),
                 accounts: vec![],
                 data: vec![],
                 shared: Arc::clone(&shared),
                 inner: vec![],
-                path: Path::new_single(i.into()),
+                path: Path::new_single(i),
                 log_range: 0..0,
             })
             .collect::<Vec<_>>();
@@ -671,6 +702,58 @@ mod tests {
              units",
             "Program 3ZZuTbwC6aJbvteyVxXUS7gtFYdf7AuXeitx6VyvjvUp success",
         ]);
+    }
+
+    /// Mainnet tx
+    /// `2ncVUzCoYtDGmn2zWkBJ9n2x2vrPh3Wo3QtwyJV1bjPUBKF1DsZ3cPbXsyE9HbPNeaavmqz1gVhhXE9NB24Ey3mY`:
+    /// the Ed25519 precompile at index 2 writes no lines, so index 3 keeps its own.
+    #[test]
+    fn precompile_does_not_take_the_next_instruction_logs() {
+        let logs: Vec<String> = vec![
+            "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+            "Program ComputeBudget111111111111111111111111111111 success",
+            "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+            "Program ComputeBudget111111111111111111111111111111 success",
+            "Program FRMiX94PWHbndvySq8xyRx185GvPeggUeKaLmZgVdd4 invoke [1]",
+            "Program log: Instruction: ExecutionQueueV5CommitMarket",
+            "Program data: aFjH8A2ZyP0aL9ziadZV",
+            "Program FRMiX94PWHbndvySq8xyRx185GvPeggUeKaLmZgVdd4 consumed 11861 of 31700 compute \
+             units",
+            "Program FRMiX94PWHbndvySq8xyRx185GvPeggUeKaLmZgVdd4 success",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+        let shared = Arc::new(InstructionShared {
+            log_messages: logs.clone(),
+            ..InstructionShared::default()
+        });
+
+        let programs = [
+            "ComputeBudget111111111111111111111111111111",
+            "ComputeBudget111111111111111111111111111111",
+            "Ed25519SigVerify111111111111111111111111111",
+            "FRMiX94PWHbndvySq8xyRx185GvPeggUeKaLmZgVdd4",
+        ];
+        let mut outer = programs
+            .iter()
+            .zip(0u32..)
+            .map(|(program, i)| InstructionUpdate {
+                program: program.parse().unwrap(),
+                accounts: vec![],
+                data: vec![],
+                shared: Arc::clone(&shared),
+                inner: vec![],
+                path: Path::new_single(i),
+                log_range: 0..0,
+            })
+            .collect::<Vec<_>>();
+
+        assign_log_messages(&shared.log_messages, &mut outer);
+
+        assert!(outer[2].log_messages().is_empty());
+        assert_eq!(outer[3].log_range, 4..9);
     }
 
     /// Covers payloads that mimic invoke/close lines for every caller of the
