@@ -2,7 +2,7 @@ use codama_nodes::{DefinedTypeNode, NestedTypeNode, TypeNode};
 
 use crate::intermediate_representation::{
     helpers::{build_fields_ir, materialize_type},
-    FieldIr, OneofIr, OneofVariantIr, SchemaIr, TypeIr, TypeKindIr,
+    EnumTagIr, FieldIr, OneofIr, OneofVariantIr, SchemaIr, TypeIr, TypeKindIr,
 };
 
 /// Converts Codama `defined_types` into our internal Intermediate Representation (IR).
@@ -226,8 +226,36 @@ fn build_defined_type_enum(name: &str, en: &codama_nodes::EnumTypeNode, ir: &mut
         parent_message: enum_name,
         field_name: "kind".to_string(),
         variants,
-        kind: crate::intermediate_representation::OneofKindIr::Enum,
+        kind: crate::intermediate_representation::OneofKindIr::Enum(enum_tag(name, en)),
     });
+}
+
+/// The integer that holds the variant index on the wire, from `EnumTypeNode.size`.
+fn enum_tag(enum_name: &str, en: &codama_nodes::EnumTypeNode) -> EnumTagIr {
+    use codama_nodes::{Endianness, NestedTypeNodeTrait, NumberFormat as NF};
+
+    let size = en.size.get_nested_type_node();
+
+    let int_type = match size.format {
+        NF::U8 => "u8",
+        NF::U16 => "u16",
+        NF::U32 => "u32",
+        NF::U64 => "u64",
+        NF::U128 => "u128",
+        NF::I8 => "i8",
+        NF::I16 => "i16",
+        NF::I32 => "i32",
+        NF::I64 => "i64",
+        NF::I128 => "i128",
+        // shortU16 writes a value below 128 as one byte, the same as u8.
+        NF::ShortU16 if en.variants.len() <= 128 => "u8",
+        other => panic!("enum `{enum_name}`: tag format {other:?} is not supported"),
+    };
+
+    EnumTagIr {
+        int_type,
+        big_endian: size.endian == Endianness::Be,
+    }
 }
 
 /// Builds the payload fields for an enum variant (Empty / Tuple / Struct),

@@ -5,8 +5,8 @@ use quote::{format_ident, quote};
 use syn::LitStr;
 
 use crate::intermediate_representation::{
-    FieldIr, FieldTypeIr, LabelIr, OneofIr, OneofKindIr, OptionEncodingIr, OptionPrefixIr,
-    ScalarIr, TypeIr, TypeKindIr,
+    EnumTagIr, FieldIr, FieldTypeIr, LabelIr, OneofIr, OneofKindIr, OptionEncodingIr,
+    OptionPrefixIr, ScalarIr, TypeIr, TypeKindIr,
 };
 
 // Generated types derive `serde::Serialize`/`Deserialize` behind the `serde` feature flag.
@@ -124,8 +124,8 @@ pub fn rust_types_from_ir(schema_ir: &crate::intermediate_representation::Schema
                     "Event",
                 ));
             },
-            OneofKindIr::Enum => {
-                out.extend(render_enum_oneof(oneof));
+            OneofKindIr::Enum(tag) => {
+                out.extend(render_enum_oneof(oneof, &tag));
             },
         }
     }
@@ -349,8 +349,22 @@ fn render_dispatch(
 }
 
 /// Render user-defined enum oneofs: keeps the module wrapper pattern.
-fn render_enum_oneof(oneof_ir: &OneofIr) -> TokenStream {
+fn render_enum_oneof(oneof_ir: &OneofIr, tag: &EnumTagIr) -> TokenStream {
     let parent_ident = format_ident!("{}", oneof_ir.parent_message);
+    let tag_type = format_ident!("{}", tag.int_type);
+
+    // Borsh writes integers little-endian.
+    let (write_tag, read_tag) = if tag.big_endian {
+        (
+            quote! { disc.to_be_bytes() },
+            quote! { #tag_type::from_be_bytes(::borsh::BorshDeserialize::deserialize_reader(reader)?) },
+        )
+    } else {
+        (
+            quote! { disc },
+            quote! { ::borsh::BorshDeserialize::deserialize_reader(reader)? },
+        )
+    };
     let mod_ident = format_ident!("{}", crate::utils::to_snake_case(&oneof_ir.parent_message));
     let oneof_ident = format_ident!("Kind");
     let field_ident = format_ident!("{}", oneof_ir.field_name);
@@ -374,19 +388,20 @@ fn render_enum_oneof(oneof_ir: &OneofIr) -> TokenStream {
     });
 
     let borsh_serialize_arms = oneof_ir.variants.iter().enumerate().map(|(i, v)| {
-        let disc = i as u8;
+        let disc = proc_macro2::Literal::usize_unsuffixed(i);
         let v_ident = format_ident!("{}", v.variant_name);
 
         quote! {
             #mod_ident::#oneof_ident::#v_ident(v) => {
-                ::borsh::BorshSerialize::serialize(&#disc, writer)?;
+                let disc: #tag_type = #disc;
+                ::borsh::BorshSerialize::serialize(&#write_tag, writer)?;
                 ::borsh::BorshSerialize::serialize(v, writer)
             }
         }
     });
 
     let borsh_deserialize_arms = oneof_ir.variants.iter().enumerate().map(|(i, v)| {
-        let disc = i as u8;
+        let disc = proc_macro2::Literal::usize_unsuffixed(i);
         let v_ident = format_ident!("{}", v.variant_name);
 
         quote! {
@@ -477,7 +492,7 @@ fn render_enum_oneof(oneof_ir: &OneofIr) -> TokenStream {
             fn deserialize_reader<R: ::borsh::io::Read>(
                 reader: &mut R
             ) -> ::core::result::Result<Self, ::borsh::io::Error> {
-                let disc: u8 = ::borsh::BorshDeserialize::deserialize_reader(reader)?;
+                let disc: #tag_type = #read_tag;
 
                 let #field_ident = match disc {
                     #(#borsh_deserialize_arms,)*

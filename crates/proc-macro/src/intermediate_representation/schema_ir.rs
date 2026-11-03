@@ -182,7 +182,15 @@ pub enum OneofKindIr {
     /// The top-level event dispatcher (e.g. ProgramEvents { oneof event { ... } })
     EventDispatch,
     /// A user-defined enum (e.g. OrderType { oneof kind { ... } })
-    Enum,
+    Enum(EnumTagIr),
+}
+
+/// How a user-defined enum writes its variant index (Codama `EnumTypeNode.size`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnumTagIr {
+    /// Rust integer type of the tag, `u8` by default.
+    pub int_type: &'static str,
+    pub big_endian: bool,
 }
 
 #[derive(Debug, Clone)]
