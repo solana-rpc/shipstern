@@ -206,20 +206,28 @@ mod tests {
         KeyBytes,
     };
 
+    /// Test logs name the outer programs `P1` and `P2`; the rule needs their real base58 keys.
+    fn log_lines(lines: &[&str]) -> Vec<String> {
+        let p1 = KeyBytes::<32>::new([1; 32]).to_string();
+        let p2 = KeyBytes::<32>::new([2; 32]).to_string();
+
+        lines
+            .iter()
+            .map(|line| line.replace("P1", &p1).replace("P2", &p2))
+            .collect()
+    }
+
     #[test]
     fn test_assign_log_messages() {
-        let logs: Vec<String> = vec![
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
+        let logs = log_lines(&[
+            "Program P1 invoke [1]",
             "Program log: outer hello",
             "Program DEF invoke [2]",
             "Program log: inner hello",
             "Program DEF success",
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi consumed 5000 units",
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
+            "Program P1 consumed 5000 units",
+            "Program P1 success",
+        ]);
 
         let shared = Arc::new(InstructionShared {
             log_messages: logs.clone(),
@@ -249,14 +257,8 @@ mod tests {
 
         // Outer instruction gets all logs (invoke through success, inclusive)
         assert_eq!(outer[0].log_messages().len(), 7);
-        assert_eq!(
-            outer[0].log_messages()[0],
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]"
-        );
-        assert_eq!(
-            outer[0].log_messages()[6],
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success"
-        );
+        assert_eq!(outer[0].log_messages()[0], logs[0]);
+        assert_eq!(outer[0].log_messages()[6], logs[6]);
 
         // Inner instruction gets its own slice
         assert_eq!(outer[0].inner[0].log_messages().len(), 3);
@@ -269,17 +271,14 @@ mod tests {
 
     #[test]
     fn test_assign_log_messages_multiple_outer() {
-        let logs: Vec<String> = vec![
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
+        let logs = log_lines(&[
+            "Program P1 invoke [1]",
             "Program log: first",
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
-            "Program 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR invoke [1]",
+            "Program P1 success",
+            "Program P2 invoke [1]",
             "Program log: second",
-            "Program 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR success",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
+            "Program P2 success",
+        ]);
 
         let shared = Arc::new(InstructionShared {
             log_messages: logs.clone(),
@@ -320,18 +319,15 @@ mod tests {
     /// see lines from inner CPIs.
     #[test]
     fn direct_log_messages_excludes_inner_cpi_lines() {
-        let logs: Vec<String> = vec![
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
+        let logs = log_lines(&[
+            "Program P1 invoke [1]",
             "Program log: ray_log: swap-base-in",
             "Program TOKEN invoke [2]",
             "Program log: Instruction: Transfer",
             "Program TOKEN success",
             "Program log: ray_log: swap done",
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
+            "Program P1 success",
+        ]);
 
         let shared = Arc::new(InstructionShared {
             log_messages: logs.clone(),
@@ -362,12 +358,12 @@ mod tests {
 
         assert_eq!(
             direct,
-            vec![
-                "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
+            log_lines(&[
+                "Program P1 invoke [1]",
                 "Program log: ray_log: swap-base-in",
                 "Program log: ray_log: swap done",
-                "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
-            ],
+                "Program P1 success",
+            ]),
             "direct_log_messages must skip inner CPI lines"
         );
 
@@ -388,16 +384,13 @@ mod tests {
     /// must be visible.
     #[test]
     fn direct_log_messages_handles_failed_inner_cpi() {
-        let logs: Vec<String> = vec![
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
+        let logs = log_lines(&[
+            "Program P1 invoke [1]",
             "Program TOKEN invoke [2]",
             "Program TOKEN failed: custom error",
             "Program log: ray_log: recovering",
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
+            "Program P1 success",
+        ]);
 
         let shared = Arc::new(InstructionShared {
             log_messages: logs.clone(),
@@ -425,25 +418,25 @@ mod tests {
         assign_log_messages(&shared.log_messages, &mut outer);
 
         let direct: Vec<&str> = outer[0].direct_log_messages().collect();
-        assert_eq!(direct, vec![
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
-            "Program log: ray_log: recovering",
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
-        ]);
+        assert_eq!(
+            direct,
+            log_lines(&[
+                "Program P1 invoke [1]",
+                "Program log: ray_log: recovering",
+                "Program P1 success",
+            ])
+        );
     }
 
     /// With no inner CPIs, `direct_log_messages()` equals `log_messages()`.
     #[test]
     fn direct_log_messages_flat_ix_equals_log_messages() {
-        let logs: Vec<String> = vec![
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
+        let logs = log_lines(&[
+            "Program P1 invoke [1]",
             "Program log: nothing nested here",
             "Program log: another line",
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
+            "Program P1 success",
+        ]);
 
         let shared = Arc::new(InstructionShared {
             log_messages: logs.clone(),
@@ -470,8 +463,8 @@ mod tests {
     /// A -> B -> C: A's direct view skips every line while B or C is on the stack.
     #[test]
     fn direct_log_messages_filters_three_deep_cpi() {
-        let logs: Vec<String> = vec![
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
+        let logs = log_lines(&[
+            "Program P1 invoke [1]",
             "Program log: A start",
             "Program B invoke [2]",
             "Program log: B start",
@@ -481,11 +474,8 @@ mod tests {
             "Program log: B middle",
             "Program B success",
             "Program log: A end",
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
+            "Program P1 success",
+        ]);
 
         let shared = Arc::new(InstructionShared {
             log_messages: logs.clone(),
@@ -521,29 +511,29 @@ mod tests {
         assign_log_messages(&shared.log_messages, &mut outer);
 
         let direct: Vec<&str> = outer[0].direct_log_messages().collect();
-        assert_eq!(direct, vec![
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
-            "Program log: A start",
-            "Program log: A end",
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
-        ]);
+        assert_eq!(
+            direct,
+            log_lines(&[
+                "Program P1 invoke [1]",
+                "Program log: A start",
+                "Program log: A end",
+                "Program P1 success",
+            ])
+        );
     }
 
     /// An outer ix keeps its own `Program data:` and drops an inner CPI's, which
     /// Anchor-event handlers rely on.
     #[test]
     fn direct_log_messages_keeps_own_program_data_drops_inner() {
-        let logs: Vec<String> = vec![
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
+        let logs = log_lines(&[
+            "Program P1 invoke [1]",
             "Program data: OUTER_PAYLOAD_BASE64==",
             "Program INNER invoke [2]",
             "Program data: INNER_PAYLOAD_BASE64==",
             "Program INNER success",
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
+            "Program P1 success",
+        ]);
 
         let shared = Arc::new(InstructionShared {
             log_messages: logs.clone(),
@@ -584,14 +574,11 @@ mod tests {
     /// `Program return:` lines sit just before `success` at depth 1 and are kept.
     #[test]
     fn direct_log_messages_keeps_program_return() {
-        let logs: Vec<String> = vec![
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
-            "Program return: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi 8fo2SxUAAAA=",
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
+        let logs = log_lines(&[
+            "Program P1 invoke [1]",
+            "Program return: P1 8fo2SxUAAAA=",
+            "Program P1 success",
+        ]);
 
         let shared = Arc::new(InstructionShared {
             log_messages: logs.clone(),
@@ -611,11 +598,14 @@ mod tests {
         assign_log_messages(&shared.log_messages, &mut outer);
 
         let direct: Vec<&str> = outer[0].direct_log_messages().collect();
-        assert_eq!(direct, vec![
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi invoke [1]",
-            "Program return: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi 8fo2SxUAAAA=",
-            "Program 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi success",
-        ]);
+        assert_eq!(
+            direct,
+            log_lines(&[
+                "Program P1 invoke [1]",
+                "Program return: P1 8fo2SxUAAAA=",
+                "Program P1 success",
+            ])
+        );
     }
 
     /// Regression for tx
