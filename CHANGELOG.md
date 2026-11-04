@@ -13,7 +13,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- `shipstern-core`: a top-level Ed25519, Secp256k1 or Secp256r1 precompile no longer takes the next instruction's logs. Precompiles log nothing, so every later instruction was shifted onto its neighbour's slice, `InstructionUpdate::log_messages` returned another program's lines, and the last instruction got none (by @nicolasbaum).
+- `shipstern-core`: a top-level Ed25519, Secp256k1 or Secp256r1 precompile no longer takes the next instruction's logs. Precompiles log nothing, so every later instruction was shifted onto its neighbour's slice, `InstructionUpdate::log_messages` returned another program's lines, and the last instruction got none ([#379](https://github.com/solana-rpc/shipstern/pull/379) by @nicolasbaum).
 
 ## [0.12.0] - 2026-10-11
 
