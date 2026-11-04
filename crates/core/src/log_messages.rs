@@ -2,6 +2,27 @@
 //! to individual instructions.
 
 use super::instruction::InstructionUpdate;
+use crate::{KeyBytes, Pubkey};
+
+/// Signature-verification precompiles. The runtime runs them without an
+/// `invoke` log line, so they own no slice of the transaction logs.
+const PRECOMPILES: [Pubkey; 3] = [
+    // Ed25519SigVerify111111111111111111111111111
+    KeyBytes([
+        3, 125, 70, 214, 124, 147, 251, 190, 18, 249, 66, 143, 131, 141, 64, 255, 5, 112, 116, 73,
+        39, 244, 138, 100, 252, 202, 112, 68, 128, 0, 0, 0,
+    ]),
+    // KeccakSecp256k11111111111111111111111111111
+    KeyBytes([
+        4, 198, 252, 32, 240, 80, 204, 240, 85, 132, 215, 33, 28, 159, 140, 245, 158, 193, 71, 133,
+        187, 22, 106, 30, 40, 48, 232, 18, 32, 0, 0, 0,
+    ]),
+    // Secp256r1SigVerify1111111111111111111111111
+    KeyBytes([
+        6, 146, 13, 236, 47, 234, 113, 181, 183, 35, 129, 77, 116, 45, 169, 3, 28, 131, 231, 95,
+        219, 121, 93, 86, 142, 117, 71, 128, 32, 0, 0, 0,
+    ]),
+];
 
 /// Structural shape of a Solana log line. Matching is on the line's structure,
 /// not substrings, so a `Program log:` payload containing `invoke [2]` is `Other`.
@@ -76,6 +97,12 @@ pub(crate) fn assign_log_messages(logs: &[String], outer: &mut [InstructionUpdat
     let mut cursor = 0;
 
     for ix in outer.iter_mut() {
+        // Handing a precompile the next `invoke` would shift every later
+        // instruction onto its neighbour's logs and leave the last one empty.
+        if PRECOMPILES.contains(&ix.program) {
+            continue;
+        }
+
         cursor = assign_logs_recursive(logs, cursor, ix);
     }
 }
@@ -290,6 +317,61 @@ mod tests {
 
         assert_eq!(outer[1].log_messages().len(), 3);
         assert_eq!(outer[1].log_messages()[1], "Program log: second");
+    }
+
+    /// A top-level precompile logs nothing, so it must not take the next
+    /// instruction's `invoke`: that shifts every later instruction by one.
+    #[test]
+    fn precompile_does_not_shift_later_instructions() {
+        let logs: Vec<String> = vec![
+            "Program APP invoke [1]",
+            "Program APP success",
+            "Program AGG invoke [1]",
+            "Program AMM invoke [2]",
+            "Program log: Instruction: Swap",
+            "Program AMM success",
+            "Program AGG success",
+            "Program APP invoke [1]",
+            "Program log: last",
+            "Program APP success",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+        let shared = Arc::new(InstructionShared {
+            log_messages: logs.clone(),
+            ..InstructionShared::default()
+        });
+
+        let ix = |program: Pubkey, path: Path, inner: Vec<InstructionUpdate>| InstructionUpdate {
+            program,
+            accounts: vec![],
+            data: vec![],
+            shared: Arc::clone(&shared),
+            inner,
+            path,
+            log_range: 0..0,
+        };
+
+        let mut outer = vec![
+            ix(PRECOMPILES[0], Path::new_single(0), vec![]),
+            ix(KeyBytes::new([1; 32]), Path::new_single(1), vec![]),
+            ix(KeyBytes::new([2; 32]), Path::new_single(2), vec![ix(
+                KeyBytes::new([3; 32]),
+                Path::from(vec![2, 0]),
+                vec![],
+            )]),
+            ix(KeyBytes::new([1; 32]), Path::new_single(3), vec![]),
+        ];
+
+        assign_log_messages(&shared.log_messages, &mut outer);
+
+        assert!(outer[0].log_range.is_empty());
+        assert_eq!(outer[1].log_range, 0..2);
+        assert_eq!(outer[2].log_range, 2..7);
+        assert_eq!(outer[2].inner[0].log_range, 3..6);
+        assert_eq!(outer[3].log_range, 7..10);
     }
 
     /// Regression for #186: a handler asking for its own program's logs must not
