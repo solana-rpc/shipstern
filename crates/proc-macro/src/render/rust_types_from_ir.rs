@@ -348,13 +348,36 @@ fn render_dispatch(
     }
 }
 
+/// The Rust integer that holds an enum's variant index on the wire.
+fn enum_tag_type(tag: &EnumTagIr, enum_name: &str, variant_count: usize) -> proc_macro2::Ident {
+    use codama_nodes::NumberFormat as NF;
+
+    let int_type = match tag.format {
+        NF::U8 => "u8",
+        NF::U16 => "u16",
+        NF::U32 => "u32",
+        NF::U64 => "u64",
+        NF::U128 => "u128",
+        NF::I8 => "i8",
+        NF::I16 => "i16",
+        NF::I32 => "i32",
+        NF::I64 => "i64",
+        NF::I128 => "i128",
+        // shortU16 writes a value below 128 as one byte, the same as u8.
+        NF::ShortU16 if variant_count <= 128 => "u8",
+        other => panic!("enum `{enum_name}`: tag format {other:?} is not supported"),
+    };
+
+    format_ident!("{int_type}")
+}
+
 /// Render user-defined enum oneofs: keeps the module wrapper pattern.
 fn render_enum_oneof(oneof_ir: &OneofIr, tag: &EnumTagIr) -> TokenStream {
     let parent_ident = format_ident!("{}", oneof_ir.parent_message);
-    let tag_type = format_ident!("{}", tag.int_type);
+    let tag_type = enum_tag_type(tag, &oneof_ir.parent_message, oneof_ir.variants.len());
 
     // Borsh writes integers little-endian.
-    let (write_tag, read_tag) = if tag.big_endian {
+    let (write_tag, read_tag) = if tag.endian == codama_nodes::Endianness::Be {
         (
             quote! { disc.to_be_bytes() },
             quote! { #tag_type::from_be_bytes(::borsh::BorshDeserialize::deserialize_reader(reader)?) },

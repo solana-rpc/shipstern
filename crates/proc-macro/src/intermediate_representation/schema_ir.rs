@@ -188,9 +188,8 @@ pub enum OneofKindIr {
 /// How a user-defined enum writes its variant index (Codama `EnumTypeNode.size`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EnumTagIr {
-    /// Rust integer type of the tag, `u8` by default.
-    pub int_type: &'static str,
-    pub big_endian: bool,
+    pub format: codama_nodes::NumberFormat,
+    pub endian: codama_nodes::Endianness,
 }
 
 #[derive(Debug, Clone)]
