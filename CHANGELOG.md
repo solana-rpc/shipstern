@@ -13,7 +13,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- `shipstern-proc-macro`: generated parsers read and write an enum tag at the width that Codama `EnumTypeNode.size` gives, so the System nonce account (`u32` tags) decodes ([#378](https://github.com/solana-rpc/shipstern/pull/378) by @senzenn).
+- `shipstern-proc-macro`: generated parsers read and write an enum tag with the width and byte order that Codama `EnumTypeNode.size` gives, so the System nonce account (`u32` tags) decodes ([#378](https://github.com/solana-rpc/shipstern/pull/378) by @senzenn).
 
 ## [0.12.0] - 2026-10-11
 

@@ -365,6 +365,10 @@ fn enum_tag_type(tag: &EnumTagIr, enum_name: &str, variant_count: usize) -> proc
         NF::I128 => "i128",
         // shortU16 writes a value below 128 as one byte, the same as u8.
         NF::ShortU16 if variant_count <= 128 => "u8",
+        NF::ShortU16 => panic!(
+            "enum `{enum_name}`: a shortU16 tag with {variant_count} variants (over 128) is not \
+             supported"
+        ),
         other => panic!("enum `{enum_name}`: tag format {other:?} is not supported"),
     };
 
@@ -411,7 +415,7 @@ fn render_enum_oneof(oneof_ir: &OneofIr, tag: &EnumTagIr) -> TokenStream {
     });
 
     let borsh_serialize_arms = oneof_ir.variants.iter().enumerate().map(|(i, v)| {
-        let disc = proc_macro2::Literal::usize_unsuffixed(i);
+        let disc = crate::utils::unsuffixed(i as u64);
         let v_ident = format_ident!("{}", v.variant_name);
 
         quote! {
@@ -424,7 +428,7 @@ fn render_enum_oneof(oneof_ir: &OneofIr, tag: &EnumTagIr) -> TokenStream {
     });
 
     let borsh_deserialize_arms = oneof_ir.variants.iter().enumerate().map(|(i, v)| {
-        let disc = proc_macro2::Literal::usize_unsuffixed(i);
+        let disc = crate::utils::unsuffixed(i as u64);
         let v_ident = format_ident!("{}", v.variant_name);
 
         quote! {
