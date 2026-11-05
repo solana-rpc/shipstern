@@ -10,7 +10,7 @@ readme = "./../../README.md"
 
 [dependencies]
 bincode = { workspace = true }
-prost = { workspace = true, optional = true }
+prost = { workspace = true }
 prost-types = { workspace = true, optional = true }
 solana-loader-v3-interface = { workspace = true }
 solana-sdk-ids = { workspace = true }
@@ -25,7 +25,6 @@ thiserror.workspace = true
 [features]
 default = ["proto"]
 proto = [
-  "dep:prost",
   "dep:prost-types",
   "dep:shipstern-proto",
   "shipstern-core/proto",

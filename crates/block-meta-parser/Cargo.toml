@@ -14,7 +14,7 @@ authors.workspace = true
 yellowstone-grpc-proto = { workspace = true }
 shipstern-core = { workspace = true }
 shipstern-proc-macro = { workspace = true }
-prost = { workspace = true, optional = true }
+prost = { workspace = true }
 prost-types = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -23,4 +23,4 @@ tokio.workspace = true
 
 [features]
 default = []
-proto = ["dep:prost", "dep:prost-types", "shipstern-core/proto", "shipstern-proc-macro/proto"]
+proto = ["dep:prost-types", "shipstern-core/proto", "shipstern-proc-macro/proto"]

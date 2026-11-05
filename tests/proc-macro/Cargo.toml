@@ -10,8 +10,7 @@ serde = ["dep:serde"]
 
 # Workspace feature-unification workaround
 #
-# Parser crates have `default = []` so external consumers can opt out of
-# protobuf support.  But inside this workspace, any workspace-wide command
+# Inside this workspace, any workspace-wide command
 # (`cargo check --workspace`, `cargo build`, `cargo test`) builds all crates
 # in a shared dependency graph where Cargo unifies features: if *any* crate
 # enables a feature, *all* crates see it enabled.
@@ -21,12 +20,11 @@ serde = ["dep:serde"]
 # once for the whole workspace, enabling `shipstern-proc-macro/proto`
 # from any crate (e.g. examples/prometheus) causes every `#[shipstern]` expansion
 # to emit prost derives — even for parser crates whose own `proto` feature is
-# off.  Those crates then fail because they don't have prost as a dependency.
+# off.
 #
 # Adding every parser here with `features = ["proto"]` ensures proto is
 # activated on all of them during workspace builds, matching what the
-# proc-macro emits.  External consumers are unaffected — they get their own
-# isolated dependency graph.
+# proc-macro emits.
 #
 # These must be [dependencies], not [dev-dependencies], because resolver v2
 # does not unify dev-dependency features during `cargo check --workspace`.
