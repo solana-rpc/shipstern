@@ -1,9 +1,8 @@
+use borsh::BorshDeserialize;
 use shipstern_core::{AccountUpdate, ParseError, ParseResult, Parser, Prefilter, ProgramParser};
 use shipstern_proc_macro::shipstern;
-use spl_stake_pool::{
-    solana_program::{borsh1::try_from_slice_unchecked, program_error},
-    state::{StakePool, ValidatorList},
-};
+use solana_program_error::ProgramError;
+use spl_stake_pool::state::{StakePool, ValidatorList};
 
 #[shipstern]
 #[derive(Clone, PartialEq)]
@@ -55,14 +54,15 @@ impl NativeStakePoolState {
             .first()
             .ok_or_else(|| ParseError::from("Empty account data".to_owned()))?;
 
+        // Read a prefix only: the account can be larger than the struct.
         match first_byte {
             0 => Err(ParseError::from("Uninitialized Account".to_owned())),
             1 => {
-                let stake_pool = try_from_slice_unchecked::<StakePool>(data_bytes)?;
+                let stake_pool = StakePool::deserialize(&mut &*data_bytes)?;
                 Ok(NativeStakePoolState::StakePool(stake_pool))
             },
             2 => {
-                let validator_list = try_from_slice_unchecked::<ValidatorList>(data_bytes)?;
+                let validator_list = ValidatorList::deserialize(&mut &*data_bytes)?;
                 Ok(NativeStakePoolState::ValidatorList(validator_list))
             },
             _ => Err(ParseError::from("Invalid Account".to_owned())),
@@ -97,7 +97,7 @@ impl NativeStakePoolState {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct AccountParser;
 
 impl Parser for AccountParser {
@@ -114,10 +114,7 @@ impl Parser for AccountParser {
     }
 
     async fn parse(&self, acct: &AccountUpdate) -> ParseResult<Self::Output> {
-        let inner = acct
-            .account
-            .as_ref()
-            .ok_or(program_error::ProgramError::InvalidArgument)?;
+        let inner = acct.account.as_ref().ok_or(ProgramError::InvalidArgument)?;
         NativeStakePoolState::try_unpack_proto(&inner.data)
     }
 }
@@ -125,4 +122,38 @@ impl Parser for AccountParser {
 impl ProgramParser for AccountParser {
     #[inline]
     fn program_id(&self) -> shipstern_core::Pubkey { spl_stake_pool::ID.to_bytes().into() }
+}
+
+#[cfg(test)]
+mod tests {
+    use shipstern_mock::account_fixture;
+
+    use super::{spl_stake_pool_program_state::State, AccountParser, NativeStakePoolState, Parser};
+
+    /// The JitoSOL pool account is 611 bytes, but its Borsh data ends at byte 435, so the decode
+    /// must read a prefix only.
+    #[tokio::test]
+    async fn stake_pool_account_decodes() {
+        let parser = AccountParser;
+        let state = account_fixture!("Jito4APyf642JPZPx3hGc6WWJ8zPKtRbRs4P815Awbb", &parser);
+        let Some(State::StakePool(account)) = state.state else {
+            panic!("not a stake pool account");
+        };
+        let NativeStakePoolState::StakePool(pool) =
+            NativeStakePoolState::try_unpack(&account.data).unwrap()
+        else {
+            panic!("not a stake pool");
+        };
+
+        assert_eq!(
+            pool.pool_mint.to_string(),
+            "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn"
+        );
+    }
+
+    /// A `Runtime` only accepts a parser that implements `Debug`.
+    #[test]
+    fn parsers_implement_debug() {
+        let _ = format!("{AccountParser:?} {:?}", crate::InstructionParser);
+    }
 }

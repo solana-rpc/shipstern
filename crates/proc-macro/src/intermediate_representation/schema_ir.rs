@@ -182,7 +182,14 @@ pub enum OneofKindIr {
     /// The top-level event dispatcher (e.g. ProgramEvents { oneof event { ... } })
     EventDispatch,
     /// A user-defined enum (e.g. OrderType { oneof kind { ... } })
-    Enum,
+    Enum(EnumTagIr),
+}
+
+/// How a user-defined enum writes its variant index (Codama `EnumTypeNode.size`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnumTagIr {
+    pub format: codama_nodes::NumberFormat,
+    pub endian: codama_nodes::Endianness,
 }
 
 #[derive(Debug, Clone)]

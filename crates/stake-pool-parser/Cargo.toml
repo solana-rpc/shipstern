@@ -8,17 +8,15 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-spl-pod = { workspace = true }
 spl-stake-pool = { workspace = true, features = ["no-entrypoint"] }
+solana-program-error = { workspace = true }
 shipstern-core = { workspace = true }
 shipstern-proc-macro = { workspace = true }
 shipstern-parser = { workspace = true }
 shipstern-proto = { workspace = true, features = [
   "parser",
 ], optional = true }
-thiserror.workspace = true
 borsh.workspace = true
-bs58.workspace = true
 prost = { workspace = true }
 prost-types = { workspace = true, optional = true }
 

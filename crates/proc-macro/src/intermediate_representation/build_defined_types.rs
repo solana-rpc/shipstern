@@ -2,7 +2,7 @@ use codama_nodes::{DefinedTypeNode, NestedTypeNode, TypeNode};
 
 use crate::intermediate_representation::{
     helpers::{build_fields_ir, materialize_type},
-    FieldIr, OneofIr, OneofVariantIr, SchemaIr, TypeIr, TypeKindIr,
+    EnumTagIr, FieldIr, OneofIr, OneofVariantIr, SchemaIr, TypeIr, TypeKindIr,
 };
 
 /// Converts Codama `defined_types` into our internal Intermediate Representation (IR).
@@ -198,6 +198,16 @@ fn build_defined_type_enum(name: &str, en: &codama_nodes::EnumTypeNode, ir: &mut
     let mut variants = Vec::with_capacity(en.variants.len());
 
     for (i, variant) in en.variants.iter().enumerate() {
+        // The wire tag is the variant position. An explicit value would decode a wrong variant.
+        let explicit = match variant {
+            codama_nodes::EnumVariantTypeNode::Empty(v) => v.discriminator,
+            codama_nodes::EnumVariantTypeNode::Struct(v) => v.discriminator,
+            codama_nodes::EnumVariantTypeNode::Tuple(v) => v.discriminator,
+        };
+        if let Some(value) = explicit.filter(|&value| value as usize != i) {
+            panic!("enum `{name}`: variant {i} has an explicit discriminator {value}");
+        }
+
         let tag = (i + 1) as u32;
 
         let (variant_name, payload_fields) = build_enum_variant_payload(&enum_name, variant, ir);
@@ -222,11 +232,18 @@ fn build_defined_type_enum(name: &str, en: &codama_nodes::EnumTypeNode, ir: &mut
         kind: TypeKindIr::DefinedType,
     });
 
+    let NestedTypeNode::Value(size) = &en.size else {
+        panic!("enum `{name}`: a wrapped tag size is not supported");
+    };
+
     ir.oneofs.push(OneofIr {
         parent_message: enum_name,
         field_name: "kind".to_string(),
         variants,
-        kind: crate::intermediate_representation::OneofKindIr::Enum,
+        kind: crate::intermediate_representation::OneofKindIr::Enum(EnumTagIr {
+            format: size.format,
+            endian: size.endian,
+        }),
     });
 }
 
@@ -301,4 +318,40 @@ fn build_tuple_payload_fields(
     }
 
     fields
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn enum_idl(discriminator: &str) -> codama_nodes::EnumTypeNode {
+        let json = format!(
+            r#"{{"kind":"enumTypeNode","variants":[
+                {{"kind":"enumEmptyVariantTypeNode","name":"a"}},
+                {{"kind":"enumEmptyVariantTypeNode","name":"b"{discriminator}}}],
+              "size":{{"kind":"numberTypeNode","format":"u8","endian":"le"}}}}"#
+        );
+
+        serde_json::from_str(&json).expect("enum IDL")
+    }
+
+    /// A value that equals the position changes nothing on the wire.
+    #[test]
+    fn explicit_discriminator_equal_to_the_position_builds() {
+        build_defined_type_enum(
+            "mode",
+            &enum_idl(r#","discriminator":1"#),
+            &mut SchemaIr::default(),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "enum `mode`: variant 1 has an explicit discriminator 5")]
+    fn explicit_discriminator_fails_the_build() {
+        build_defined_type_enum(
+            "mode",
+            &enum_idl(r#","discriminator":5"#),
+            &mut SchemaIr::default(),
+        );
+    }
 }

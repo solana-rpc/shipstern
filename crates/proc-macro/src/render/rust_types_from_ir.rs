@@ -5,8 +5,8 @@ use quote::{format_ident, quote};
 use syn::LitStr;
 
 use crate::intermediate_representation::{
-    FieldIr, FieldTypeIr, LabelIr, OneofIr, OneofKindIr, OptionEncodingIr, OptionPrefixIr,
-    ScalarIr, TypeIr, TypeKindIr,
+    EnumTagIr, FieldIr, FieldTypeIr, LabelIr, OneofIr, OneofKindIr, OptionEncodingIr,
+    OptionPrefixIr, ScalarIr, TypeIr, TypeKindIr,
 };
 
 // Generated types derive `serde::Serialize`/`Deserialize` behind the `serde` feature flag.
@@ -124,8 +124,8 @@ pub fn rust_types_from_ir(schema_ir: &crate::intermediate_representation::Schema
                     "Event",
                 ));
             },
-            OneofKindIr::Enum => {
-                out.extend(render_enum_oneof(oneof));
+            OneofKindIr::Enum(tag) => {
+                out.extend(render_enum_oneof(oneof, &tag));
             },
         }
     }
@@ -348,9 +348,50 @@ fn render_dispatch(
     }
 }
 
+/// The Rust integer that holds an enum's variant index on the wire.
+fn enum_tag_type(tag: &EnumTagIr, enum_name: &str, variant_count: usize) -> proc_macro2::Ident {
+    use codama_nodes::NumberFormat as NF;
+
+    let int_type = match tag.format {
+        NF::U8 => "u8",
+        NF::U16 => "u16",
+        NF::U32 => "u32",
+        NF::U64 => "u64",
+        NF::U128 => "u128",
+        NF::I8 => "i8",
+        NF::I16 => "i16",
+        NF::I32 => "i32",
+        NF::I64 => "i64",
+        NF::I128 => "i128",
+        // shortU16 writes a value below 128 as one byte, the same as u8.
+        NF::ShortU16 if variant_count <= 128 => "u8",
+        NF::ShortU16 => panic!(
+            "enum `{enum_name}`: a shortU16 tag with {variant_count} variants (over 128) is not \
+             supported"
+        ),
+        other => panic!("enum `{enum_name}`: tag format {other:?} is not supported"),
+    };
+
+    format_ident!("{int_type}")
+}
+
 /// Render user-defined enum oneofs: keeps the module wrapper pattern.
-fn render_enum_oneof(oneof_ir: &OneofIr) -> TokenStream {
+fn render_enum_oneof(oneof_ir: &OneofIr, tag: &EnumTagIr) -> TokenStream {
     let parent_ident = format_ident!("{}", oneof_ir.parent_message);
+    let tag_type = enum_tag_type(tag, &oneof_ir.parent_message, oneof_ir.variants.len());
+
+    // Borsh writes integers little-endian.
+    let (write_tag, read_tag) = if tag.endian == codama_nodes::Endianness::Be {
+        (
+            quote! { disc.to_be_bytes() },
+            quote! { #tag_type::from_be_bytes(::borsh::BorshDeserialize::deserialize_reader(reader)?) },
+        )
+    } else {
+        (
+            quote! { disc },
+            quote! { ::borsh::BorshDeserialize::deserialize_reader(reader)? },
+        )
+    };
     let mod_ident = format_ident!("{}", crate::utils::to_snake_case(&oneof_ir.parent_message));
     let oneof_ident = format_ident!("Kind");
     let field_ident = format_ident!("{}", oneof_ir.field_name);
@@ -374,19 +415,20 @@ fn render_enum_oneof(oneof_ir: &OneofIr) -> TokenStream {
     });
 
     let borsh_serialize_arms = oneof_ir.variants.iter().enumerate().map(|(i, v)| {
-        let disc = i as u8;
+        let disc = crate::utils::unsuffixed(i as u64);
         let v_ident = format_ident!("{}", v.variant_name);
 
         quote! {
             #mod_ident::#oneof_ident::#v_ident(v) => {
-                ::borsh::BorshSerialize::serialize(&#disc, writer)?;
+                let disc: #tag_type = #disc;
+                ::borsh::BorshSerialize::serialize(&#write_tag, writer)?;
                 ::borsh::BorshSerialize::serialize(v, writer)
             }
         }
     });
 
     let borsh_deserialize_arms = oneof_ir.variants.iter().enumerate().map(|(i, v)| {
-        let disc = i as u8;
+        let disc = crate::utils::unsuffixed(i as u64);
         let v_ident = format_ident!("{}", v.variant_name);
 
         quote! {
@@ -477,7 +519,7 @@ fn render_enum_oneof(oneof_ir: &OneofIr) -> TokenStream {
             fn deserialize_reader<R: ::borsh::io::Read>(
                 reader: &mut R
             ) -> ::core::result::Result<Self, ::borsh::io::Error> {
-                let disc: u8 = ::borsh::BorshDeserialize::deserialize_reader(reader)?;
+                let disc: #tag_type = #read_tag;
 
                 let #field_ident = match disc {
                     #(#borsh_deserialize_arms,)*

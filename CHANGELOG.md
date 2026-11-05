@@ -13,6 +13,9 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `shipstern-core`, `shipstern-mock`: a top-level precompile no longer takes the log lines of the next instruction, so `log_messages()` of each later instruction returns its own invoke-to-close range ([#377](https://github.com/solana-rpc/shipstern/pull/377) by @senzenn).
+- `shipstern-proc-macro`: generated parsers read and write an enum tag with the width and byte order that Codama `EnumTypeNode.size` gives, so the System nonce account (`u32` tags) decodes ([#378](https://github.com/solana-rpc/shipstern/pull/378) by @senzenn).
+- `shipstern-stake-pool-parser`: builds against spl-stake-pool 2.1.1 and later, which no longer re-export `solana_program`. Its parsers derive `Debug` again, so a `Runtime` accepts them ([#369](https://github.com/solana-rpc/shipstern/pull/369) by @Abramov12 and @senzenn).
 - Parser crates build next to `shipstern-bpf-loader-parser`, whose default `proto` feature made the macro emit prost code in them. The five `#[shipstern]` parser crates now depend on `prost` directly, and the `include_shipstern_parser!` docs list `prost` (by @senzenn).
 
 ## [0.12.0] - 2026-10-11
