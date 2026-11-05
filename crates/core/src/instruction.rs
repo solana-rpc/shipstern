@@ -75,6 +75,8 @@ pub struct InstructionShared {
     pub err: Option<TransactionError>,
     /// The fee paid by the transaction in lamports.
     pub fee: u64,
+    /// The top-level instructions of the transaction.
+    pub instructions: Vec<CompiledInstruction>,
     /// The balances of the accounts before the transaction.
     pub pre_balances: Vec<u64>,
     /// The balances of the accounts after the transaction.
@@ -351,6 +353,7 @@ impl InstructionUpdate {
             txn_index: index,
             err,
             fee,
+            instructions,
             pre_balances,
             post_balances,
             pre_token_balances,
@@ -369,11 +372,11 @@ impl InstructionUpdate {
         });
 
         #[allow(clippy::cast_possible_truncation)] // instruction count never exceeds u32::MAX
-        let mut outer = instructions
-            .into_iter()
+        let mut outer = shared.instructions
+            .iter()
             .enumerate()
             .map(|(idx, i)| {
-                Self::build_outer_instruction(Arc::clone(&shared), i, Path::new_single(idx as u32))
+                Self::build_outer_instruction(Arc::clone(&shared), i.clone(), Path::new_single(idx as u32))
             })
             .collect::<Result<Vec<_>, _>>()?;
 

@@ -438,7 +438,7 @@ pub struct AccountPrefilter {
 impl AccountPrefilter {
     /// Merge another account prefilter into this one, producing a prefilter
     /// that describes the union of the two.
-    pub fn merge(&mut self, other: AccountPrefilter) {
+    pub fn merge(&mut self, mut other: AccountPrefilter) {
         let Self {
             accounts,
             owners,
@@ -453,8 +453,10 @@ impl AccountPrefilter {
         // The server ANDs the filter list, so the union of two different lists
         // is no comparison: over-deliver and let the parser reject.
         if !same_account_filters(filters, &other.filters) {
-            filters.clear();
+            other.filters.clear();
         }
+
+        filters.extend(other.filters);
 
         // `None` receives everything, so it absorbs any narrower choice.
         if *nonempty_txn_signature != other.nonempty_txn_signature {
