@@ -129,9 +129,12 @@ borsh = { version = "^1.0.0", features = ["derive"] }
 shipstern-core = { version = "0.12.0" }
 shipstern-parser = { version = "0.12.0" }
 shipstern-proc-macro = { version = "0.12.0" }
+prost = "0.14.4"
 ```
 
 The generated code imports `shipstern_core` and derives `BorshDeserialize` / `BorshSerialize`, so both `shipstern-core` and the Borsh `derive` feature are required.
+
+`prost` is required when any crate in the build turns on the `proto` feature, because the macro then emits prost code.
 
 To parse events, including self-CPI events, enable the `program-events` feature. Note that it also changes `InstructionParser::Output` from `Instructions` to `ProgramEventOutput`:
 

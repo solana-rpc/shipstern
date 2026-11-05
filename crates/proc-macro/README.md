@@ -12,9 +12,12 @@ borsh = { version = "^1.0.0", features = ["derive"] }
 shipstern-core = { version = "0.12.0" }
 shipstern-parser = { version = "0.12.0" }
 shipstern-proc-macro = { version = "0.12.0" }
+prost = "0.14.4"
 ```
 
 `shipstern-core` is required: the generated code imports it directly.
+
+`prost` is required when any crate in the build turns on the `proto` feature, because the macro then emits prost code.
 
 Then, in your code:
 

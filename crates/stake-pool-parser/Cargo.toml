@@ -17,7 +17,7 @@ shipstern-proto = { workspace = true, features = [
   "parser",
 ], optional = true }
 borsh.workspace = true
-prost = { workspace = true, optional = true }
+prost = { workspace = true }
 prost-types = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -27,7 +27,6 @@ tokio.workspace = true
 [features]
 default = []
 proto = [
-  "dep:prost",
   "dep:prost-types",
   "shipstern-core/proto",
   "shipstern-proc-macro/proto",

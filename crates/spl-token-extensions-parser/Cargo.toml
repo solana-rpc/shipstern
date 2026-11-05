@@ -11,7 +11,7 @@ readme = "./../../README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-prost = { workspace = true, optional = true }
+prost = { workspace = true }
 prost-types = { workspace = true, optional = true }
 spl-pod = { workspace = true }
 spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
@@ -40,7 +40,6 @@ solana-pubkey = { workspace = true }
 [features]
 default = []
 proto = [
-  "dep:prost",
   "dep:prost-types",
   "dep:shipstern-proto",
   "shipstern-core/proto",
