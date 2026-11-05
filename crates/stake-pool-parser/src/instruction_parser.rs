@@ -7,7 +7,7 @@ use spl_stake_pool::instruction::StakePoolInstruction;
 
 use crate::instructions::*;
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct InstructionParser;
 
 impl Parser for InstructionParser {

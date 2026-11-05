@@ -7294,7 +7294,6 @@ name = "shipstern-stake-pool-parser"
 version = "0.12.0"
 dependencies = [
  "borsh 1.8.1",
- "bs58",
  "prost 0.14.4",
  "prost-types 0.14.4",
  "shipstern-core",
@@ -7302,9 +7301,8 @@ dependencies = [
  "shipstern-parser",
  "shipstern-proc-macro",
  "shipstern-proto",
- "spl-pod 0.7.4",
+ "solana-program-error 3.0.1",
  "spl-stake-pool",
- "thiserror 1.0.69",
  "tokio",
 ]
 

@@ -11,6 +11,10 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 - `shipstern-preconf-source`: a source for Triton Harmonic and BAM preconfirmations. Each preconfirmed transaction arrives as a `SubscribeUpdateTransaction` with a per-slot `index` and a meta that carries only the outcome. A prefilter matches only static account keys, not keys from a lookup table, and the source sends no slot updates. When a stream drops, the source subscribes again with backoff (`auto-reconnect`, `reconnect-max-retries`) ([#359](https://github.com/solana-rpc/shipstern/pull/359), [#360](https://github.com/solana-rpc/shipstern/pull/360) and [#361](https://github.com/solana-rpc/shipstern/pull/361) for [#328](https://github.com/solana-rpc/shipstern/issues/328) by @senzenn).
 
+### Fixed
+
+- `shipstern-stake-pool-parser`: builds against spl-stake-pool 2.1.1 and later, which no longer re-export `solana_program`. Its parsers derive `Debug` again, so a `Runtime` accepts them ([#369](https://github.com/solana-rpc/shipstern/pull/369) by @Abramov12 and @senzenn).
+
 ## [0.12.0] - 2026-10-11
 
 ### Added
