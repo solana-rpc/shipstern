@@ -161,7 +161,7 @@ pub fn proto_schema_string(
         let rename = match oneof.kind {
             OneofKindIr::InstructionDispatch => Some(&instruction_rename),
             OneofKindIr::EventDispatch => Some(&event_rename),
-            OneofKindIr::Enum => None,
+            OneofKindIr::Enum(_) => None,
         };
 
         render_oneof_parent(&mut out, oneof, rename);

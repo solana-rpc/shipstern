@@ -1,0 +1,123 @@
+{
+  "kind": "rootNode",
+  "standard": "codama",
+  "version": "1.6.0",
+  "program": {
+    "kind": "programNode",
+    "name": "system",
+    "publicKey": "11111111111111111111111111111111",
+    "version": "0.0.1",
+    "docs": [],
+    "accounts": [
+      {
+        "kind": "accountNode",
+        "name": "nonce",
+        "size": 80,
+        "docs": [],
+        "data": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "version",
+              "type": {
+                "kind": "definedTypeLinkNode",
+                "name": "nonceVersion"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "state",
+              "type": {
+                "kind": "definedTypeLinkNode",
+                "name": "nonceState"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "authority",
+              "type": {
+                "kind": "publicKeyTypeNode"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "blockhash",
+              "type": {
+                "kind": "publicKeyTypeNode"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "lamportsPerSignature",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u64",
+                "endian": "le"
+              }
+            }
+          ]
+        },
+        "discriminators": [
+          {
+            "kind": "sizeDiscriminatorNode",
+            "size": 80
+          }
+        ]
+      }
+    ],
+    "instructions": [],
+    "definedTypes": [
+      {
+        "kind": "definedTypeNode",
+        "name": "nonceVersion",
+        "docs": [],
+        "type": {
+          "kind": "enumTypeNode",
+          "variants": [
+            {
+              "kind": "enumEmptyVariantTypeNode",
+              "name": "legacy"
+            },
+            {
+              "kind": "enumEmptyVariantTypeNode",
+              "name": "current"
+            }
+          ],
+          "size": {
+            "kind": "numberTypeNode",
+            "format": "u32",
+            "endian": "le"
+          }
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "nonceState",
+        "docs": [],
+        "type": {
+          "kind": "enumTypeNode",
+          "variants": [
+            {
+              "kind": "enumEmptyVariantTypeNode",
+              "name": "uninitialized"
+            },
+            {
+              "kind": "enumEmptyVariantTypeNode",
+              "name": "initialized"
+            }
+          ],
+          "size": {
+            "kind": "numberTypeNode",
+            "format": "u32",
+            "endian": "le"
+          }
+        }
+      }
+    ],
+    "pdas": [],
+    "errors": [],
+    "constants": []
+  },
+  "additionalPrograms": []
+}

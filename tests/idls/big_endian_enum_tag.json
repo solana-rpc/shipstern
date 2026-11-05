@@ -1,0 +1,58 @@
+{
+  "kind": "rootNode",
+  "standard": "codama",
+  "version": "1.6.0",
+  "program": {
+    "kind": "programNode",
+    "name": "bigEndianEnumTag",
+    "publicKey": "11111111111111111111111111111111",
+    "version": "0.1.0",
+    "docs": [],
+    "accounts": [],
+    "instructions": [],
+    "definedTypes": [
+      {
+        "kind": "definedTypeNode",
+        "name": "mode",
+        "docs": [],
+        "type": {
+          "kind": "enumTypeNode",
+          "variants": [
+            {
+              "kind": "enumEmptyVariantTypeNode",
+              "name": "idle"
+            },
+            {
+              "kind": "enumStructVariantTypeNode",
+              "name": "rate",
+              "struct": {
+                "kind": "structTypeNode",
+                "fields": [
+                  {
+                    "kind": "structFieldTypeNode",
+                    "name": "value",
+                    "docs": [],
+                    "type": {
+                      "kind": "numberTypeNode",
+                      "format": "u32",
+                      "endian": "le"
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "size": {
+            "kind": "numberTypeNode",
+            "format": "u16",
+            "endian": "be"
+          }
+        }
+      }
+    ],
+    "pdas": [],
+    "errors": [],
+    "constants": []
+  },
+  "additionalPrograms": []
+}
