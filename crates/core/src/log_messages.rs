@@ -77,15 +77,23 @@ pub(crate) fn assign_log_messages(logs: &[String], outer: &mut [InstructionUpdat
     let mut cursor = 0;
 
     for ix in outer.iter_mut() {
-        // A precompile runs without an invoke line, so an outer instruction only
-        // takes the next invoke line if that line names its program.
-        let named = find_invoke(logs, cursor).and_then(|pos| invoked_program(&logs[pos]));
-        if named != Some(ix.program) {
+        // A precompile writes no invoke line, and a cut log can keep a lone inner one. So an
+        // outer instruction only takes the next `invoke [1]` line if that line names its program.
+        let Some(pos) = (cursor..logs.len()).find(|&pos| is_outer_invoke(&logs[pos])) else {
+            break;
+        };
+
+        if invoked_program(&logs[pos]) != Some(ix.program) {
             continue;
         }
 
-        cursor = assign_logs_recursive(logs, cursor, ix);
+        cursor = assign_logs_recursive(logs, pos, ix);
     }
+}
+
+/// A real `Program <pubkey> invoke [1]` line, not a `Program log:` payload with that text.
+fn is_outer_invoke(line: &str) -> bool {
+    classify_log_line(line) == LogLineKind::Invoke && line.contains(" invoke [1]")
 }
 
 /// The program that a `Program <pubkey> invoke [<n>]` line names.
@@ -99,13 +107,9 @@ fn invoked_program(line: &str) -> Option<Pubkey> {
 
 /// Recursively assign log lines to an instruction and its inner instructions.
 ///
-/// Returns the new cursor position (index of the first unconsumed log line).
-fn assign_logs_recursive(logs: &[String], start: usize, ix: &mut InstructionUpdate) -> usize {
-    // Find the invoke line for this instruction.
-    let Some(invoke_pos) = find_invoke(logs, start) else {
-        return start;
-    };
-
+/// `invoke_pos` must be the index of the invoke line of `ix`. Returns the new cursor position
+/// (index of the first unconsumed log line).
+fn assign_logs_recursive(logs: &[String], invoke_pos: usize, ix: &mut InstructionUpdate) -> usize {
     // Walk forward from the invoke line, tracking depth to find the matching
     // success/failed line that closes this instruction.
     let mut depth: u32 = 1;
@@ -143,22 +147,13 @@ fn assign_logs_recursive(logs: &[String], start: usize, ix: &mut InstructionUpda
     pos
 }
 
-/// Find the next real `Program <pubkey> invoke [N]` line at or after `start`,
-/// ignoring adversarial `Program log:` payloads that contain that substring.
-fn find_invoke(logs: &[String], start: usize) -> Option<usize> {
-    logs.iter()
-        .enumerate()
-        .skip(start)
-        .find(|(_, line)| classify_log_line(line) == LogLineKind::Invoke)
-        .map(|(i, _)| i)
-}
-
 ///
 /// Split transaction logs by outer instruction index.
 ///
 /// Returns one entry per `Program ... invoke [1]` line, from that line through
 /// its `Program ... success`/`failed`. A precompile writes no lines, so entry `i`
-/// is not always outer instruction `i`.
+/// is not always outer instruction `i`. Use `InstructionUpdate::log_messages()` for the
+/// logs of one instruction.
 ///
 #[must_use]
 pub fn split_logs_by_outer_ix(logs: &[String]) -> Vec<Vec<String>> {
@@ -167,10 +162,7 @@ pub fn split_logs_by_outer_ix(logs: &[String]) -> Vec<Vec<String>> {
     let mut depth: u32 = 0;
 
     for line in logs {
-        let kind = classify_log_line(line);
-        let is_outer_invoke = matches!(kind, LogLineKind::Invoke) && line.contains(" invoke [1]");
-
-        if is_outer_invoke && depth == 0 {
+        if depth == 0 && is_outer_invoke(line) {
             if !current.is_empty() {
                 result.push(std::mem::take(&mut current));
             }
@@ -179,7 +171,7 @@ pub fn split_logs_by_outer_ix(logs: &[String]) -> Vec<Vec<String>> {
 
             current.push(line.clone());
         } else if depth > 0 {
-            match kind {
+            match classify_log_line(line) {
                 LogLineKind::Invoke => depth += 1,
                 LogLineKind::Close => depth -= 1,
                 LogLineKind::Other => {},
@@ -744,6 +736,44 @@ mod tests {
 
         assert!(outer[2].log_messages().is_empty());
         assert_eq!(outer[3].log_range, 4..9);
+    }
+
+    /// The log limit can drop an outer `invoke [1]` line but keep a shorter `invoke [2]` line
+    /// after it.
+    #[test]
+    fn truncated_logs_do_not_give_an_inner_line_to_an_outer_instruction() {
+        let logs = log_lines(&[
+            "Program P1 invoke [1]",
+            "Program P1 success",
+            "Log truncated",
+            "Program 11111111111111111111111111111111 invoke [2]",
+        ]);
+
+        let shared = Arc::new(InstructionShared {
+            log_messages: logs,
+            ..InstructionShared::default()
+        });
+
+        let system: Pubkey = "11111111111111111111111111111111".parse().unwrap();
+        let mut outer = [KeyBytes::new([1; 32]), KeyBytes::new([2; 32]), system]
+            .into_iter()
+            .zip(0u32..)
+            .map(|(program, i)| InstructionUpdate {
+                program,
+                accounts: vec![],
+                data: vec![],
+                shared: Arc::clone(&shared),
+                inner: vec![],
+                path: Path::new_single(i),
+                log_range: 0..0,
+            })
+            .collect::<Vec<_>>();
+
+        assign_log_messages(&shared.log_messages, &mut outer);
+
+        assert_eq!(outer[0].log_range, 0..2);
+        assert!(outer[1].log_messages().is_empty());
+        assert!(outer[2].log_messages().is_empty());
     }
 
     /// Covers payloads that mimic invoke/close lines for every caller of the

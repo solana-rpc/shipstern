@@ -13,7 +13,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- `shipstern-core`, `shipstern-mock`: a top-level precompile no longer takes the log lines of the next instruction, so `log_messages()` of each later instruction holds only its own lines ([#377](https://github.com/solana-rpc/shipstern/pull/377) by @senzenn).
+- `shipstern-core`, `shipstern-mock`: a top-level precompile no longer takes the log lines of the next instruction, so `log_messages()` of each later instruction returns its own invoke-to-close range ([#377](https://github.com/solana-rpc/shipstern/pull/377) by @senzenn).
 
 ## [0.12.0] - 2026-10-11
 
