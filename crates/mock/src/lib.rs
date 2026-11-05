@@ -279,9 +279,24 @@ fn try_from_ui_inner_ixs(
 
 fn assign_logs_to_instructions(
     logs: &[String],
+    outer_programs: &[&str],
     instructions: &mut [SerializableInstructionUpdate],
 ) {
-    let per_outer = split_logs_by_outer_ix(logs);
+    // A precompile writes no lines, so a log group only goes to the outer
+    // instruction whose program opened it.
+    let mut groups = split_logs_by_outer_ix(logs).into_iter().peekable();
+    let per_outer: Vec<Vec<String>> = outer_programs
+        .iter()
+        .map(|program| {
+            let invoke = format!("Program {program} invoke [1]");
+
+            if groups.peek().and_then(|group| group.first()) == Some(&invoke) {
+                groups.next().unwrap_or_default()
+            } else {
+                Vec::new()
+            }
+        })
+        .collect();
 
     for ix in instructions.iter_mut() {
         let outer_idx = ix.ix_index[0];
@@ -362,7 +377,17 @@ fn try_from_tx_meta<P: ProgramParser>(
                 }
             }
 
-            assign_logs_to_instructions(&log_messages, &mut program_filtered_ixs);
+            let outer_programs: Vec<&str> = raw_message
+                .instructions
+                .iter()
+                .map(|ix| {
+                    account_keys
+                        .get(ix.program_id_index as usize)
+                        .map_or("", String::as_str)
+                })
+                .collect();
+
+            assign_logs_to_instructions(&log_messages, &outer_programs, &mut program_filtered_ixs);
 
             return Ok(SerializableTransactionFixture {
                 instructions: program_filtered_ixs,
@@ -644,7 +669,92 @@ pub fn decode_bs58_to_bytes(bs58: &str) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::get_transaction_params;
+    use std::borrow::Cow;
+
+    use shipstern_core::{ParseError, ParseResult, Parser, Prefilter};
+
+    use super::*;
+
+    const FRMIX: &str = "FRMiX94PWHbndvySq8xyRx185GvPeggUeKaLmZgVdd4";
+
+    #[derive(Debug, Clone, Copy)]
+    struct Frmix;
+
+    impl Parser for Frmix {
+        type Input = InstructionUpdate;
+        type Output = ();
+
+        fn id(&self) -> Cow<'static, str> { "frmix".into() }
+
+        fn prefilter(&self) -> Prefilter { Prefilter::default() }
+
+        async fn parse(&self, _: &InstructionUpdate) -> ParseResult<()> {
+            Err(ParseError::Filtered)
+        }
+    }
+
+    impl ProgramParser for Frmix {
+        fn program_id(&self) -> shipstern_core::Pubkey { FRMIX.parse().unwrap_or_default() }
+    }
+
+    /// Shortened from mainnet tx `2ncVUzCo...`: the Ed25519 precompile at
+    /// index 2 writes no lines, so index 3 keeps its own.
+    #[test]
+    fn precompile_does_not_shift_fixture_logs() {
+        let tx = json!({
+            "slot": 462_871_280,
+            "blockTime": null,
+            "version": "legacy",
+            "transaction": {
+                "signatures": ["1111111111111111111111111111111111111111111111111111111111111111"],
+                "message": {
+                    "accountKeys": [
+                        "3qsxcWyxTLY9TXabHPBBRbtmXRVhAFM5SWCuqVCNuuY1",
+                        "ComputeBudget111111111111111111111111111111",
+                        "Ed25519SigVerify111111111111111111111111111",
+                        FRMIX,
+                    ],
+                    "header": {
+                        "numRequiredSignatures": 1,
+                        "numReadonlySignedAccounts": 0,
+                        "numReadonlyUnsignedAccounts": 3,
+                    },
+                    "instructions": [
+                        { "accounts": [], "data": "1", "programIdIndex": 1 },
+                        { "accounts": [], "data": "1", "programIdIndex": 1 },
+                        { "accounts": [], "data": "1", "programIdIndex": 2 },
+                        { "accounts": [0], "data": "1", "programIdIndex": 3 },
+                    ],
+                    "recentBlockhash": "8h9bQDGAmkar3nKrAXG6daubPWksawuXxm7rvC2foFq8",
+                },
+            },
+            "meta": {
+                "err": null,
+                "status": { "Ok": null },
+                "fee": 10_160,
+                "preBalances": [],
+                "postBalances": [],
+                "innerInstructions": [],
+                "logMessages": [
+                    "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+                    "Program ComputeBudget111111111111111111111111111111 success",
+                    "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+                    "Program ComputeBudget111111111111111111111111111111 success",
+                    format!("Program {FRMIX} invoke [1]"),
+                    "Program log: Instruction: ExecutionQueueV5CommitMarket",
+                    format!("Program {FRMIX} success"),
+                ],
+            },
+        });
+
+        let tx = serde_json::from_value(tx).unwrap();
+        let fixture = try_from_tx_meta(tx, &Frmix).unwrap();
+
+        let [ix] = fixture.instructions.as_slice() else {
+            panic!("expected one FRMiX instruction");
+        };
+        assert_eq!(ix.log_messages, fixture.log_messages[4..]);
+    }
 
     /// A ceiling of 0 makes the node refuse every V1 transaction, so a V1
     /// fixture could never be captured through this path.
