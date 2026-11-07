@@ -124,12 +124,21 @@ by the commitment. Both share `reconnect-max-retries` and the backoff, and both
 need a server that stores slots: if it no longer holds the slot to resume from,
 the run ends with `OutOfRange`.
 
+The server keeps a number of slots, not a time: 150 by default on Geyser, and
+about 1,000 on Triton shared mainnet. At confirmed or finalized each wait caps
+at 10 s, so an outage of W seconds needs at least (W + 34.5) / 10 retries. For
+example, 1,000 slots at about 214 ms each are about 214 s, which needs about 25
+retries. At processed the client doubles each wait with no cap, so more retries
+help little.
+
 **Confirmed or finalized: resume from the last slot.** The source subscribes
 again from the last slot it saw, with the newest filter set, and drops that
 slot's repeats by signature, pubkey and write version, or status. A slot at
 these commitments never changes once delivered, so nothing is missed and
-nothing repeats. A `from_slot` and a `RuntimeHandle` are both fine here. The
-budget starts over once the new stream delivers an update.
+nothing repeats. One exception: a slot status below the commitment, such as
+processed, can repeat for a slot after the checkpoint, because the source does
+not record those statuses. A `from_slot` and a `RuntimeHandle` are both fine
+here. The budget starts over once the new stream delivers an update.
 
 **Processed: the client replays banks.** A slot can have several banks at
 processed, so only the client's bank replay can retract the one that was cut

@@ -104,6 +104,12 @@ pub struct YellowstoneGrpcConfig {
     /// Max reconnect attempts before the stream gives up.
     ///
     /// Only applies when `auto_reconnect` is set. Defaults to 10 when unset.
+    ///
+    /// The server keeps a number of slots, not a time: 150 by default on Geyser, and about
+    /// 1,000 on Triton shared mainnet. At confirmed or finalized each wait caps at 10 s, so an
+    /// outage of W seconds needs at least (W + 34.5) / 10 retries. For example, 1,000 slots at
+    /// about 214 ms each are about 214 s, which needs about 25 retries. At processed the client
+    /// doubles each wait with no cap, so after a few attempts the gap is longer than the window.
     #[arg(long, env)]
     pub reconnect_max_retries: Option<u32>,
 }
@@ -1138,8 +1144,8 @@ mod tests {
         assert_eq!(reconnect.backoff.max_retries, 25);
     }
 
-    /// The wait doubles until the cap, so a stream cut for a minute is retried while the
-    /// server still holds the slot, instead of once at two minutes.
+    /// The wait doubles until the cap. With the cap, a stream cut for 64 s comes back at
+    /// 65.5 s. Without it, the stream waits until 127.5 s.
     #[test]
     fn retry_delay_doubles_then_caps() {
         let backoff = Backoff::new(Duration::from_millis(500), 2.0, 10);
