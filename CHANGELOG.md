@@ -14,6 +14,8 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Breaking** `shipstern-mock`, `shipstern-solana-rpc-source`, `shipstern-solana-snapshot-source` and `shipstern-jetstream-source`: moved to Agave 4.3.2, which needs Rust 1.97.1. The Agave crates use `~4.3.2`, so a fresh build does not resolve Agave 4.4, which needs Rust 1.98.1 (for [#367](https://github.com/solana-rpc/shipstern/issues/367) by @senzenn).
+- `shipstern-solana-snapshot-source`: loads the snapshot archives with `solana-runtime` and no longer depends on `solana-ledger`, so its build no longer compiles RocksDB (for [#367](https://github.com/solana-rpc/shipstern/issues/367) by @senzenn).
 - **Breaking** `shipstern-block-coordinator`: `InstructionSlot` gains `bank_id`, and `AccountSlot` gains `bank_id`, `parent_slot` and `blockhash`, so a consumer can check that consecutive slots chain. `CoordinatorError` gains `ConflictingBlockIdentity`, for a stream that contradicts itself about which block a slot holds (from [#363](https://github.com/solana-rpc/shipstern/pull/363) by @the-orex).
 - **Breaking** for struct literals: `InstructionShared` now preserves the transaction’s `bank_id`, including for nested instructions ([#363](https://github.com/solana-rpc/shipstern/pull/363) by @the-orex).
 - **Breaking** for struct-literal construction and exhaustive matches: `Prefilter` gained `block_footer`, `Builder` gained the public field `block_footer`, and `BuilderError` gained `BlockFooterCollision`. Add `..Default::default()` to a `Prefilter` or `Builder` literal and a wildcard arm to a `BuilderError` match ([#358](https://github.com/solana-rpc/shipstern/pull/358), from #354 by @senzenn).
@@ -37,6 +39,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `shipstern-jetstream-source`: a replay from epoch 1064 on no longer stops at the first block of an epoch. The pinned firehose did not know the `VATDebit` reward type, so it retried that slot with no limit, and the source returned no error. The source now uses vaultic-win/jetstreamer e522a67e and sends these rewards as `RewardType::VatDebit` (for [#367](https://github.com/solana-rpc/shipstern/issues/367) by @senzenn).
 - `shipstern-core`, `shipstern-mock`: a top-level precompile no longer takes the log lines of the next instruction, so `log_messages()` of each later instruction returns its own invoke-to-close range ([#377](https://github.com/solana-rpc/shipstern/pull/377) by @senzenn).
 - `shipstern-proc-macro`: generated parsers read and write an enum tag with the width and byte order that Codama `EnumTypeNode.size` gives, so the System nonce account (`u32` tags) decodes ([#378](https://github.com/solana-rpc/shipstern/pull/378) by @senzenn).
 - `shipstern-stake-pool-parser`: builds against spl-stake-pool 2.1.1 and later, which no longer re-export `solana_program`. Its parsers derive `Debug` again, so a `Runtime` accepts them ([#369](https://github.com/solana-rpc/shipstern/pull/369) by @Abramov12 and @senzenn).

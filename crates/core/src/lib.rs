@@ -703,7 +703,7 @@ impl SlotPrefilter {
 
 /// Defines `into_shipstern_pubkey(<Solana Pubkey>) -> Pubkey` and
 /// `from_shipstern_pubkey(Pubkey) -> <Solana Pubkey>` for a Solana `Pubkey` type,
-/// e.g. `pubkey_convert_helpers!(solana_sdk::pubkey::Pubkey);`. Core has no
+/// e.g. `pubkey_convert_helpers!(solana_pubkey::Pubkey);`. Core has no
 /// `From` impls for it so it doesn't pin a Solana SDK version.
 #[macro_export]
 macro_rules! pubkey_convert_helpers {

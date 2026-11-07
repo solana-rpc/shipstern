@@ -157,9 +157,7 @@ fn expand_message(item: &mut ItemStruct) -> syn::Result<TokenStream> {
         ));
     };
 
-    let mut tag: u32 = 1;
-
-    for field in &mut fields.named {
+    for (tag, field) in (1_u32..).zip(&mut fields.named) {
         // Always consume #[hint(...)] to prevent unknown-attribute errors
         let hint = take_proto_attr(&mut field.attrs)?;
 
@@ -186,8 +184,6 @@ fn expand_message(item: &mut ItemStruct) -> syn::Result<TokenStream> {
                 }));
             }
         }
-
-        tag += 1;
     }
 
     if cfg!(feature = "proto") {
@@ -240,9 +236,7 @@ fn expand_message(item: &mut ItemStruct) -> syn::Result<TokenStream> {
 /// ```
 ///
 fn expand_oneof(item: &mut ItemEnum) -> syn::Result<TokenStream> {
-    let mut tag: u32 = 1;
-
-    for variant in &mut item.variants {
+    for (tag, variant) in (1_u32..).zip(&mut item.variants) {
         let Fields::Unnamed(ref unnamed) = variant.fields else {
             return Err(syn::Error::new_spanned(
                 variant,
@@ -266,8 +260,6 @@ fn expand_oneof(item: &mut ItemEnum) -> syn::Result<TokenStream> {
                 #[prost(#prost_tokens)]
             }));
         }
-
-        tag += 1;
     }
 
     if cfg!(feature = "proto") {

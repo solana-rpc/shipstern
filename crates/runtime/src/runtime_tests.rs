@@ -1223,7 +1223,7 @@ async fn edge_abort_discards_queued_and_returns_promptly() {
     const POST: u64 = 100;
     const JOBS: usize = 4;
     const HANDLER_SLEEP: Duration = Duration::from_secs(2);
-    const ABORT_BUDGET: Duration = Duration::from_millis(1000);
+    const ABORT_BUDGET: Duration = Duration::from_secs(1);
 
     ABORT_COMPLETED.store(0, Ordering::Relaxed);
 

@@ -27,9 +27,11 @@ use shipstern_core::{
     log_messages::split_logs_by_outer_ix,
     KeyBytes, ProgramParser,
 };
+use solana_account::Account;
 use solana_client::{nonblocking::rpc_client::RpcClient, rpc_request::RpcRequest};
+use solana_pubkey::Pubkey;
 use solana_rpc_client_api::client_error::Result as ClientResult;
-use solana_sdk::{account::Account, bs58, pubkey::Pubkey, signature::Signature};
+use solana_signature::Signature;
 use solana_transaction_status::{
     option_serializer::OptionSerializer, EncodedConfirmedTransactionWithStatusMeta,
     EncodedTransaction, EncodedTransactionWithStatusMeta, UiCompiledInstruction,

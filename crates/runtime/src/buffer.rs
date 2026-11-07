@@ -199,9 +199,7 @@ impl Buffer {
         // forever, and `Semaphore::new` panics above `MAX_PERMITS`.
         let jobs = jobs
             .unwrap_or_else(|| {
-                std::thread::available_parallelism()
-                    .map(std::num::NonZeroUsize::get)
-                    .unwrap_or(1)
+                std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
             })
             .clamp(1, Semaphore::MAX_PERMITS);
 
