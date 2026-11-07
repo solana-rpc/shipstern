@@ -14,7 +14,17 @@ use yellowstone_fumarole_client::{
 pub use yellowstone_grpc_proto::tonic::codec::CompressionEncoding;
 use yellowstone_grpc_proto::{geyser::SubscribeRequest, tonic::Status};
 
+///
 /// A `Source` implementation for the Yellowstone gRPC API.
+///
+/// Fumarole differs from a gRPC server:
+/// - When any footer filter sets `include_certificates`, every footer filter gets the
+///   certificates. A handler can see `Some` certificates that it did not ask for.
+/// - Slot statuses carry no `bank_id`, so a slot status does not identify one bank. The gRPC
+///   source advice to keep the bank that reaches confirmed does not work here.
+/// - The footer `bank_id` is a number that Fumarole assigns, not the validator's bank ID.
+/// - Fumarole ignores `interslot_updates`.
+///
 #[derive(Debug)]
 pub struct YellowstoneFumaroleSource {
     config: FumaroleConfig,
@@ -46,7 +56,7 @@ pub struct FumaroleConfig {
     pub x_token: Option<String>,
     /// Name of the persistent subscriber to use
     pub subscriber_name: String,
-    /// Slot commitment level
+    /// Slot commitment level. Unset gives processed. See [`CommitmentLevel`].
     pub commitment_level: Option<CommitmentLevel>,
     /// max incoming decoded message size in bytes
     pub max_decoding_message_size: Option<usize>,

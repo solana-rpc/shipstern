@@ -163,8 +163,9 @@
 //! │    ▼                                             ▼                          │
 //! │  DeadSlotDetected(A)                       ForksDetected(B)                 │
 //! │                                                                             │
-//! │  Note: In practice, confirmed slots won't be forked because confirmation    │
-//! │  requires supermajority (2/3+) votes — siblings can't both get enough.      │
+//! │  Note: A confirmed slot does not fork. On Alpenglow, Agave 4.3.2 reports    │
+//! │  confirmed only when it roots a finalized block. Finalization needs 80% of  │
+//! │  stake in one round, or 60% in two rounds.                                  │
 //! │                                                                             │
 //! └─────────────────────────────────────────────────────────────────────────────┘
 //! ```

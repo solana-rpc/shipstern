@@ -15,6 +15,11 @@ x-token = "<X-TOKEN>"
 # This defines how long to wait for a connection before timing out.
 timeout = 60
 
+# The commitment level: processed, confirmed or finalized. Unset gives the server
+# default, processed. On Alpenglow, confirmed and finalized arrive together, so the
+# real choice is processed or finalized.
+#commitment-level = "processed"
+
 # Built-in auto-reconnect (default true). A confirmed or finalized stream resumes
 # from a slot checkpoint. A processed stream reconnects only with no from-slot and no
 # RuntimeHandle. Set it to false for a server on yellowstone-grpc proto 12.7 or

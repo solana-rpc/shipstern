@@ -26,6 +26,19 @@ server on yellowstone-grpc proto 12.7 or older ignores the footer filter, and a
 cluster without Alpenglow sends no footers. A proto 13 server sends certificates
 at field numbers that proto 14 reserves, so they are dropped.
 
+Each certificate in a footer is for its own slot, not the footer slot. The final
+certificate is for the newest block that the producer knew as finalized, and the
+reward certificates are for the footer slot minus 8. Bit i of a `signer_bitmap`
+is the validator at rank i in the epoch of the certificate slot. Agave ranks only
+vote accounts that have nonzero stake and a valid BLS key. Of these, an account
+that shares its BLS key or its node pubkey with another one is left out. The
+order is by stake, highest first, then by compressed BLS pubkey bytes, lowest
+first. See Agave
+[`epoch_stakes.rs`](https://github.com/anza-xyz/agave/blob/v4.3.2/runtime/src/epoch_stakes.rs#L88-L135).
+
+A footer filter without `include_certificates` can still get certificates. Some
+servers send them to every footer filter when one filter asks for them.
+
 ## Runtime filter updates
 
 The gRPC source keeps the `SubscribeRequest` sink that `yellowstone-grpc-client`

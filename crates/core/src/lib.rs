@@ -514,6 +514,9 @@ pub struct TransactionPrefilter {
     pub accounts_exclude: HashSet<Pubkey>,
     /// Whether to receive vote transactions. `None` receives all, which is the
     /// default.
+    ///
+    /// On Alpenglow, consensus votes are not transactions, so blocks hold no consensus vote
+    /// transactions, and `Some(true)` matches only vote-account admin transactions.
     pub vote: Option<bool>,
     /// Receive only the transaction with this signature. `None` receives all.
     pub signature: Option<String>,
@@ -618,7 +621,8 @@ impl BlockMetaPrefilter {
 /// A prefilter for matching block footer updates. (post Alpenglow)
 #[derive(Debug, Default, Clone, PartialEq, Copy)]
 pub struct BlockFooterPrefilter {
-    /// Also receive the vote certificates of the block.
+    /// Also receive the vote certificates that the footer carries. Each certificate has its own
+    /// slot, which is earlier than the footer slot.
     pub include_certificates: bool,
 }
 
@@ -667,10 +671,12 @@ impl BlockPrefilter {
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub struct SlotPrefilter {
     /// If true (default), only receive slot updates at the connection's commitment level.
-    /// If false, receive ALL slot status transitions (processed, confirmed, finalized, dead).
+    /// If false, receive processed, confirmed and finalized. To also receive `CreatedBank`
+    /// and `Dead`, set [`Self::interslot_updates`] to `Some(true)` as well.
     pub filter_by_commitment: bool,
     /// Whether to receive the extra updates the server emits between slots.
-    /// `None` leaves the server default.
+    /// `None` leaves the server default. It has no effect while
+    /// [`Self::filter_by_commitment`] is true.
     pub interslot_updates: Option<bool>,
 }
 
@@ -687,7 +693,8 @@ impl SlotPrefilter {
     /// Merge another slot prefilter into this one, producing a union of both filters, the more permissive wins.
     /// `filter_by_commitment` controls which slot status updates are received:
     /// - `true`: Only receive updates at the connection's commitment level
-    /// - `false`: Receive ALL slot status transitions (processed, confirmed, finalized, dead)
+    /// - `false`: Receive processed, confirmed and finalized, plus the interslot statuses
+    ///   when `interslot_updates` is `Some(true)`
     pub fn merge(lhs: &mut Self, rhs: Self) {
         lhs.filter_by_commitment = lhs.filter_by_commitment && rhs.filter_by_commitment;
 
@@ -1361,9 +1368,10 @@ impl PrefilterBuilder {
             cuckoo_accounts_include: block_cuckoo_accounts_include.unwrap_or_default(),
         };
 
+        // Interslot statuses need filter_by_commitment false (geyser v16.2.0 filter.rs:1508-1516).
         let slot = SlotPrefilter {
+            filter_by_commitment: slot_interslot_updates != Some(true),
             interslot_updates: slot_interslot_updates,
-            ..Default::default()
         };
 
         let account = if accounts_include_all {
@@ -1479,6 +1487,10 @@ impl PrefilterBuilder {
     /// [`Self::transaction_accounts_required`]; on its own it matches every
     /// transaction of that kind.
     ///
+    /// On Alpenglow, blocks hold no consensus vote transactions (see
+    /// [`TransactionPrefilter::vote`]). Some certificates arrive in block footers; see
+    /// [`Self::block_footers`].
+    ///
     pub fn transaction_vote(self, vote: bool) -> Self {
         self.mutate(|this| set_opt(&mut this.transaction_vote, "transaction_vote", vote))
     }
@@ -1519,7 +1531,9 @@ impl PrefilterBuilder {
         })
     }
 
-    /// Receive the extra updates the server emits between slots.
+    /// Receive the extra updates the server emits between slots, such as `CreatedBank` and
+    /// `Dead`. `true` also sets [`SlotPrefilter::filter_by_commitment`] to false, because the
+    /// server sends them only then. So the slot filter gets every status.
     pub fn slot_interslot_updates(self, wanted: bool) -> Self {
         self.mutate(|this| {
             set_opt(
@@ -1546,8 +1560,13 @@ impl PrefilterBuilder {
         })
     }
 
+    ///
     /// Set prefilter will request block footer updates. `include_certificates` also
-    /// asks for the vote certificates of each block.
+    /// asks for the vote certificates that each footer carries. These are for earlier
+    /// slots: the final certificate is for the newest block that the producer knew as
+    /// finalized, and the reward certificates are for the footer slot minus 8. Use the
+    /// `slot` of each certificate.
+    ///
     pub fn block_footers(self, include_certificates: bool) -> Self {
         self.mutate(|this| {
             set_opt(
@@ -1738,16 +1757,24 @@ impl Filters {
     }
 }
 
+///
 /// Type mirroring the `CommitmentLevel` enum in the `geyser` crate but serializable.
 /// Used to avoid need for custom deserialization logic.
+///
+/// On Alpenglow, Agave reports confirmed only when it roots a finalized block, so confirmed
+/// arrives with finalized, and the real choice is processed or finalized. On RPC, a node
+/// reports processed at its own notarize vote. See Agave
+/// [`commitment_service.rs`](https://github.com/anza-xyz/agave/blob/v4.3.2/core/src/commitment_service.rs#L191-L202).
+///
 #[derive(Debug, Clone, Copy, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum CommitmentLevel {
-    /// Processed
+    /// The node replayed the block. The cluster can still skip it, so a processed stream can
+    /// send transactions that never land.
     Processed,
-    /// Confirmed
+    /// On Alpenglow, arrives with finalized.
     Confirmed,
-    /// Finalized
+    /// The node rooted the block.
     Finalized,
 }
 
@@ -2275,6 +2302,8 @@ mod tests {
         assert!(list.is_empty() && accounts.0.iter().all(|key| filter.contains(&key.0)));
     }
 
+    /// The server sends interslot statuses only without commitment filtering, so asking for
+    /// them also turns that off.
     #[test]
     fn interslot_updates_reaches_the_request() {
         let prefilter = Prefilter::builder()
@@ -2283,14 +2312,11 @@ mod tests {
             .build()
             .expect("prefilter must build");
 
-        assert_eq!(
-            one(prefilter)
-                .slots
-                .get("p")
-                .expect("slot filter")
-                .interslot_updates,
-            Some(true)
-        );
+        let request = one(prefilter);
+        let slots = request.slots.get("p").expect("slot filter");
+
+        assert_eq!(slots.interslot_updates, Some(true));
+        assert_eq!(slots.filter_by_commitment, Some(false));
     }
 
     /// A caller who set only `interslot_updates` asked for slot updates as
@@ -2345,14 +2371,10 @@ mod tests {
         assert_eq!(transactions.token_accounts, None);
         assert!(transactions.account_exclude.is_empty());
 
-        assert_eq!(
-            request
-                .slots
-                .get("p")
-                .expect("slot filter")
-                .interslot_updates,
-            None
-        );
+        let slots = request.slots.get("p").expect("slot filter");
+
+        assert_eq!(slots.interslot_updates, None);
+        assert_eq!(slots.filter_by_commitment, Some(true));
     }
 
     /// `accounts_include_all` replaces the key axes, but a data comparison is

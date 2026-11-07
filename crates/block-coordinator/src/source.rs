@@ -99,7 +99,11 @@ pub struct CoordinatorSourceConfig {
 /// - blocks_meta (BlockSummary)
 /// - slot lifecycle (FirstShredReceived, CreatedBank, Completed, Dead).
 ///
+/// It also removes the block and block footer filters: the source forwards neither.
+///
 fn add_coordinator_subscriptions(request: &mut SubscribeRequest) {
+    request.blocks.clear();
+    request.block_footer.clear();
     request
         .entry
         .insert("coordinator".to_string(), SubscribeRequestFilterEntry {
@@ -185,6 +189,26 @@ impl SourceTrait for CoordinatorSource {
         let mut client = builder.connect().await?;
 
         let mut subscribe_request = SubscribeRequest::from(filters);
+        {
+            // The source forwards only account and transaction updates to the runtime.
+            let undelivered: Vec<&str> = [
+                ("block", subscribe_request.blocks.is_empty()),
+                ("block meta", subscribe_request.blocks_meta.is_empty()),
+                ("block footer", subscribe_request.block_footer.is_empty()),
+                ("slot", subscribe_request.slots.is_empty()),
+            ]
+            .into_iter()
+            .filter_map(|(kind, empty)| (!empty).then_some(kind))
+            .collect();
+
+            if !undelivered.is_empty() {
+                tracing::warn!(
+                    source_label,
+                    ?undelivered,
+                    "The coordinator source feeds only account and transaction pipelines"
+                );
+            }
+        }
         add_coordinator_subscriptions(&mut subscribe_request);
         subscribe_request.from_slot = config.from_slot.or(subscribe_request.from_slot);
         // Processed: the two-gate flush needs every transaction before the confirmation.
@@ -397,6 +421,20 @@ mod tests {
             request.entry["coordinator"].include_update_parent,
             Some(true)
         );
+    }
+
+    #[test]
+    fn coordinator_subscription_drops_block_and_footer_filters() {
+        let mut request = yellowstone_grpc_proto::geyser::SubscribeRequest::default();
+        request
+            .blocks
+            .insert("blocks".to_string(), Default::default());
+        request
+            .block_footer
+            .insert("footers".to_string(), Default::default());
+        add_coordinator_subscriptions(&mut request);
+        assert!(request.blocks.is_empty());
+        assert!(request.block_footer.is_empty());
     }
 
     #[test]

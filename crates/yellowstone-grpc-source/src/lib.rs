@@ -67,6 +67,8 @@ pub struct YellowstoneGrpcConfig {
     #[arg(long, env, default_value_t = 120)]
     pub timeout: u64,
 
+    /// The commitment of the stream. Unset gives the server default, processed. See
+    /// [`CommitmentLevel`].
     #[arg(long, env)]
     pub commitment_level: Option<CommitmentLevel>,
 
