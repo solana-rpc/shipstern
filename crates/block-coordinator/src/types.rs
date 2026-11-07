@@ -1,9 +1,29 @@
-use std::fmt;
+use std::{fmt, ops::RangeInclusive};
 
 use smallvec::SmallVec;
-use solana_clock::Slot;
+use solana_clock::{BankId, Slot};
 use solana_hash::Hash;
 use yellowstone_grpc_proto::geyser::SubscribeUpdate;
+
+/// A slot and one of its banks. Ordered by slot first, so a map range over
+/// [`BankKey::slot_range`] visits every bank of that slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct BankKey {
+    pub slot: Slot,
+    pub bank_id: BankId,
+}
+
+impl BankKey {
+    pub(crate) const fn new(slot: Slot, bank_id: BankId) -> Self { Self { slot, bank_id } }
+
+    /// The lowest key of `slot`, for a range start or a `split_off`.
+    pub(crate) const fn first(slot: Slot) -> Self { Self::new(slot, 0) }
+
+    /// Every bank of `slot`.
+    pub(crate) const fn slot_range(slot: Slot) -> RangeInclusive<Self> {
+        Self::first(slot)..=Self::new(slot, BankId::MAX)
+    }
+}
 
 /// Block metadata that always transitions together.
 #[derive(Debug, Clone)]
@@ -13,13 +33,15 @@ pub struct BlockMetadata {
     pub expected_tx_count: u64,
 }
 
-/// Reason a slot was discarded by the coordinator.
+/// Reason the coordinator discarded a slot or a bank.
 #[derive(Debug, Clone, Copy)]
 pub enum DiscardReason {
     Dead,
     Forked,
-    Untracked,
     Incomplete,
+    /// An UpdateParent abandoned the bank, and its slot replays under a new bank ID. Bank-scoped
+    /// only: the slot itself stays live.
+    Cleared,
 }
 
 impl fmt::Display for DiscardReason {
@@ -27,8 +49,8 @@ impl fmt::Display for DiscardReason {
         let label = match self {
             Self::Dead => "dead",
             Self::Forked => "forked",
-            Self::Untracked => "untracked",
             Self::Incomplete => "incomplete",
+            Self::Cleared => "cleared",
         };
         f.write_str(label)
     }
@@ -37,9 +59,13 @@ impl fmt::Display for DiscardReason {
 /// Coordinator invariants and unrecoverable errors.
 #[derive(Debug)]
 pub enum CoordinatorError {
-    TwoGateInvariantViolation {
+    BankInTwoSlots {
+        bank_id: u64,
         slot: Slot,
-        last_flushed: Option<Slot>,
+        other_slot: Slot,
+    },
+    MissingBankId {
+        slot: Slot,
     },
     ReadySlotMissingMetadata {
         slot: Slot,
@@ -50,14 +76,40 @@ pub enum CoordinatorError {
     AccountOutputChannelClosed {
         slot: Slot,
     },
+    /// More banks wait to flush than the limit allows, so output stopped behind a slot that
+    /// never resolves: a lost BlockMeta, a missing commitment, or records for a slot the block
+    /// machine never saw. Restart from the last checkpoint to replay it.
+    TooManyPendingBanks {
+        pending: usize,
+        limit: usize,
+        oldest_slot: Option<Slot>,
+    },
+    /// An UpdateParent cleared a bank that had already frozen or confirmed. Agave clears only a
+    /// bank still replaying, so the stream is inconsistent.
+    ClearedCommittedBank {
+        slot: Slot,
+        bank_id: u64,
+    },
+    /// The stream contradicts itself about which block a slot holds: two committed banks in one
+    /// slot, a BlockMeta that changed, a parent blockhash that names another bank, or a commitment
+    /// for a bank it invalidated. Restart from the last checkpoint.
+    ConflictingBlockIdentity {
+        slot: Slot,
+        bank_id: u64,
+    },
 }
 
 impl fmt::Display for CoordinatorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TwoGateInvariantViolation { slot, last_flushed } => write!(
+            Self::BankInTwoSlots {
+                bank_id,
+                slot,
+                other_slot,
+            } => write!(f, "Bank {bank_id} is in slot {slot} and slot {other_slot}"),
+            Self::MissingBankId { slot } => write!(
                 f,
-                "Two-gate invariant violated: slot {slot} <= last_flushed {last_flushed:?}"
+                "Slot {slot} has no bank ID. The server likely runs Geyser proto 12.7 or older"
             ),
             Self::ReadySlotMissingMetadata { slot } => {
                 write!(f, "Ready slot missing metadata: slot {slot}")
@@ -71,6 +123,25 @@ impl fmt::Display for CoordinatorError {
             Self::AccountOutputChannelClosed { slot } => {
                 write!(f, "Account output channel closed while sending slot {slot}")
             },
+            Self::TooManyPendingBanks {
+                pending,
+                limit,
+                oldest_slot,
+            } => write!(
+                f,
+                "{pending} banks are pending, over the limit of {limit}; output stopped behind \
+                 slot {oldest_slot:?}"
+            ),
+            Self::ClearedCommittedBank { slot, bank_id } => write!(
+                f,
+                "UpdateParent cleared bank {bank_id} of slot {slot}, which had already frozen or \
+                 confirmed"
+            ),
+            Self::ConflictingBlockIdentity { slot, bank_id } => write!(
+                f,
+                "Bank {bank_id} of slot {slot} contradicts the chain the stream reported; restart \
+                 from the last checkpoint"
+            ),
         }
     }
 }
@@ -88,25 +159,36 @@ pub enum ParseStatsKind {
     TransactionStatusSucceeded,
 }
 
+///
 /// Messages from handlers back to the coordinator.
+///
+/// `bank_id` comes from the update the handler parsed. Records stay per bank until one
+/// bank of the slot is confirmed.
+///
 pub enum CoordinatorMessage<R> {
     /// A parsed instruction record ready to buffer (sorted by tx_index, ix_path).
     InstructionParsed {
         slot: Slot,
+        bank_id: u64,
         key: InstructionRecordSortKey,
         record: R,
     },
     /// A parsed account record ready to buffer, sorted by ingress_seq:pubkey.
     AccountParsed {
         slot: Slot,
+        bank_id: u64,
         key: AccountRecordSortKey,
         record: R,
     },
     /// Signal that a transaction has been fully parsed by the handler.
     /// Coordinator counts these to determine when a slot is fully parsed.
-    TransactionParsed { slot: Slot },
+    TransactionParsed { slot: Slot, bank_id: u64 },
     /// A parse stat event (filtered or error) for aggregate tracking.
-    ParseStats { slot: Slot, kind: ParseStatsKind },
+    ParseStats {
+        slot: Slot,
+        bank_id: u64,
+        kind: ParseStatsKind,
+    },
 }
 
 impl<R> CoordinatorMessage<R> {
@@ -114,7 +196,7 @@ impl<R> CoordinatorMessage<R> {
         match self {
             Self::InstructionParsed { slot, .. }
             | Self::AccountParsed { slot, .. }
-            | Self::TransactionParsed { slot }
+            | Self::TransactionParsed { slot, .. }
             | Self::ParseStats { slot, .. } => *slot,
         }
     }
@@ -143,7 +225,7 @@ impl InstructionRecordSortKey {
 /// Sort key for account records within a slot.
 /// Ordered by write_version (geyser-assigned version number for
 /// deterministic ordering), then pubkey (discriminate multiple accounts
-/// in the same update). Slot is implicit (it's the buffer's key).
+/// in the same update). Slot and bank_id are implicit (they are the buffer's key).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AccountRecordSortKey {
     write_version: u64,
@@ -164,9 +246,9 @@ impl AccountRecordSortKey {
 pub enum CoordinatorInput {
     /// A raw geyser SubscribeUpdate (Entry, Slot, BlockMeta).
     GeyserUpdate(Box<SubscribeUpdate>),
-    /// A raw Account event was seen on the geyser stream for this slot.
-    /// Lightweight signal — only the slot, no protobuf payload.
-    AccountEventSeen { slot: Slot },
+    /// A raw Account event was seen on the geyser stream for this bank.
+    /// Lightweight signal: only the slot and bank, no protobuf payload.
+    AccountEventSeen { slot: Slot, bank_id: u64 },
 }
 
 /// Wraps a slot number with a deterministic ANSI color for log readability.
@@ -211,6 +293,8 @@ pub enum AccountMode {
 /// An instruction slot ready for downstream consumption (e.g., Kafka write).
 pub struct InstructionSlot<R> {
     pub slot: Slot,
+    /// The node-local bank that confirmed for `slot`.
+    pub bank_id: u64,
     pub parent_slot: Slot,
     pub blockhash: Hash,
     pub executed_transaction_count: u64,
@@ -224,6 +308,11 @@ pub struct InstructionSlot<R> {
 /// An account slot ready for downstream consumption.
 pub struct AccountSlot<R> {
     pub slot: Slot,
+    /// The node-local bank that confirmed for `slot`.
+    pub bank_id: u64,
+    /// With `blockhash`, lets a consumer check that consecutive slots chain.
+    pub parent_slot: Slot,
+    pub blockhash: Hash,
     pub records: Vec<R>,
     pub decoded_account_count: u64,
     pub filtered_account_count: u64,
@@ -242,41 +331,59 @@ impl<R: Send> CoordinatorHandle<R> {
     pub async fn send_instruction_parsed(
         &self,
         slot: Slot,
+        bank_id: u64,
         key: InstructionRecordSortKey,
         record: R,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<CoordinatorMessage<R>>> {
         self.tx
-            .send(CoordinatorMessage::InstructionParsed { slot, key, record })
+            .send(CoordinatorMessage::InstructionParsed {
+                slot,
+                bank_id,
+                key,
+                record,
+            })
             .await
     }
 
     pub async fn send_account_parsed(
         &self,
         slot: Slot,
+        bank_id: u64,
         key: AccountRecordSortKey,
         record: R,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<CoordinatorMessage<R>>> {
         self.tx
-            .send(CoordinatorMessage::AccountParsed { slot, key, record })
+            .send(CoordinatorMessage::AccountParsed {
+                slot,
+                bank_id,
+                key,
+                record,
+            })
             .await
     }
 
     pub async fn send_transaction_parsed(
         &self,
         slot: Slot,
+        bank_id: u64,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<CoordinatorMessage<R>>> {
         self.tx
-            .send(CoordinatorMessage::TransactionParsed { slot })
+            .send(CoordinatorMessage::TransactionParsed { slot, bank_id })
             .await
     }
 
     pub async fn send_parse_stats(
         &self,
         slot: Slot,
+        bank_id: u64,
         kind: ParseStatsKind,
     ) -> Result<(), tokio::sync::mpsc::error::SendError<CoordinatorMessage<R>>> {
         self.tx
-            .send(CoordinatorMessage::ParseStats { slot, kind })
+            .send(CoordinatorMessage::ParseStats {
+                slot,
+                bank_id,
+                kind,
+            })
             .await
     }
 }
