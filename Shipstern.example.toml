@@ -28,6 +28,12 @@ timeout = 60
 # A processed stream hands the budget to the client, where it is uncapped and
 # spans about 8.5 minutes. Recovery also needs the server to still hold the
 # missed slots, or the run ends with OutOfRange.
+#
+# The server keeps a number of slots, not a time: 150 by default on Geyser, and
+# about 1,000 on Triton shared mainnet. At confirmed or finalized, an outage of W
+# seconds needs at least (W + 34.5) / 10 retries. For example, 1,000 slots at
+# about 214 ms each are about 214 seconds, which needs about 25 retries. At
+# processed the waits do not cap, so more retries help little.
 #reconnect-max-retries = 10
 
 # Windows of account data to receive in place of the whole account.

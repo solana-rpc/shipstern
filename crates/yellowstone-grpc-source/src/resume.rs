@@ -4,7 +4,7 @@
 //! by subscribing again from the last slot seen and dropping that slot's repeats. Everything
 //! after it is new by construction.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use yellowstone_grpc_proto::geyser::{
     subscribe_update::UpdateOneof, SlotStatus, SubscribeRequest, SubscribeRequestFilterSlots,
@@ -45,8 +45,15 @@ enum UpdateKey {
     Entry(u64),
     Slot(i32),
     BlockMeta,
-    Block,
-    BlockFooter(u64),
+    Block(BTreeSet<String>),
+    BlockFooter(u64, BTreeSet<String>),
+}
+
+/// The server sends one block per `blocks` filter and one footer per certificates group, so
+/// the filter names tell those copies apart.
+/// Geyser v16.2.0: <https://github.com/rpcpool/yellowstone-grpc/blob/b408d1fa01458b90818fc4ba99831a6b254cbf26/yellowstone-grpc-geyser/src/plugin/filter/filter.rs#L2208-L2410>
+fn filter_names(update: &SubscribeUpdate) -> BTreeSet<String> {
+    update.filters.iter().cloned().collect()
 }
 
 /// The slot an update belongs to, its key in that slot, and whether it moves the checkpoint.
@@ -76,9 +83,10 @@ fn classify(update: &SubscribeUpdate, commitment: SlotStatus) -> Option<(u64, Up
             (slot.slot, UpdateKey::Slot(slot.status), at_commitment)
         },
         UpdateOneof::BlockMeta(meta) => (meta.slot, UpdateKey::BlockMeta, true),
-        UpdateOneof::Block(block) => (block.slot, UpdateKey::Block, true),
+        UpdateOneof::Block(block) => (block.slot, UpdateKey::Block(filter_names(update)), true),
         UpdateOneof::BlockFooter(footer) => {
-            (footer.slot, UpdateKey::BlockFooter(footer.bank_id), true)
+            let key = UpdateKey::BlockFooter(footer.bank_id, filter_names(update));
+            (footer.slot, key, true)
         },
         UpdateOneof::EntryUpdateParent(_) | UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => {
             return None;
@@ -130,8 +138,9 @@ impl ResumePoint {
 #[cfg(test)]
 mod tests {
     use yellowstone_grpc_proto::geyser::{
-        SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateSlot,
-        SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+        SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
+        SubscribeUpdateBlockFooter, SubscribeUpdateSlot, SubscribeUpdateTransaction,
+        SubscribeUpdateTransactionInfo,
     };
 
     use super::*;
@@ -211,6 +220,37 @@ mod tests {
         update.filters = vec!["user".to_owned(), RESUME_FILTER_KEY.to_owned()];
         assert!(strip_resume_filter(&mut update));
         assert_eq!(update.filters, ["user"]);
+    }
+
+    /// Each footer copy and each block copy of one bank reaches its own filters, once.
+    #[test]
+    fn footer_and_block_copies_per_filter_are_kept() {
+        let footer = |filter: &str| SubscribeUpdate {
+            filters: vec![filter.to_owned()],
+            update_oneof: Some(UpdateOneof::BlockFooter(SubscribeUpdateBlockFooter {
+                slot: 10,
+                bank_id: 4,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let block = |filter: &str| SubscribeUpdate {
+            filters: vec![filter.to_owned()],
+            update_oneof: Some(UpdateOneof::Block(SubscribeUpdateBlock {
+                slot: 10,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
+        assert!(resume.deliver(&footer("plain")));
+        assert!(resume.deliver(&footer("certificates")));
+        assert!(resume.deliver(&block("a")));
+        assert!(resume.deliver(&block("b")));
+
+        assert!(!resume.deliver(&footer("certificates")));
+        assert!(!resume.deliver(&block("b")));
     }
 
     /// An interslot status for a slot ahead must not move the checkpoint past content that has
