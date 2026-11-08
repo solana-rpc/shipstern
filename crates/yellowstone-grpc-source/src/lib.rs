@@ -236,10 +236,11 @@ fn is_recoverable(status: &Status) -> bool {
 /// The wait before reconnect attempt `attempt`, counted from 1, capped at `MAX_RECONNECT_DELAY`.
 fn retry_delay(backoff: &Backoff, attempt: u32) -> Duration {
     let exponent = attempt.saturating_sub(1).min(i32::MAX as u32) as i32;
-    backoff
-        .initial_interval
-        .mul_f64(backoff.multiplier.powi(exponent))
-        .min(MAX_RECONNECT_DELAY)
+    let secs = backoff.initial_interval.as_secs_f64() * backoff.multiplier.powi(exponent);
+
+    // A wait too long for `Duration` is past the cap anyway, and `mul_f64` panics on it.
+    Duration::try_from_secs_f64(secs)
+        .map_or(MAX_RECONNECT_DELAY, |delay| delay.min(MAX_RECONNECT_DELAY))
 }
 
 /// Count a loss and wait out its backoff. False once the budget is spent.
@@ -1154,6 +1155,15 @@ mod tests {
         assert_eq!(retry_delay(&backoff, 5), Duration::from_secs(8));
         assert_eq!(retry_delay(&backoff, 6), Duration::from_secs(10));
         assert_eq!(retry_delay(&backoff, 10), Duration::from_secs(10));
+    }
+
+    /// From attempt 66 the uncapped wait is longer than `Duration` can hold.
+    #[test]
+    fn retry_delay_stays_capped_with_a_big_budget() {
+        let backoff = Backoff::new(Duration::from_millis(500), 2.0, 100);
+
+        assert_eq!(retry_delay(&backoff, 66), Duration::from_secs(10));
+        assert_eq!(retry_delay(&backoff, u32::MAX), Duration::from_secs(10));
     }
 
     /// A server without replay rejects every `from_slot` the same way, so retrying it only
