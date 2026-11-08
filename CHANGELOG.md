@@ -48,6 +48,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 - `shipstern-block-coordinator`: accounts flush in chain order, like instructions. A child confirmed before its fork-reported parent no longer flushes its accounts first, which let cleanup drop the parent's account records without a count.
 - `shipstern-block-coordinator`: discarded markers and confirms are pruned only behind both flush frontiers. At startup, with one frontier still unset, pruning by the other dropped a confirm the account drain still needed and stopped it for good.
 - `shipstern-block-coordinator`: `CoordinatorSource` skips a slot status that this proto version does not define and logs a warning. Before, such a status without a bank ID stopped the source with "Slot status has no bank ID", and one with a bank ID reached the block machine, which read it as processed.
+- `shipstern`: a run whose buffer stops on a stream error returns that error, also when the source then reports `ReceiverDropped`. Before, the runtime logged the error and returned `Ok(())` ([#384](https://github.com/solana-rpc/shipstern/pull/384) by @senzenn).
 
 ## [0.12.0] - 2026-10-11
 
