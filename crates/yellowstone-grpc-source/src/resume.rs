@@ -46,7 +46,9 @@ enum UpdateKey {
     Slot(i32),
     BlockMeta,
     Block(BTreeSet<String>),
-    BlockFooter(u64, BTreeSet<String>),
+    // Each server numbers its banks in its own way, so the key has no `bank_id`. A confirmed
+    // slot has only one bank.
+    BlockFooter(BTreeSet<String>),
 }
 
 /// The server sends one block per `blocks` filter and one footer per certificates group, so
@@ -85,7 +87,7 @@ fn classify(update: &SubscribeUpdate, commitment: SlotStatus) -> Option<(u64, Up
         UpdateOneof::BlockMeta(meta) => (meta.slot, UpdateKey::BlockMeta, true),
         UpdateOneof::Block(block) => (block.slot, UpdateKey::Block(filter_names(update)), true),
         UpdateOneof::BlockFooter(footer) => {
-            let key = UpdateKey::BlockFooter(footer.bank_id, filter_names(update));
+            let key = UpdateKey::BlockFooter(filter_names(update));
             (footer.slot, key, true)
         },
         UpdateOneof::EntryUpdateParent(_) | UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => {
@@ -251,6 +253,24 @@ mod tests {
 
         assert!(!resume.deliver(&footer("certificates")));
         assert!(!resume.deliver(&block("b")));
+    }
+
+    /// A resubscribe can reach another server, which gives the same bank another `bank_id`.
+    #[test]
+    fn footer_repeat_from_another_server_is_dropped() {
+        let footer = |bank_id| SubscribeUpdate {
+            filters: vec!["footers".to_owned()],
+            update_oneof: Some(UpdateOneof::BlockFooter(SubscribeUpdateBlockFooter {
+                slot: 10,
+                bank_id,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
+        assert!(resume.deliver(&footer(101)));
+        assert!(!resume.deliver(&footer(900)));
     }
 
     /// An interslot status for a slot ahead must not move the checkpoint past content that has
