@@ -90,12 +90,12 @@ pub struct YellowstoneGrpcConfig {
     ///
     /// Reconnect a lost gRPC stream. Defaults to `true`. See [`ReconnectMode`].
     ///
-    /// At confirmed or finalized the source subscribes again from the last slot it saw, and
-    /// adds a `slots` filter so a slot is on record even before the first matching update. At
-    /// processed the client replays the cut-off banks, which needs no `from_slot` and no
-    /// `RuntimeHandle`, holds replayed updates in memory until they finalize, can repeat the
-    /// cut-off block, and adds its own `blocks_meta` and `slots` filters. Set it to `false` for
-    /// a server on Geyser proto 12.7 or older, or one without stored slots.
+    /// At confirmed or finalized the source subscribes again from the oldest slot it has not
+    /// received in full, and adds a `slots` filter so a slot is on record even before the first
+    /// matching update. At processed the client replays the cut-off banks, which needs no
+    /// `from_slot` and no `RuntimeHandle`, holds replayed updates in memory until they finalize,
+    /// can repeat the cut-off block, and adds its own `blocks_meta` and `slots` filters. Set it
+    /// to `false` for a server on Geyser proto 12.7 or older, or one without stored slots.
     ///
     #[arg(long, env, default_value_t = true)]
     #[serde(default = "default_auto_reconnect")]
@@ -193,11 +193,11 @@ pub enum ReconnectMode {
     /// fixed request, since a slot can have several banks there and only the client's replay
     /// can retract one.
     BankReplay,
-    /// The source subscribes again from the last slot it saw and drops that slot's repeats.
-    /// A confirmed or finalized slot never changes once delivered, so this is exact. It adds
-    /// its own `slots` filter so the last slot is known even when nothing else matched, takes
-    /// a `from_slot` and filter updates, and ends the run with `OutOfRange` when the server no
-    /// longer holds the slot.
+    /// The source subscribes again from the oldest slot it has not received in full and drops
+    /// the repeats. A confirmed or finalized slot never changes once delivered, so this is
+    /// exact. It adds its own `slots` filter, whose status shows that a slot is complete even
+    /// when nothing else matched, takes a `from_slot` and filter updates, and ends the run with
+    /// `OutOfRange` when the server no longer holds the slot.
     SlotResume,
     /// The stream stops on loss.
     Off,

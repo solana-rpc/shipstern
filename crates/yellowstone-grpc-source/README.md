@@ -131,11 +131,13 @@ example, 1,000 slots at about 214 ms each are about 214 s, which needs about 25
 retries. At processed the client doubles each wait with no cap, so more retries
 help little.
 
-**Confirmed or finalized: resume from the last slot.** The source subscribes
-again from the last slot it saw, with the newest filter set, and drops that
-slot's repeats by signature, pubkey and write version, or status. A slot at
-these commitments never changes once delivered, so nothing is missed and
-nothing repeats. One exception: a slot status below the commitment, such as
+**Confirmed or finalized: resume from a slot checkpoint.** The source
+subscribes again from the oldest slot it has not received in full, with the
+newest filter set, and drops the repeats by signature, pubkey and write
+version, or status. A slot is complete when its status at the commitment
+arrives. If that status does not come before the slot is 32 slots behind, the
+source logs a warning and stops waiting for it. A slot at these commitments
+never changes once delivered, so nothing is missed and nothing repeats. One exception: a slot status below the commitment, such as
 processed, can repeat for a slot after the checkpoint, because the source does
 not record those statuses. A `from_slot` and a `RuntimeHandle` are both fine
 here. The budget starts over once the new stream delivers an update.
