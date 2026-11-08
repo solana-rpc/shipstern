@@ -15,7 +15,7 @@ use yellowstone_grpc_client::{
     Backoff, GeyserGrpcClient, ReconnectConfig, ReconnectEvent, SubscribeRequestSink,
 };
 use yellowstone_grpc_proto::{
-    geyser::{SlotStatus, SubscribeRequest, SubscribeUpdate},
+    geyser::{subscribe_update::UpdateOneof, SlotStatus, SubscribeRequest, SubscribeUpdate},
     tonic::{codec::CompressionEncoding, transport::ClientTlsConfig, Code, Status},
 };
 
@@ -466,13 +466,14 @@ impl SourceTrait for YellowstoneGrpcSource {
     /// Open the subscription and pump updates until the stream ends, sending
     /// each filter set published on the context's update slot to the server so
     /// it replaces the live subscription. In `SlotResume` mode a lost stream is
-    /// opened again from the last slot seen, with the newest filter set.
+    /// opened again from the checkpoint, with the newest filter set, and a filter
+    /// update waits until the server sends data for a request with `from_slot`.
     ///
     async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, ShipsternError> {
         let SourceContext {
-            filters,
+            mut filters,
             tx,
-            mut filter_updates,
+            filter_updates,
             ..
         } = ctx;
 
@@ -488,13 +489,6 @@ impl SourceTrait for YellowstoneGrpcSource {
         // With no RuntimeHandle the update channel is already closed, so no filter
         // update can arrive and the client may reconnect the stream.
         let has_handle = filter_updates.has_changed().is_ok();
-
-        // A closed slot can still hold one set that the runtime did not read.
-        let mut filters = if has_handle {
-            filters
-        } else {
-            filter_updates.borrow_and_update().clone()
-        };
         let mut filter_updates_rx = Some(filter_updates);
 
         let mode = config.reconnect_mode(has_handle);
@@ -524,8 +518,19 @@ impl SourceTrait for YellowstoneGrpcSource {
         let mut filter_updates_sent: u64 = 0;
 
         let exit_status = loop {
+            // The request that replays takes a set published while the stream was down. A
+            // closed slot can still hold one set that nobody read.
+            if let Some(rx) = filter_updates_rx.as_mut() {
+                filters = rx.borrow_and_update().clone();
+            }
+
             let mut request = build_subscribe_request(filters.clone(), &config, mode);
             request.from_slot = from_slot;
+
+            // Geyser before v16.2.0 keeps only the newest queued request, so an early filter
+            // update drops the replay. The resume filter makes sure data comes to end the hold.
+            let mut hold_filter_updates =
+                mode == ReconnectMode::SlotResume && request.from_slot.is_some();
 
             let (mut sink, mut stream) = match open_stream(&config, mode, request).await {
                 Ok(opened) => opened,
@@ -553,6 +558,15 @@ impl SourceTrait for YellowstoneGrpcSource {
                             // A delivered update shows the connection works, so the budget
                             // starts over.
                             attempts = 0;
+
+                            // The server sends data only after it reads the request, but a ping
+                            // can come before.
+                            if !matches!(
+                                update.update_oneof,
+                                Some(UpdateOneof::Ping(_) | UpdateOneof::Pong(_))
+                            ) {
+                                hold_filter_updates = false;
+                            }
 
                             // A repeat of the checkpoint slot, or a slot status only the
                             // resume filter asked for, stays here.
@@ -598,7 +612,8 @@ impl SourceTrait for YellowstoneGrpcSource {
                         None => break StreamStop::Exit(SourceExitStatus::StreamEnded),
                     },
 
-                    update = next_filter_update(&mut filter_updates_rx) => {
+                    update = next_filter_update(&mut filter_updates_rx),
+                        if !hold_filter_updates => {
                         let Some(new_filters) = update else {
                             // Every handle is gone and no new one can be taken, so retire this
                             // branch for the rest of the run.
