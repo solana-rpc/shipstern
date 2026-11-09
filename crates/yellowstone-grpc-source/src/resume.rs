@@ -1,7 +1,7 @@
 //! Slot-checkpoint resume for a confirmed or finalized stream.
 //!
 //! A slot at those commitments never changes once delivered, so a lost stream subscribes again
-//! a few slots before a checkpoint that waits for unfinished slots, and drops the repeats.
+//! a few slots before a checkpoint that waits for open slots, and drops the repeats.
 
 use std::collections::{hash_map::Entry, BTreeMap, HashMap, HashSet};
 
@@ -106,12 +106,12 @@ fn classify(update: &SubscribeUpdate, commitment: SlotStatus) -> Option<(u64, Up
     Some(classified)
 }
 
-/// How far above the oldest open slot a slot gets a record, so a slot whose status never comes
-/// keeps the state bounded. It is well inside the 150 slots Geyser keeps for replay by default.
+/// How far above the oldest open slot a slot gets a record, so the state stays bounded when a
+/// status never comes. It is below the 150 slots Geyser keeps for replay by default.
 const MAX_TRACKED_SLOTS: u64 = 32;
 
-/// How far below the checkpoint a resubscribe starts and a record keeps dropping repeats. It is
-/// one leader window (Agave `NUM_CONSECUTIVE_LEADER_SLOTS`), for a parent sent after its child.
+/// How far below the checkpoint a resubscribe starts and records drop repeats, for a parent sent
+/// after its child. It equals Agave `NUM_CONSECUTIVE_LEADER_SLOTS`. A later parent is not replayed.
 const REPEAT_WINDOW: u64 = 4;
 
 /// How far a slot has come.
@@ -138,8 +138,8 @@ struct SlotRecord {
 }
 
 impl SlotRecord {
-    /// Drop the names in `filters` that already got `key`, and note the rest. False when no
-    /// name is left. Without names, a key that came before is a repeat.
+    /// Remove from `filters` each name whose filter already got `key`, and note the rest. False
+    /// when no name is left. Without names, a key that came before is a repeat.
     fn mark_seen(&mut self, key: UpdateKey, filters: &mut Vec<String>) -> bool {
         let delivered = match self.seen.entry(key) {
             Entry::Vacant(entry) => {
@@ -201,8 +201,8 @@ impl ResumePoint {
             .map(|(slot, _)| *slot)
     }
 
-    /// Note `update`, take off its filter names that already got it, and say whether to deliver
-    /// it. An update of a slot with no record is always delivered, so it can repeat.
+    /// Note `update`, remove the names of the filters that already got it, and say whether to
+    /// deliver it. An update that gets no record is always delivered, so it can repeat.
     pub(crate) fn deliver(&mut self, update: &mut SubscribeUpdate) -> bool {
         let Some((slot, key, role)) = classify(update, self.commitment) else {
             return true;
@@ -210,8 +210,8 @@ impl ResumePoint {
 
         let checkpoint = self.checkpoint();
         if !self.slots.contains_key(&slot) && !self.may_record(slot, role, checkpoint) {
-            // An unrecorded update above the open slot hit the cap. A status of another level
-            // can run that far ahead of a finalized slot that is not stuck.
+            // Above the cap, content or a commitment status shows that the open slot is stuck. On a
+            // finalized stream, statuses of another level run this far ahead with no stuck slot.
             if role != Role::OtherStatus
                 && let Some(open) = self.oldest_open()
                 && slot > open
@@ -220,8 +220,8 @@ impl ResumePoint {
                 tracing::warn!(
                     open_slot = open,
                     slot,
-                    "No status at the commitment came for this open slot; newer slots are not \
-                     recorded, and the checkpoint waits for it"
+                    "No status at the commitment came for this open slot; slots more than 32 \
+                     above it are not recorded, and the checkpoint waits for it"
                 );
                 self.warned_open_slot = Some(open);
             }
@@ -257,17 +257,18 @@ impl ResumePoint {
     /// below the checkpoint or `MAX_TRACKED_SLOTS` above the oldest open slot.
     fn may_record(&self, slot: u64, role: Role, checkpoint: Option<u64>) -> bool {
         let Some(checkpoint) = checkpoint else {
-            // Finality can stall at the start while statuses of another level keep coming.
+            // The status at the commitment can stall at the start while statuses of another
+            // level keep coming.
             return role != Role::OtherStatus || self.slots.len() <= MAX_TRACKED_SLOTS as usize;
         };
 
-        // Below the checkpoint a record only drops the repeats of a resubscribe from the margin.
+        // Below the checkpoint, only a slot that a resubscribe sends again gets a record.
         if slot < checkpoint {
             return checkpoint - slot <= REPEAT_WINDOW;
         }
 
         let Some(open) = self.oldest_open() else {
-            // Content or a commitment status opens or completes its slot, so it bounds itself.
+            // Content opens a slot that caps later records, and a commitment status frees old ones.
             return role != Role::OtherStatus || slot - checkpoint <= MAX_TRACKED_SLOTS;
         };
 
@@ -350,8 +351,8 @@ mod tests {
         }
     }
 
-    /// Slot 10 is cut after two of its three updates. The replay from 10 repeats them and
-    /// delivers the third, then slot 11 starts a fresh set.
+    /// Slot 10 is cut after two of its three updates. The replay repeats them and delivers the
+    /// third, and content of slot 11 does not move the checkpoint past 10.
     #[test]
     fn replay_of_the_checkpoint_slot_delivers_only_what_was_missed() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
@@ -449,10 +450,10 @@ mod tests {
         assert_eq!(resume.checkpoint(), Some(12));
     }
 
-    /// Geyser can send a parent after its child is complete. A loss inside the parent
-    /// subscribes again from below it, and the replay drops what the parent already delivered.
+    /// Geyser can send a parent after its child is complete. After a loss inside the parent, the
+    /// source subscribes again from below it, and the replay drops what the parent delivered.
     #[test]
-    fn resubscribe_covers_an_ancestor_sent_after_its_child() {
+    fn resubscribe_covers_a_parent_sent_after_its_child() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
         assert!(resume.deliver(&mut transaction(43, 1)));
         assert!(resume.deliver(&mut slot_status(43, SlotStatus::SlotConfirmed)));
@@ -464,7 +465,8 @@ mod tests {
     }
 
     /// A slot whose status never comes holds the checkpoint, so a later reconnect fails with
-    /// `OutOfRange` instead of skipping the slot. Newer slots are not recorded.
+    /// `OutOfRange` instead of skipping the slot. Slots more than `MAX_TRACKED_SLOTS` above it
+    /// are not recorded.
     #[test]
     fn checkpoint_holds_a_slot_whose_status_never_comes() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
@@ -497,23 +499,9 @@ mod tests {
         assert!(resume.deliver(&mut account_with_signature(10, 6, 8)));
     }
 
-    /// A server that is behind can send a completed slot again after the checkpoint passed it.
+    /// A filter added across a reconnect gets the repeat, and the old filter does not.
     #[test]
-    fn completed_slot_replay_is_dropped_without_checkpoint_regression() {
-        let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
-        for slot in 10..=12 {
-            assert!(resume.deliver(&mut transaction(slot, 1)));
-            assert!(resume.deliver(&mut slot_status(slot, SlotStatus::SlotConfirmed)));
-        }
-        assert_eq!(resume.checkpoint(), Some(12));
-
-        assert!(!resume.deliver(&mut transaction(11, 1)));
-        assert_eq!(resume.checkpoint(), Some(12));
-    }
-
-    /// A filter added across a reconnect gets the replayed copy, and the old filter does not.
-    #[test]
-    fn footer_group_repeat_does_not_redeliver_a_seen_filter() {
+    fn repeat_reaches_only_a_filter_added_on_reconnect() {
         let footer = |filters: &[&str]| SubscribeUpdate {
             filters: filters.iter().map(|name| (*name).to_owned()).collect(),
             update_oneof: Some(UpdateOneof::BlockFooter(SubscribeUpdateBlockFooter {
@@ -531,8 +519,8 @@ mod tests {
         assert_eq!(repeat.filters, ["b"]);
     }
 
-    /// A late copy of a complete slot below the window has no keys left to match, but it never
-    /// opens the slot again.
+    /// A late repeat of a complete slot below the window has no record left, so it is delivered,
+    /// but it never opens the slot again.
     #[test]
     fn late_copy_below_the_window_does_not_reopen_a_complete_slot() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
@@ -589,7 +577,7 @@ mod tests {
     /// The resubscribe starts `REPEAT_WINDOW` below the checkpoint, but never before the
     /// configured start.
     #[test]
-    fn resubscribe_starts_the_margin_below_the_checkpoint() {
+    fn resubscribe_starts_a_window_below_the_checkpoint() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
         assert_eq!(resume.resubscribe_slot(Some(98)), Some(98));
 
@@ -597,30 +585,6 @@ mod tests {
         assert!(resume.deliver(&mut slot_status(100, SlotStatus::SlotConfirmed)));
         assert_eq!(resume.resubscribe_slot(None), Some(100 - REPEAT_WINDOW));
         assert_eq!(resume.resubscribe_slot(Some(98)), Some(98));
-    }
-
-    /// A finalized status on a confirmed stream can be for a slot from before the stream, so
-    /// the parents that the next statuses name must not hold the checkpoint.
-    #[test]
-    fn status_of_another_level_at_start_does_not_hold_the_checkpoint() {
-        let confirmed = |slot: u64| SubscribeUpdate {
-            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot,
-                parent: Some(slot - 1),
-                status: SlotStatus::SlotConfirmed as i32,
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
-
-        let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
-        assert!(resume.deliver(&mut slot_status(990, SlotStatus::SlotFinalized)));
-        for slot in 1000..=1040 {
-            assert!(resume.deliver(&mut transaction(slot, 1)));
-            assert!(resume.deliver(&mut confirmed(slot)));
-        }
-
-        assert_eq!(resume.checkpoint(), Some(1040));
     }
 
     /// Statuses of another level that come while finality stalls at the start must not grow

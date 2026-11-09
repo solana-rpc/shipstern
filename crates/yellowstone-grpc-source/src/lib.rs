@@ -90,9 +90,9 @@ pub struct YellowstoneGrpcConfig {
     ///
     /// Reconnect a lost gRPC stream. Defaults to `true`. See [`ReconnectMode`].
     ///
-    /// At confirmed or finalized the source resubscribes just before a checkpoint that waits for
-    /// unfinished slots, and adds a `slots` filter so a slot is on record even before the first
-    /// matching update. At processed the client replays the cut-off banks, which needs no
+    /// At confirmed or finalized the source subscribes again a few slots before a checkpoint, and
+    /// adds a `slots` filter so a slot is on record even before the first matching update.
+    /// At processed the client replays the cut-off banks, which needs no
     /// `from_slot` and no `RuntimeHandle`, holds replayed updates in memory until they finalize,
     /// can repeat the cut-off block, and adds its own `blocks_meta` and `slots` filters. Set it
     /// to `false` for a server on Geyser proto 12.7 or older, or one without stored slots.
@@ -193,9 +193,8 @@ pub enum ReconnectMode {
     /// fixed request, since a slot can have several banks there and only the client's replay
     /// can retract one.
     BankReplay,
-    /// The source subscribes again a few slots before a checkpoint and drops the repeats. The
-    /// checkpoint waits for each slot that has content until that slot is complete. It adds its
-    /// own `slots` filter, whose status shows that a slot is complete even when nothing else
+    /// The source subscribes again a few slots before a checkpoint and drops the repeats. It adds
+    /// its own `slots` filter, whose status shows that a slot is complete even when nothing else
     /// matched, takes a `from_slot` and filter updates, and ends the run with `OutOfRange` when
     /// the server no longer holds the slot it resumes from, as when a status never comes.
     SlotResume,
@@ -215,8 +214,8 @@ enum StreamStop {
 }
 
 /// A loss the network or the server caused, which a new subscription can recover from.
-/// `OutOfRange` is not one: the server no longer holds the checkpoint slot. Nor is the
-/// `Internal` a server without replay answers `from_slot` with: every retry sends it again.
+/// `OutOfRange` is not one: the server no longer holds the slot the resubscribe asks for. Nor
+/// is the `Internal` a server without replay answers `from_slot` with: every retry sends it again.
 fn is_recoverable(status: &Status) -> bool {
     if status.code() == Code::Internal && status.message().contains("from_slot is not supported") {
         return false;
@@ -511,8 +510,6 @@ impl SourceTrait for YellowstoneGrpcSource {
             _ => SlotStatus::SlotConfirmed,
         };
         let mut resume = ResumePoint::new(checkpoint_status);
-        // A resubscribe starts a few slots before the checkpoint, but never before the
-        // configured start.
         let mut from_slot = config.from_slot;
         let mut attempts: u32 = 0;
         let mut filter_updates_sent: u64 = 0;
@@ -569,7 +566,7 @@ impl SourceTrait for YellowstoneGrpcSource {
                             }
 
                             // A repeat that each matched filter already got, or a slot
-                            // status only the resume filter asked for, stays here.
+                            // status only the resume filter asked for, does not go to the runtime.
                             if mode == ReconnectMode::SlotResume
                                 && (!resume.deliver(&mut update)
                                     || !strip_resume_filter(&mut update))

@@ -131,15 +131,16 @@ example, 1,000 slots at about 214 ms each are about 214 s, which needs about 25
 retries. At processed the client doubles each wait with no cap, so more retries
 help little.
 
-**Confirmed or finalized: resume from a slot checkpoint.** The source subscribes
-again a few slots before the checkpoint, with the newest filter set, and drops
-the repeats by transaction signature, by account pubkey and signature, or by
-status. If the server sends a slot's updates but never its status at the
-commitment, the checkpoint stays at that slot, and a reconnect after the server
-drops it fails with `OutOfRange` instead of skipping it. Slots far after it can
-repeat, and so can a slot status below the commitment that runs far ahead of
-the checkpoint. A `from_slot` and a `RuntimeHandle` are both fine here. The
-budget starts over once the new stream delivers an update.
+**Confirmed or finalized: resume from a slot checkpoint.** The checkpoint is the
+newest slot whose status at the commitment came, or an older slot whose content
+came without that status. The source subscribes again a few slots before it,
+with the newest filter set, and drops a repeat for each filter that already got
+it. If the server sends a slot's content but never its status at the commitment,
+the checkpoint stays at that slot, and a reconnect after the server drops it
+fails with `OutOfRange` instead of skipping it. A few repeats can still come, so
+make handlers accept them. A reconnect can skip a parent that comes more than a
+few slots after its child. A `from_slot` and a `RuntimeHandle` are both fine
+here. The budget starts over once the new stream delivers an update.
 
 **Processed: the client replays banks.** A slot can have several banks at
 processed, so only the client's bank replay can retract the one that was cut
