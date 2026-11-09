@@ -22,9 +22,9 @@ The [`Source`](https://github.com/solana-rpc/shipstern/blob/main/crates/runtime/
 ## Block footers
 
 A block footer pipeline gets one footer per block on an Alpenglow cluster. A
-server on Geyser proto 12.7 or older ignores the footer filter, and a cluster
-without Alpenglow sends no footers. A proto 13 server sends certificates at
-field numbers that proto 14 reserves, so they are dropped.
+server on yellowstone-grpc proto 12.7 or older ignores the footer filter, and a
+cluster without Alpenglow sends no footers. A proto 13 server sends certificates
+at field numbers that proto 14 reserves, so they are dropped.
 
 ## Runtime filter updates
 
@@ -124,12 +124,12 @@ by the commitment. Both share `reconnect-max-retries` and the backoff, and both
 need a server that stores slots: if it no longer holds the slot to resume from,
 the run ends with `OutOfRange`.
 
-The server keeps a number of slots, not a time: 150 by default on Geyser, and
-about 1,000 on Triton shared mainnet. At confirmed or finalized each wait caps
-at 10 s, so an outage of W seconds needs at least (W + 34.5) / 10 retries. For
-example, 1,000 slots at about 214 ms each are about 214 s, which needs about 25
-retries. At processed the client doubles each wait with no cap, so more retries
-help little.
+The server keeps a number of slots, not a time: 150 by default on
+yellowstone-grpc, and about 1,000 on Triton shared mainnet. At confirmed or
+finalized each wait caps at 10 s, so an outage of W seconds needs at least
+(W + 34.5) / 10 retries. For example, 1,000 slots at about 214 ms each are
+about 214 s, which needs about 25 retries. At processed the client doubles each
+wait with no cap, so more retries help little.
 
 **Confirmed or finalized: resume from a slot checkpoint.** The checkpoint is the
 newest slot whose status at the commitment came, or an older slot whose content
@@ -149,7 +149,7 @@ once the new stream delivers an update.
 processed, so only the client's bank replay can retract the one that was cut
 off. It takes only a processed stream with no `from_slot` and no
 `RuntimeHandle`, because it cannot verify a changed request. The server must
-send bank IDs (Geyser proto 13 or newer):
+send bank IDs (yellowstone-grpc proto 13 or newer):
 
 - An account update with no `bank_id` ends the run with `FailedPrecondition`.
 - During a reconnect, a finalized slot with no `bank_id` ends the run with
@@ -157,8 +157,8 @@ send bank IDs (Geyser proto 13 or newer):
 
 The client adds its own `blocks_meta` and `slots` filters. A server that allows
 one filter of a kind refuses a run that also has a block-meta or slot pipeline.
-Set `auto-reconnect = false` for such a server, and for a server on Geyser
-proto 12.7 or older.
+Set `auto-reconnect = false` for such a server, and for a server on
+yellowstone-grpc proto 12.7 or older.
 
 A replay repeats the bank that was cut off, so handlers can see its updates
 twice. On a Yellowstone server older than 16.1.2, the bank in progress when the

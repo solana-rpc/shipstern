@@ -91,11 +91,11 @@ pub struct YellowstoneGrpcConfig {
     /// Reconnect a lost gRPC stream. Defaults to `true`. See [`ReconnectMode`].
     ///
     /// At confirmed or finalized the source subscribes again a few slots before a checkpoint, and
-    /// adds a `slots` filter so a slot is on record even before the first matching update.
-    /// At processed the client replays the cut-off banks, which needs no
-    /// `from_slot` and no `RuntimeHandle`, holds replayed updates in memory until they finalize,
-    /// can repeat the cut-off block, and adds its own `blocks_meta` and `slots` filters. Set it
-    /// to `false` for a server on Geyser proto 12.7 or older, or one without stored slots.
+    /// adds a `slots` filter so a slot is on record even before the first matching update. At
+    /// processed the client replays the cut-off banks, which needs no `from_slot` and no
+    /// `RuntimeHandle`, holds replayed updates in memory until they finalize, can repeat the
+    /// cut-off block, and adds its own `blocks_meta` and `slots` filters. Set it to `false` for a
+    /// server on yellowstone-grpc proto 12.7 or older, or one without stored slots.
     ///
     #[arg(long, env, default_value_t = true)]
     #[serde(default = "default_auto_reconnect")]
@@ -105,9 +105,9 @@ pub struct YellowstoneGrpcConfig {
     ///
     /// Only applies when `auto_reconnect` is set. Defaults to 10 when unset.
     ///
-    /// The server keeps a number of slots, not a time: 150 by default on Geyser, and about
-    /// 1,000 on Triton shared mainnet. At confirmed or finalized each wait caps at 10 s, so an
-    /// outage of W seconds needs at least (W + 34.5) / 10 retries. For example, 1,000 slots at
+    /// The server keeps a number of slots, not a time: 150 by default on yellowstone-grpc, and
+    /// about 1,000 on Triton shared mainnet. At confirmed or finalized each wait caps at 10 s, so
+    /// an outage of W seconds needs at least (W + 34.5) / 10 retries. For example, 1,000 slots at
     /// about 214 ms each are about 214 s, which needs about 25 retries. At processed the client
     /// doubles each wait with no cap, so after a few attempts the gap is longer than the window.
     #[arg(long, env)]
@@ -524,8 +524,8 @@ impl SourceTrait for YellowstoneGrpcSource {
             let mut request = build_subscribe_request(filters.clone(), &config, mode);
             request.from_slot = from_slot;
 
-            // Geyser before v16.2.0 keeps only the newest queued request, so an early filter
-            // update drops the replay. The resume filter makes sure data comes to end the hold.
+            // yellowstone-grpc before v16.2.0 keeps only the newest queued request, so an early
+            // filter update drops the replay. The resume filter brings data that ends the hold.
             let mut hold_filter_updates =
                 mode == ReconnectMode::SlotResume && request.from_slot.is_some();
 
@@ -593,12 +593,17 @@ impl SourceTrait for YellowstoneGrpcSource {
                                 "Received error status from stream"
                             );
 
-                            // Only an older server makes the reconnect stream fail on a missing bank_id.
+                            // Only an older server fails the reconnect stream on a missing bank_id.
                             if mode == ReconnectMode::BankReplay
                                 && status.code() == Code::FailedPrecondition
                                 && status.message().contains("bank_id")
                             {
-                                tracing::warn!("The server sends no bank_id; set auto-reconnect = false");
+                                tracing::warn!(
+                                    "The server sends no bank_id, so the client's bank replay \
+                                     cannot reconnect; set auto-reconnect = false in the source \
+                                     config (YellowstoneGrpcConfig::auto_reconnect) to run \
+                                     without reconnect"
+                                );
                             }
 
                             if mode == ReconnectMode::SlotResume && is_recoverable(&status) {

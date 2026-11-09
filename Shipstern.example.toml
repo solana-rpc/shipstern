@@ -15,10 +15,10 @@ x-token = "<X-TOKEN>"
 # This defines how long to wait for a connection before timing out.
 timeout = 60
 
-# Built-in auto-reconnect (default true). A confirmed or finalized stream resumes from
-# a slot checkpoint. A processed stream reconnects only with no from-slot and no
-# RuntimeHandle. Set it to false for a server on Geyser proto 12.7 or older, or one
-# without replay_stored_slots.
+# Built-in auto-reconnect (default true). A confirmed or finalized stream resumes
+# from a slot checkpoint. A processed stream reconnects only with no from-slot and no
+# RuntimeHandle. Set it to false for a server on yellowstone-grpc proto 12.7 or
+# older, or one without replay_stored_slots.
 #auto-reconnect = true
 
 # Maximum reconnect attempts before the stream gives up. The count starts over at
@@ -29,11 +29,11 @@ timeout = 60
 # spans about 8.5 minutes. Recovery also needs the server to still hold the
 # missed slots, or the run ends with OutOfRange.
 #
-# The server keeps a number of slots, not a time: 150 by default on Geyser, and
-# about 1,000 on Triton shared mainnet. At confirmed or finalized, an outage of W
-# seconds needs at least (W + 34.5) / 10 retries. For example, 1,000 slots at
-# about 214 ms each are about 214 seconds, which needs about 25 retries. At
-# processed the waits do not cap, so more retries help little.
+# The server keeps a number of slots, not a time: 150 by default on yellowstone-grpc,
+# and about 1,000 on Triton shared mainnet. At confirmed or finalized, an outage of W
+# seconds needs at least (W + 34.5) / 10 retries. For example, 1,000 slots at about
+# 214 ms each are about 214 seconds, which needs about 25 retries. At processed the
+# waits do not cap, so more retries help little.
 #reconnect-max-retries = 10
 
 # Windows of account data to receive in place of the whole account.

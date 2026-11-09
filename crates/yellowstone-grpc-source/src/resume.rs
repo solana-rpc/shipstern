@@ -38,8 +38,8 @@ pub(crate) fn strip_resume_filter(update: &mut SubscribeUpdate) -> bool {
 /// What tells two updates of one slot apart.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum UpdateKey {
-    // Each server numbers writes with its own counter, so the key has no `write_version`. Geyser
-    // keeps one write per pubkey in a slot; the signature is for a server that sends every write.
+    // Servers number writes with their own counters, so the key has no `write_version`. The
+    // signature is for a server that sends every write; yellowstone-grpc keeps one per pubkey.
     Account {
         pubkey: Vec<u8>,
         txn_signature: Option<Vec<u8>>,
@@ -60,8 +60,8 @@ enum UpdateKey {
 enum Role {
     /// Part of the slot's content.
     Content,
-    /// The status at the stream's commitment. Geyser sends it after the slot's content, so the
-    /// slot is complete.
+    /// The status at the stream's commitment. yellowstone-grpc sends it after the slot's content,
+    /// so the slot is complete.
     CommitmentStatus { parent: Option<u64> },
     /// A status of another level. It can come before the slot's content.
     OtherStatus,
@@ -109,7 +109,7 @@ fn classify(update: &SubscribeUpdate, commitment: SlotStatus) -> Option<(u64, Up
 }
 
 /// How far above the oldest open slot a slot gets a record, so the state stays bounded when a
-/// status never comes. It is below the 150 slots Geyser keeps for replay by default.
+/// status never comes. It is below the 150 slots yellowstone-grpc keeps for replay by default.
 const MAX_TRACKED_SLOTS: u64 = 32;
 
 /// How far below the checkpoint a resubscribe starts and records keep their keys. It equals Agave
@@ -132,8 +132,9 @@ enum SlotState {
 /// The keys delivered for one slot, and how far the slot has come.
 #[derive(Debug, Default)]
 struct SlotRecord {
-    /// The filter names each key went to. Geyser sends a block once per `blocks` filter and a
-    /// footer once per certificates group: <https://github.com/rpcpool/yellowstone-grpc/blob/b408d1fa01458b90818fc4ba99831a6b254cbf26/yellowstone-grpc-geyser/src/plugin/filter/filter.rs#L2208-L2410>
+    /// The filter names each key went to. yellowstone-grpc sends a block once per `blocks` filter
+    /// and a footer once per certificates group:
+    /// <https://github.com/rpcpool/yellowstone-grpc/blob/b408d1fa01458b90818fc4ba99831a6b254cbf26/yellowstone-grpc-geyser/src/plugin/filter/filter.rs#L2208-L2410>
     seen: HashMap<UpdateKey, HashSet<String>>,
     state: SlotState,
     /// The parent that the slot's commitment status named, so a resubscribe can replay it.
@@ -259,8 +260,8 @@ impl ResumePoint {
         }
 
         let record = self.slots.entry(slot).or_default();
-        // Geyser sends a slot's content before its status, so content or a commitment status for a
-        // complete slot whose keys are gone is a repeat.
+        // yellowstone-grpc sends a slot's content before its status, so content or a commitment
+        // status for a complete slot whose keys are gone is a repeat.
         if record.state == SlotState::Complete && record.seen.is_empty() {
             return role == Role::OtherStatus;
         }
@@ -507,8 +508,8 @@ mod tests {
         assert_eq!(resume.checkpoint(), Some(12));
     }
 
-    /// Geyser can send a parent after its child is complete. After a loss inside the parent, the
-    /// source subscribes again from below it, and the replay drops what the parent delivered.
+    /// yellowstone-grpc can send a parent after its child is complete. After a loss inside the
+    /// parent, the source subscribes again from below it, and the replay drops what it delivered.
     #[test]
     fn resubscribe_covers_a_parent_sent_after_its_child() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
