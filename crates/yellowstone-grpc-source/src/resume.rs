@@ -62,7 +62,7 @@ enum Role {
     Content,
     /// The status at the stream's commitment. Geyser sends it after the slot's content, so the
     /// slot is complete.
-    CommitmentStatus,
+    CommitmentStatus { parent: Option<u64> },
     /// A status of another level. It can come before the slot's content.
     OtherStatus,
 }
@@ -90,7 +90,9 @@ fn classify(update: &SubscribeUpdate, commitment: SlotStatus) -> Option<(u64, Up
         UpdateOneof::Entry(entry) => (entry.slot, UpdateKey::Entry(entry.index), Role::Content),
         UpdateOneof::Slot(slot) => {
             let role = if slot.status == commitment as i32 {
-                Role::CommitmentStatus
+                Role::CommitmentStatus {
+                    parent: slot.parent,
+                }
             } else {
                 Role::OtherStatus
             };
@@ -110,8 +112,8 @@ fn classify(update: &SubscribeUpdate, commitment: SlotStatus) -> Option<(u64, Up
 /// status never comes. It is below the 150 slots Geyser keeps for replay by default.
 const MAX_TRACKED_SLOTS: u64 = 32;
 
-/// How far below the checkpoint a resubscribe starts and records drop repeats, for a parent sent
-/// after its child. It equals Agave `NUM_CONSECUTIVE_LEADER_SLOTS`. A later parent is not replayed.
+/// How far below the checkpoint a resubscribe starts and records keep their keys. It equals Agave
+/// `NUM_CONSECUTIVE_LEADER_SLOTS`. A late parent moves the start lower, but not past 32 below.
 const REPEAT_WINDOW: u64 = 4;
 
 /// How far a slot has come.
@@ -130,11 +132,12 @@ enum SlotState {
 /// The keys delivered for one slot, and how far the slot has come.
 #[derive(Debug, Default)]
 struct SlotRecord {
-    /// The filter names each key went to. The server sends one block per `blocks` filter and
-    /// one footer per certificates group, each under its own names.
-    /// Geyser v16.2.0: <https://github.com/rpcpool/yellowstone-grpc/blob/b408d1fa01458b90818fc4ba99831a6b254cbf26/yellowstone-grpc-geyser/src/plugin/filter/filter.rs#L2208-L2410>
+    /// The filter names each key went to. Geyser sends a block once per `blocks` filter and a
+    /// footer once per certificates group: <https://github.com/rpcpool/yellowstone-grpc/blob/b408d1fa01458b90818fc4ba99831a6b254cbf26/yellowstone-grpc-geyser/src/plugin/filter/filter.rs#L2208-L2410>
     seen: HashMap<UpdateKey, HashSet<String>>,
     state: SlotState,
+    /// The parent that the slot's commitment status named, so a resubscribe can replay it.
+    parent: Option<u64>,
 }
 
 impl SlotRecord {
@@ -154,13 +157,16 @@ impl SlotRecord {
     }
 }
 
-/// The slots from `REPEAT_WINDOW` below the checkpoint up, where a resubscribe starts, and the
-/// keys each one delivered.
+/// The slots from `REPEAT_WINDOW` below the checkpoint up with the keys each one delivered, and
+/// the complete slots from `MAX_TRACKED_SLOTS` below it with only their state and parent.
 #[derive(Debug)]
 pub(crate) struct ResumePoint {
     commitment: SlotStatus,
     slots: BTreeMap<u64, SlotRecord>,
     newest_complete: Option<u64>,
+    /// The first slot with recorded content or a commitment status. A parent before it is from
+    /// before the stream.
+    first_slot: Option<u64>,
     /// The last open slot reported as stuck, so each one warns once.
     warned_open_slot: Option<u64>,
 }
@@ -171,18 +177,37 @@ impl ResumePoint {
             commitment,
             slots: BTreeMap::new(),
             newest_complete: None,
+            first_slot: None,
             warned_open_slot: None,
         }
     }
 
-    /// Where to subscribe from after a loss: `REPEAT_WINDOW` below the checkpoint, but not below
-    /// `configured`, since nothing before it was delivered.
+    /// Where to subscribe from after a loss: `REPEAT_WINDOW` below the checkpoint or at an older
+    /// parent that is not complete, but not below `configured`, since nothing before it came.
     pub(crate) fn resubscribe_slot(&self, configured: Option<u64>) -> Option<u64> {
         let Some(checkpoint) = self.checkpoint() else {
             return configured;
         };
 
-        Some(checkpoint.saturating_sub(REPEAT_WINDOW)).max(configured)
+        // Skipped slots can put a parent that comes after its child below the window. Below the
+        // floor a complete parent has no record left, and before `first_slot` it is pre-stream.
+        let floor = checkpoint
+            .saturating_sub(MAX_TRACKED_SLOTS)
+            .max(self.first_slot.unwrap_or_default());
+        let start = self
+            .slots
+            .values()
+            .filter_map(|record| record.parent)
+            .filter(|parent| {
+                *parent >= floor
+                    && self
+                        .slots
+                        .get(parent)
+                        .is_none_or(|record| record.state != SlotState::Complete)
+            })
+            .fold(checkpoint.saturating_sub(REPEAT_WINDOW), u64::min);
+
+        Some(start).max(configured)
     }
 
     /// The oldest open slot or the newest complete one, whichever is older. A slot between them
@@ -229,22 +254,33 @@ impl ResumePoint {
             return true;
         }
 
-        let record = self.slots.entry(slot).or_default();
-        let fresh = record.mark_seen(key, &mut update.filters);
-
-        // Below the checkpoint a record only drops repeats, so a late copy never moves it back.
-        if checkpoint.is_some_and(|checkpoint| slot < checkpoint) {
-            return fresh;
+        if role != Role::OtherStatus {
+            self.first_slot.get_or_insert(slot);
         }
 
+        let record = self.slots.entry(slot).or_default();
+        // Geyser sends a slot's content before its status, so content or a commitment status for a
+        // complete slot whose keys are gone is a repeat.
+        if record.state == SlotState::Complete && record.seen.is_empty() {
+            return role == Role::OtherStatus;
+        }
+
+        let fresh = record.mark_seen(key, &mut update.filters);
+
+        // Below the checkpoint no slot opens, so a late copy never moves the checkpoint back.
+        let below = checkpoint.is_some_and(|checkpoint| slot < checkpoint);
         match role {
-            Role::Content if record.state == SlotState::Idle => {
+            Role::Content if !below && record.state == SlotState::Idle => {
                 record.state = SlotState::Open;
             },
-            Role::CommitmentStatus => {
+            Role::CommitmentStatus { parent } => {
                 record.state = SlotState::Complete;
-                self.newest_complete = self.newest_complete.max(Some(slot));
-                // Only a commitment status moves the checkpoint up.
+                record.parent = parent;
+                if !below {
+                    self.newest_complete = self.newest_complete.max(Some(slot));
+                }
+
+                // Only a commitment status moves the checkpoint up or completes a slot below it.
                 self.forget_below_window();
             },
             Role::Content | Role::OtherStatus => {},
@@ -253,8 +289,8 @@ impl ResumePoint {
         fresh
     }
 
-    /// Whether `slot`, which has no record, gets one. A slot gets none more than `REPEAT_WINDOW`
-    /// below the checkpoint or `MAX_TRACKED_SLOTS` above the oldest open slot.
+    /// Whether `slot`, which has no record, gets one. Below the checkpoint the limit is
+    /// `REPEAT_WINDOW`, or `MAX_TRACKED_SLOTS` for a commitment status, which completes the slot.
     fn may_record(&self, slot: u64, role: Role, checkpoint: Option<u64>) -> bool {
         let Some(checkpoint) = checkpoint else {
             // The status at the commitment can stall at the start while statuses of another
@@ -262,9 +298,14 @@ impl ResumePoint {
             return role != Role::OtherStatus || self.slots.len() <= MAX_TRACKED_SLOTS as usize;
         };
 
-        // Below the checkpoint, only a slot that a resubscribe sends again gets a record.
+        // Below the checkpoint, a slot that a resubscribe sends again gets a record, and so does a
+        // complete slot, so that a late copy of it is dropped.
         if slot < checkpoint {
-            return checkpoint - slot <= REPEAT_WINDOW;
+            let limit = match role {
+                Role::CommitmentStatus { .. } => MAX_TRACKED_SLOTS,
+                Role::Content | Role::OtherStatus => REPEAT_WINDOW,
+            };
+            return checkpoint - slot <= limit;
         }
 
         let Some(open) = self.oldest_open() else {
@@ -275,18 +316,26 @@ impl ResumePoint {
         slot.saturating_sub(open) <= MAX_TRACKED_SLOTS
     }
 
-    /// A resubscribe never repeats a slot more than `REPEAT_WINDOW` below the checkpoint.
+    /// Below the window a complete slot keeps its state and parent but not its keys, so a late
+    /// copy is still dropped. Other records there, and all below `MAX_TRACKED_SLOTS`, go.
     fn forget_below_window(&mut self) {
         let Some(checkpoint) = self.checkpoint() else {
             return;
         };
 
-        let floor = checkpoint.saturating_sub(REPEAT_WINDOW);
-        while let Some(oldest) = self.slots.first_entry()
-            && *oldest.key() < floor
-        {
-            oldest.remove();
-        }
+        let window = checkpoint.saturating_sub(REPEAT_WINDOW);
+        let floor = checkpoint.saturating_sub(MAX_TRACKED_SLOTS);
+        self.slots.retain(|slot, record| {
+            if *slot >= window {
+                return true;
+            }
+            if *slot < floor || record.state != SlotState::Complete {
+                return false;
+            }
+
+            record.seen = HashMap::new();
+            true
+        });
     }
 }
 
@@ -349,6 +398,14 @@ mod tests {
             })),
             ..Default::default()
         }
+    }
+
+    fn confirmed(slot: u64, parent: u64) -> SubscribeUpdate {
+        let mut update = slot_status(slot, SlotStatus::SlotConfirmed);
+        if let Some(UpdateOneof::Slot(status)) = update.update_oneof.as_mut() {
+            status.parent = Some(parent);
+        }
+        update
     }
 
     /// Slot 10 is cut after two of its three updates. The replay repeats them and delivers the
@@ -465,8 +522,7 @@ mod tests {
     }
 
     /// A slot whose status never comes holds the checkpoint, so a later reconnect fails with
-    /// `OutOfRange` instead of skipping the slot. Slots more than `MAX_TRACKED_SLOTS` above it
-    /// are not recorded.
+    /// `OutOfRange` instead of skipping it. Slots more than `MAX_TRACKED_SLOTS` above are not kept.
     #[test]
     fn checkpoint_holds_a_slot_whose_status_never_comes() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
@@ -519,22 +575,24 @@ mod tests {
         assert_eq!(repeat.filters, ["b"]);
     }
 
-    /// A late repeat of a complete slot below the window has no record left, so it is delivered,
-    /// but it never opens the slot again.
+    /// A late repeat of a complete slot below the window is dropped and never opens the slot
+    /// again. A slot there that never completed, such as a late parent, is still delivered.
     #[test]
     fn late_copy_below_the_window_does_not_reopen_a_complete_slot() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
-        for slot in 10..=20 {
+        for slot in (10..=20).filter(|slot| *slot != 14) {
             assert!(resume.deliver(&mut transaction(slot, 1)));
             assert!(resume.deliver(&mut slot_status(slot, SlotStatus::SlotConfirmed)));
         }
 
         assert!(!resume.deliver(&mut transaction(17, 1)));
-        assert_eq!(resume.checkpoint(), Some(20));
         for slot in [15, 12] {
-            assert!(resume.deliver(&mut transaction(slot, 1)));
+            assert!(!resume.deliver(&mut transaction(slot, 1)));
             assert_eq!(resume.checkpoint(), Some(20));
         }
+
+        assert!(resume.deliver(&mut transaction(14, 1)));
+        assert_eq!(resume.checkpoint(), Some(20));
     }
 
     /// Skipped leaders can leave more than `MAX_TRACKED_SLOTS` slots with no status.
@@ -598,5 +656,59 @@ mod tests {
 
         assert_eq!(resume.checkpoint(), None);
         assert!(resume.slots.len() <= MAX_TRACKED_SLOTS as usize + 1);
+    }
+
+    /// Skipped slots can put a parent more than `REPEAT_WINDOW` below its child. The resubscribe
+    /// goes back to that parent until its status comes.
+    #[test]
+    fn resubscribe_covers_a_parent_across_skipped_slots() {
+        let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
+        assert!(resume.deliver(&mut transaction(39, 1)));
+        assert!(resume.deliver(&mut confirmed(39, 38)));
+        assert!(resume.deliver(&mut transaction(45, 1)));
+        assert!(resume.deliver(&mut confirmed(45, 40)));
+        assert!(resume.resubscribe_slot(None).is_some_and(|slot| slot <= 40));
+
+        assert!(resume.deliver(&mut transaction(40, 1)));
+        assert!(resume.deliver(&mut confirmed(40, 39)));
+        assert_eq!(resume.resubscribe_slot(None), Some(45 - REPEAT_WINDOW));
+    }
+
+    /// Each status names the slot before it as parent. A complete parent below the record floor
+    /// has no record, so it must not pull the resubscribe below the window.
+    #[test]
+    fn a_long_stream_resubscribes_from_the_window() {
+        let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
+        for slot in 1000..=1100 {
+            assert!(resume.deliver(&mut transaction(slot, 1)));
+            assert!(resume.deliver(&mut confirmed(slot, slot - 1)));
+        }
+        assert_eq!(resume.resubscribe_slot(None), Some(1100 - REPEAT_WINDOW));
+
+        for slot in 1100 - REPEAT_WINDOW..=1100 {
+            assert!(!resume.deliver(&mut transaction(slot, 1)));
+            assert!(!resume.deliver(&mut confirmed(slot, slot - 1)));
+        }
+    }
+
+    /// The first slot's parent can be complete before the stream, so it never gets a record here.
+    #[test]
+    fn a_parent_from_before_the_stream_does_not_move_the_resubscribe() {
+        let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
+        assert!(resume.deliver(&mut confirmed(1000, 990)));
+        assert_eq!(resume.resubscribe_slot(None), Some(1000 - REPEAT_WINDOW));
+    }
+
+    /// A backend that is behind can send a complete slot again after the window passed it.
+    #[test]
+    fn a_lagging_backend_does_not_repeat_a_complete_slot() {
+        let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
+        for slot in 10..=20 {
+            assert!(resume.deliver(&mut transaction(slot, 1)));
+            assert!(resume.deliver(&mut slot_status(slot, SlotStatus::SlotConfirmed)));
+        }
+
+        assert!(!resume.deliver(&mut transaction(10, 1)));
+        assert!(resume.deliver(&mut slot_status(10, SlotStatus::SlotFinalized)));
     }
 }

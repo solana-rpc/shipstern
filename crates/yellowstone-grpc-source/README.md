@@ -135,12 +135,15 @@ help little.
 newest slot whose status at the commitment came, or an older slot whose content
 came without that status. The source subscribes again a few slots before it,
 with the newest filter set, and drops a repeat for each filter that already got
-it. If the server sends a slot's content but never its status at the commitment,
-the checkpoint stays at that slot, and a reconnect after the server drops it
-fails with `OutOfRange` instead of skipping it. A few repeats can still come, so
-make handlers accept them. A reconnect can skip a parent that comes more than a
-few slots after its child. A `from_slot` and a `RuntimeHandle` are both fine
-here. The budget starts over once the new stream delivers an update.
+it. If a slot's status names a parent whose own status has not come, the source
+subscribes again from that parent instead, but not from more than 32 slots below
+the checkpoint. A late grandparent is covered only by a later reconnect, and a
+late parent of the stream's first slot is not covered. If the server sends a
+slot's content but never its status at the commitment, the checkpoint stays at
+that slot, and a reconnect after the server drops it fails with `OutOfRange`
+instead of skipping it. Repeats can still come, so handlers must accept them. A
+`from_slot` and a `RuntimeHandle` are both fine here. The budget starts over
+once the new stream delivers an update.
 
 **Processed: the client replays banks.** A slot can have several banks at
 processed, so only the client's bank replay can retract the one that was cut
