@@ -106,7 +106,6 @@ bytemuck = "^1"
 wincode = "0.5"
 tokio-util = "0.7"
 jetstreamer-firehose = { git = "https://github.com/anza-xyz/jetstreamer", branch = "main" }
-jetstreamer-utils = { git = "https://github.com/anza-xyz/jetstreamer", branch = "main" }
 warp = "0.3"
 
 yellowstone-block-machine = { version = "0.4.0" }
