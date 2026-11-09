@@ -112,8 +112,8 @@ fn classify(update: &SubscribeUpdate, commitment: SlotStatus) -> Option<(u64, Up
 /// status never comes. It is below the 150 slots yellowstone-grpc keeps for replay by default.
 const MAX_TRACKED_SLOTS: u64 = 32;
 
-/// How far below the checkpoint a resubscribe starts and records keep their keys. It equals Agave
-/// `NUM_CONSECUTIVE_LEADER_SLOTS`. A late parent moves the start lower, but not past 32 below.
+/// How far below the checkpoint a resubscribe starts and records keep their keys. A chosen margin
+/// of one leader window (Agave `NUM_CONSECUTIVE_LEADER_SLOTS`); a named late parent moves it lower.
 const REPEAT_WINDOW: u64 = 4;
 
 /// How far a slot has come.
@@ -246,8 +246,9 @@ impl ResumePoint {
                 tracing::warn!(
                     open_slot = open,
                     slot,
-                    "No status at the commitment came for this open slot; slots more than 32 \
-                     above it are not recorded, and the checkpoint waits for it"
+                    max_tracked_slots = MAX_TRACKED_SLOTS,
+                    "No status at the commitment came for this open slot; newer slots past the \
+                     cap are not recorded, and the checkpoint waits for it"
                 );
                 self.warned_open_slot = Some(open);
             }
@@ -576,8 +577,8 @@ mod tests {
         assert_eq!(repeat.filters, ["b"]);
     }
 
-    /// A late repeat of a complete slot below the window is dropped and never opens the slot
-    /// again. A slot there that never completed, such as a late parent, is still delivered.
+    /// Below the window, a late copy of a complete slot is dropped and a status of another level
+    /// passes. A slot there that never completed, such as a late parent, is still delivered.
     #[test]
     fn late_copy_below_the_window_does_not_reopen_a_complete_slot() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
@@ -591,6 +592,7 @@ mod tests {
             assert!(!resume.deliver(&mut transaction(slot, 1)));
             assert_eq!(resume.checkpoint(), Some(20));
         }
+        assert!(resume.deliver(&mut slot_status(12, SlotStatus::SlotFinalized)));
 
         assert!(resume.deliver(&mut transaction(14, 1)));
         assert_eq!(resume.checkpoint(), Some(20));
@@ -698,18 +700,5 @@ mod tests {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
         assert!(resume.deliver(&mut confirmed(1000, 990)));
         assert_eq!(resume.resubscribe_slot(None), Some(1000 - REPEAT_WINDOW));
-    }
-
-    /// A backend that is behind can send a complete slot again after the window passed it.
-    #[test]
-    fn a_lagging_backend_does_not_repeat_a_complete_slot() {
-        let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
-        for slot in 10..=20 {
-            assert!(resume.deliver(&mut transaction(slot, 1)));
-            assert!(resume.deliver(&mut slot_status(slot, SlotStatus::SlotConfirmed)));
-        }
-
-        assert!(!resume.deliver(&mut transaction(10, 1)));
-        assert!(resume.deliver(&mut slot_status(10, SlotStatus::SlotFinalized)));
     }
 }

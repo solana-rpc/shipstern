@@ -593,7 +593,12 @@ impl SourceTrait for YellowstoneGrpcSource {
                                 "Received error status from stream"
                             );
 
-                            // Only an older server fails the reconnect stream on a missing bank_id.
+                            if mode == ReconnectMode::SlotResume && is_recoverable(&status) {
+                                break StreamStop::Lost(Some(status));
+                            }
+
+                            // Every other error ends the run. Only an older server fails the
+                            // bank replay on a missing bank_id, so name the fix for that one.
                             if mode == ReconnectMode::BankReplay
                                 && status.code() == Code::FailedPrecondition
                                 && status.message().contains("bank_id")
@@ -604,10 +609,6 @@ impl SourceTrait for YellowstoneGrpcSource {
                                      config (YellowstoneGrpcConfig::auto_reconnect) to run \
                                      without reconnect"
                                 );
-                            }
-
-                            if mode == ReconnectMode::SlotResume && is_recoverable(&status) {
-                                break StreamStop::Lost(Some(status));
                             }
                             break StreamStop::Exit(stream_error(&tx, status).await);
                         },
