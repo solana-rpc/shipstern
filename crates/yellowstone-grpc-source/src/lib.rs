@@ -90,8 +90,8 @@ pub struct YellowstoneGrpcConfig {
     ///
     /// Reconnect a lost gRPC stream. Defaults to `true`. See [`ReconnectMode`].
     ///
-    /// At confirmed or finalized the source subscribes again from the oldest slot it has not
-    /// received in full, and adds a `slots` filter so a slot is on record even before the first
+    /// At confirmed or finalized the source resubscribes just before a checkpoint that waits for
+    /// unfinished slots, and adds a `slots` filter so a slot is on record even before the first
     /// matching update. At processed the client replays the cut-off banks, which needs no
     /// `from_slot` and no `RuntimeHandle`, holds replayed updates in memory until they finalize,
     /// can repeat the cut-off block, and adds its own `blocks_meta` and `slots` filters. Set it
@@ -193,11 +193,11 @@ pub enum ReconnectMode {
     /// fixed request, since a slot can have several banks there and only the client's replay
     /// can retract one.
     BankReplay,
-    /// The source subscribes again from the oldest slot it has not received in full and drops
-    /// the repeats. A confirmed or finalized slot never changes once delivered, so this is
-    /// exact. It adds its own `slots` filter, whose status shows that a slot is complete even
-    /// when nothing else matched, takes a `from_slot` and filter updates, and ends the run with
-    /// `OutOfRange` when the server no longer holds the slot.
+    /// The source subscribes again a few slots before a checkpoint and drops the repeats. The
+    /// checkpoint waits for each slot that has content until that slot is complete. It adds its
+    /// own `slots` filter, whose status shows that a slot is complete even when nothing else
+    /// matched, takes a `from_slot` and filter updates, and ends the run with `OutOfRange` when
+    /// the server no longer holds the slot it resumes from, as when a status never comes.
     SlotResume,
     /// The stream stops on loss.
     Off,
@@ -260,7 +260,7 @@ async fn wait_before_retry(backoff: &Backoff, attempts: &mut u32, from_slot: Opt
         max_retries = backoff.max_retries,
         ?delay,
         ?from_slot,
-        "Stream lost; subscribing again from the last seen slot"
+        "Stream lost; subscribing again"
     );
     tokio::time::sleep(delay).await;
     true
@@ -511,8 +511,8 @@ impl SourceTrait for YellowstoneGrpcSource {
             _ => SlotStatus::SlotConfirmed,
         };
         let mut resume = ResumePoint::new(checkpoint_status);
-        // Only the first subscribe takes the configured start. A resubscribe takes the
-        // checkpoint, and until there is one, the same start.
+        // A resubscribe starts a few slots before the checkpoint, but never before the
+        // configured start.
         let mut from_slot = config.from_slot;
         let mut attempts: u32 = 0;
         let mut filter_updates_sent: u64 = 0;
@@ -642,7 +642,7 @@ impl SourceTrait for YellowstoneGrpcSource {
                 StreamStop::Exit(status) => break status,
                 StreamStop::Lost(lost) => lost,
             };
-            from_slot = resume.checkpoint().or(from_slot);
+            from_slot = resume.resubscribe_slot(config.from_slot);
             let retry = match &backoff {
                 Some(backoff) => wait_before_retry(backoff, &mut attempts, from_slot).await,
                 None => false,
@@ -828,7 +828,7 @@ mod tests {
     }
 
     /// The client's bank replay takes only a processed stream from the tip with a fixed
-    /// request. Confirmed and finalized resume from the last slot whatever the request.
+    /// request. Confirmed and finalized resume from a slot checkpoint whatever the request.
     #[test]
     fn reconnect_mode_follows_commitment_and_request() {
         let config = |extra: &str| {

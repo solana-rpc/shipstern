@@ -16,7 +16,7 @@ x-token = "<X-TOKEN>"
 timeout = 60
 
 # Built-in auto-reconnect (default true). A confirmed or finalized stream resumes from
-# the last slot it saw. A processed stream reconnects only with no from-slot and no
+# a slot checkpoint. A processed stream reconnects only with no from-slot and no
 # RuntimeHandle. Set it to false for a server on Geyser proto 12.7 or older, or one
 # without replay_stored_slots.
 #auto-reconnect = true
