@@ -48,7 +48,7 @@ impl Parser for InstructionParser {
 
     fn prefilter(&self) -> Prefilter {
         Prefilter::builder()
-            .transaction_accounts([spl_token::ID])
+            .transaction_accounts_include([spl_token::ID])
             .build()
             .unwrap()
     }

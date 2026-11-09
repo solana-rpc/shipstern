@@ -11,8 +11,8 @@ use shipstern_core::{AccountsDataSlice, Filters, PrefilterError};
 use tokio::sync::watch;
 use yellowstone_grpc_client::{Backoff, GeyserGrpcClient, ReconnectConfig};
 use yellowstone_grpc_proto::{
-    geyser::SubscribeRequest,
-    tonic::{codec::CompressionEncoding, transport::ClientTlsConfig},
+    geyser::{SubscribeRequest, SubscribeRequestPing, SubscribeUpdate, subscribe_update::UpdateOneof},
+    tonic::{Status, codec::CompressionEncoding, transport::ClientTlsConfig},
 };
 
 #[derive(Default, Copy, Debug, serde::Deserialize, Clone, ValueEnum)]
@@ -369,6 +369,8 @@ impl SourceTrait for YellowstoneGrpcSource {
         let mut pending_filters: Option<Filters> = None;
         let mut filter_updates_sent: u64 = 0;
 
+        let mut ping_id: i32 = 0;
+
         // A held set cannot wait on the stream to produce again. The filter it
         // is replacing may match nothing, and the client swallows its own
         // keepalive messages rather than yielding them, so there are live
@@ -380,6 +382,17 @@ impl SourceTrait for YellowstoneGrpcSource {
             tokio::select! {
                 update = stream.next() => match update {
                     Some(Ok(update)) => {
+                        if let Some(UpdateOneof::Ping(_)) = &update.update_oneof {
+                            ping_id += 1;
+
+                            let ping_request = yellowstone_grpc_proto::prelude::SubscribeRequest {
+                                ping: Some(SubscribeRequestPing { id: ping_id }),
+                                ..Default::default()
+                            };
+
+                            let _ = sink.send(ping_request).await;
+                        }
+
                         if tx.send(Ok(update)).await.is_err() {
                             tracing::info!("Receiver dropped, stopping source");
                             // Defensive only - normally unreachable because Signal/Buffer
