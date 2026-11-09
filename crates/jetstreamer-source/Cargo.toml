@@ -23,7 +23,6 @@ thiserror = { workspace = true }
 prost-types = { workspace = true }
 
 jetstreamer-firehose = { workspace = true }
-jetstreamer-utils = { workspace = true }
 prometheus = { workspace = true, optional = true }
 
 # Solana dependencies - upgraded to 4.2 with the main workspace
