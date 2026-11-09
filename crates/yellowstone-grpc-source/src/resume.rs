@@ -3,7 +3,7 @@
 //! A slot at those commitments never changes once delivered, so a lost stream subscribes again
 //! a few slots before a checkpoint that waits for unfinished slots, and drops the repeats.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{hash_map::Entry, BTreeMap, HashMap, HashSet};
 
 use yellowstone_grpc_proto::geyser::{
     subscribe_update::UpdateOneof, SlotStatus, SubscribeRequest, SubscribeRequestFilterSlots,
@@ -49,17 +49,10 @@ enum UpdateKey {
     Entry(u64),
     Slot(i32),
     BlockMeta,
-    Block(BTreeSet<String>),
+    Block,
     // Each server numbers its banks in its own way, so the key has no `bank_id`. A confirmed
     // slot has only one bank.
-    BlockFooter(BTreeSet<String>),
-}
-
-/// The server sends one block per `blocks` filter and one footer per certificates group, so
-/// the filter names tell those copies apart.
-/// Geyser v16.2.0: <https://github.com/rpcpool/yellowstone-grpc/blob/b408d1fa01458b90818fc4ba99831a6b254cbf26/yellowstone-grpc-geyser/src/plugin/filter/filter.rs#L2208-L2410>
-fn filter_names(update: &SubscribeUpdate) -> BTreeSet<String> {
-    update.filters.iter().cloned().collect()
+    BlockFooter,
 }
 
 /// What an update tells about its slot.
@@ -104,14 +97,8 @@ fn classify(update: &SubscribeUpdate, commitment: SlotStatus) -> Option<(u64, Up
             (slot.slot, UpdateKey::Slot(slot.status), role)
         },
         UpdateOneof::BlockMeta(meta) => (meta.slot, UpdateKey::BlockMeta, Role::Content),
-        UpdateOneof::Block(block) => {
-            let key = UpdateKey::Block(filter_names(update));
-            (block.slot, key, Role::Content)
-        },
-        UpdateOneof::BlockFooter(footer) => {
-            let key = UpdateKey::BlockFooter(filter_names(update));
-            (footer.slot, key, Role::Content)
-        },
+        UpdateOneof::Block(block) => (block.slot, UpdateKey::Block, Role::Content),
+        UpdateOneof::BlockFooter(footer) => (footer.slot, UpdateKey::BlockFooter, Role::Content),
         UpdateOneof::EntryUpdateParent(_) | UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => {
             return None;
         },
@@ -143,8 +130,28 @@ enum SlotState {
 /// The keys delivered for one slot, and how far the slot has come.
 #[derive(Debug, Default)]
 struct SlotRecord {
-    seen: HashSet<UpdateKey>,
+    /// The filter names each key went to. The server sends one block per `blocks` filter and
+    /// one footer per certificates group, each under its own names.
+    /// Geyser v16.2.0: <https://github.com/rpcpool/yellowstone-grpc/blob/b408d1fa01458b90818fc4ba99831a6b254cbf26/yellowstone-grpc-geyser/src/plugin/filter/filter.rs#L2208-L2410>
+    seen: HashMap<UpdateKey, HashSet<String>>,
     state: SlotState,
+}
+
+impl SlotRecord {
+    /// Drop the names in `filters` that already got `key`, and note the rest. False when no
+    /// name is left. Without names, a key that came before is a repeat.
+    fn mark_seen(&mut self, key: UpdateKey, filters: &mut Vec<String>) -> bool {
+        let delivered = match self.seen.entry(key) {
+            Entry::Vacant(entry) => {
+                entry.insert(filters.iter().cloned().collect());
+                return true;
+            },
+            Entry::Occupied(entry) => entry.into_mut(),
+        };
+
+        filters.retain(|name| delivered.insert(name.clone()));
+        !filters.is_empty()
+    }
 }
 
 /// The slots from `REPEAT_WINDOW` below the checkpoint up, where a resubscribe starts, and the
@@ -194,9 +201,9 @@ impl ResumePoint {
             .map(|(slot, _)| *slot)
     }
 
-    /// Note `update` and say whether to deliver it. An update of a slot with no record is always
-    /// delivered, so it can repeat.
-    pub(crate) fn deliver(&mut self, update: &SubscribeUpdate) -> bool {
+    /// Note `update`, take off its filter names that already got it, and say whether to deliver
+    /// it. An update of a slot with no record is always delivered, so it can repeat.
+    pub(crate) fn deliver(&mut self, update: &mut SubscribeUpdate) -> bool {
         let Some((slot, key, role)) = classify(update, self.commitment) else {
             return true;
         };
@@ -223,7 +230,7 @@ impl ResumePoint {
         }
 
         let record = self.slots.entry(slot).or_default();
-        let fresh = record.seen.insert(key);
+        let fresh = record.mark_seen(key, &mut update.filters);
 
         // Below the checkpoint a record only drops repeats, so a late copy never moves it back.
         if checkpoint.is_some_and(|checkpoint| slot < checkpoint) {
@@ -348,18 +355,18 @@ mod tests {
     #[test]
     fn replay_of_the_checkpoint_slot_delivers_only_what_was_missed() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
-        assert!(resume.deliver(&transaction(10, 1)));
-        assert!(resume.deliver(&account(10, 5)));
+        assert!(resume.deliver(&mut transaction(10, 1)));
+        assert!(resume.deliver(&mut account(10, 5)));
         assert_eq!(resume.checkpoint(), Some(10));
 
-        assert!(!resume.deliver(&transaction(10, 1)));
-        assert!(!resume.deliver(&account(10, 5)));
-        assert!(resume.deliver(&transaction(10, 2)));
-        assert!(resume.deliver(&slot_status(10, SlotStatus::SlotConfirmed)));
+        assert!(!resume.deliver(&mut transaction(10, 1)));
+        assert!(!resume.deliver(&mut account(10, 5)));
+        assert!(resume.deliver(&mut transaction(10, 2)));
+        assert!(resume.deliver(&mut slot_status(10, SlotStatus::SlotConfirmed)));
 
-        assert!(resume.deliver(&transaction(11, 1)));
+        assert!(resume.deliver(&mut transaction(11, 1)));
         assert_eq!(resume.checkpoint(), Some(10));
-        assert!(!resume.deliver(&transaction(10, 1)));
+        assert!(!resume.deliver(&mut transaction(10, 1)));
     }
 
     /// A status that only the resume filter matched is tracked but not delivered. One the user
@@ -369,7 +376,7 @@ mod tests {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
         let mut update = slot_status(10, SlotStatus::SlotConfirmed);
         update.filters = vec![RESUME_FILTER_KEY.to_owned()];
-        assert!(resume.deliver(&update));
+        assert!(resume.deliver(&mut update));
         assert!(!strip_resume_filter(&mut update));
         assert_eq!(resume.checkpoint(), Some(10));
 
@@ -401,13 +408,13 @@ mod tests {
         };
 
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
-        assert!(resume.deliver(&footer("plain")));
-        assert!(resume.deliver(&footer("certificates")));
-        assert!(resume.deliver(&block("a")));
-        assert!(resume.deliver(&block("b")));
+        assert!(resume.deliver(&mut footer("plain")));
+        assert!(resume.deliver(&mut footer("certificates")));
+        assert!(resume.deliver(&mut block("a")));
+        assert!(resume.deliver(&mut block("b")));
 
-        assert!(!resume.deliver(&footer("certificates")));
-        assert!(!resume.deliver(&block("b")));
+        assert!(!resume.deliver(&mut footer("certificates")));
+        assert!(!resume.deliver(&mut block("b")));
     }
 
     /// A resubscribe can reach another server, which gives the same bank another `bank_id`.
@@ -424,8 +431,8 @@ mod tests {
         };
 
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
-        assert!(resume.deliver(&footer(101)));
-        assert!(!resume.deliver(&footer(900)));
+        assert!(resume.deliver(&mut footer(101)));
+        assert!(!resume.deliver(&mut footer(900)));
     }
 
     /// An interslot status for a slot ahead must not move the checkpoint past content that has
@@ -433,12 +440,12 @@ mod tests {
     #[test]
     fn only_a_status_at_the_commitment_moves_the_checkpoint() {
         let mut resume = ResumePoint::new(SlotStatus::SlotFinalized);
-        assert!(resume.deliver(&transaction(10, 1)));
-        assert!(resume.deliver(&slot_status(15, SlotStatus::SlotFirstShredReceived)));
+        assert!(resume.deliver(&mut transaction(10, 1)));
+        assert!(resume.deliver(&mut slot_status(15, SlotStatus::SlotFirstShredReceived)));
         assert_eq!(resume.checkpoint(), Some(10));
 
-        assert!(resume.deliver(&slot_status(10, SlotStatus::SlotFinalized)));
-        assert!(resume.deliver(&slot_status(12, SlotStatus::SlotFinalized)));
+        assert!(resume.deliver(&mut slot_status(10, SlotStatus::SlotFinalized)));
+        assert!(resume.deliver(&mut slot_status(12, SlotStatus::SlotFinalized)));
         assert_eq!(resume.checkpoint(), Some(12));
     }
 
@@ -447,13 +454,13 @@ mod tests {
     #[test]
     fn resubscribe_covers_an_ancestor_sent_after_its_child() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
-        assert!(resume.deliver(&transaction(43, 1)));
-        assert!(resume.deliver(&slot_status(43, SlotStatus::SlotConfirmed)));
-        assert!(resume.deliver(&transaction(42, 1)));
+        assert!(resume.deliver(&mut transaction(43, 1)));
+        assert!(resume.deliver(&mut slot_status(43, SlotStatus::SlotConfirmed)));
+        assert!(resume.deliver(&mut transaction(42, 1)));
         assert_eq!(resume.checkpoint(), Some(43));
         assert!(resume.resubscribe_slot(None).is_some_and(|slot| slot <= 42));
 
-        assert!(!resume.deliver(&transaction(42, 1)));
+        assert!(!resume.deliver(&mut transaction(42, 1)));
     }
 
     /// A slot whose status never comes holds the checkpoint, so a later reconnect fails with
@@ -461,16 +468,16 @@ mod tests {
     #[test]
     fn checkpoint_holds_a_slot_whose_status_never_comes() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
-        assert!(resume.deliver(&transaction(10, 1)));
+        assert!(resume.deliver(&mut transaction(10, 1)));
 
         let newest = 10 + MAX_TRACKED_SLOTS;
         for slot in 11..=newest + 1 {
-            assert!(resume.deliver(&slot_status(slot, SlotStatus::SlotConfirmed)));
+            assert!(resume.deliver(&mut slot_status(slot, SlotStatus::SlotConfirmed)));
         }
         assert_eq!(resume.checkpoint(), Some(10));
         assert_eq!(resume.slots.len(), MAX_TRACKED_SLOTS as usize + 1);
 
-        assert!(resume.deliver(&transaction(10, 2)));
+        assert!(resume.deliver(&mut transaction(10, 2)));
         assert_eq!(resume.checkpoint(), Some(10));
     }
 
@@ -478,16 +485,16 @@ mod tests {
     #[test]
     fn account_repeat_with_another_write_version_is_dropped() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
-        assert!(resume.deliver(&account_with_signature(10, 5, 7)));
-        assert!(!resume.deliver(&account_with_signature(10, 9_000_005, 7)));
+        assert!(resume.deliver(&mut account_with_signature(10, 5, 7)));
+        assert!(!resume.deliver(&mut account_with_signature(10, 9_000_005, 7)));
     }
 
     /// Writes of one account by distinct transactions are distinct updates.
     #[test]
     fn account_writes_with_distinct_signatures_are_kept() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
-        assert!(resume.deliver(&account_with_signature(10, 5, 7)));
-        assert!(resume.deliver(&account_with_signature(10, 6, 8)));
+        assert!(resume.deliver(&mut account_with_signature(10, 5, 7)));
+        assert!(resume.deliver(&mut account_with_signature(10, 6, 8)));
     }
 
     /// A server that is behind can send a completed slot again after the checkpoint passed it.
@@ -495,13 +502,33 @@ mod tests {
     fn completed_slot_replay_is_dropped_without_checkpoint_regression() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
         for slot in 10..=12 {
-            assert!(resume.deliver(&transaction(slot, 1)));
-            assert!(resume.deliver(&slot_status(slot, SlotStatus::SlotConfirmed)));
+            assert!(resume.deliver(&mut transaction(slot, 1)));
+            assert!(resume.deliver(&mut slot_status(slot, SlotStatus::SlotConfirmed)));
         }
         assert_eq!(resume.checkpoint(), Some(12));
 
-        assert!(!resume.deliver(&transaction(11, 1)));
+        assert!(!resume.deliver(&mut transaction(11, 1)));
         assert_eq!(resume.checkpoint(), Some(12));
+    }
+
+    /// A filter added across a reconnect gets the replayed copy, and the old filter does not.
+    #[test]
+    fn footer_group_repeat_does_not_redeliver_a_seen_filter() {
+        let footer = |filters: &[&str]| SubscribeUpdate {
+            filters: filters.iter().map(|name| (*name).to_owned()).collect(),
+            update_oneof: Some(UpdateOneof::BlockFooter(SubscribeUpdateBlockFooter {
+                slot: 10,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
+        assert!(resume.deliver(&mut footer(&["a"])));
+
+        let mut repeat = footer(&["a", "b"]);
+        assert!(resume.deliver(&mut repeat));
+        assert_eq!(repeat.filters, ["b"]);
     }
 
     /// A late copy of a complete slot below the window has no keys left to match, but it never
@@ -510,14 +537,14 @@ mod tests {
     fn late_copy_below_the_window_does_not_reopen_a_complete_slot() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
         for slot in 10..=20 {
-            assert!(resume.deliver(&transaction(slot, 1)));
-            assert!(resume.deliver(&slot_status(slot, SlotStatus::SlotConfirmed)));
+            assert!(resume.deliver(&mut transaction(slot, 1)));
+            assert!(resume.deliver(&mut slot_status(slot, SlotStatus::SlotConfirmed)));
         }
 
-        assert!(!resume.deliver(&transaction(17, 1)));
+        assert!(!resume.deliver(&mut transaction(17, 1)));
         assert_eq!(resume.checkpoint(), Some(20));
         for slot in [15, 12] {
-            assert!(resume.deliver(&transaction(slot, 1)));
+            assert!(resume.deliver(&mut transaction(slot, 1)));
             assert_eq!(resume.checkpoint(), Some(20));
         }
     }
@@ -527,12 +554,12 @@ mod tests {
     fn checkpoint_moves_past_a_run_of_skipped_slots() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
         for slot in [100, 141, 142, 300] {
-            assert!(resume.deliver(&transaction(slot, 1)));
-            assert!(resume.deliver(&slot_status(slot, SlotStatus::SlotConfirmed)));
+            assert!(resume.deliver(&mut transaction(slot, 1)));
+            assert!(resume.deliver(&mut slot_status(slot, SlotStatus::SlotConfirmed)));
         }
 
         assert_eq!(resume.checkpoint(), Some(300));
-        assert!(!resume.deliver(&transaction(300, 1)));
+        assert!(!resume.deliver(&mut transaction(300, 1)));
     }
 
     /// On a slots-only stream a processed status comes before the slot has a record, and the
@@ -540,11 +567,11 @@ mod tests {
     #[test]
     fn processed_status_before_confirmation_is_dropped_on_replay() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
-        let processed = slot_status(10, SlotStatus::SlotProcessed);
-        assert!(resume.deliver(&processed));
-        assert!(resume.deliver(&slot_status(10, SlotStatus::SlotConfirmed)));
+        let mut processed = slot_status(10, SlotStatus::SlotProcessed);
+        assert!(resume.deliver(&mut processed));
+        assert!(resume.deliver(&mut slot_status(10, SlotStatus::SlotConfirmed)));
 
-        assert!(!resume.deliver(&processed));
+        assert!(!resume.deliver(&mut processed));
     }
 
     /// Content that keeps coming while the statuses stop must not grow the state.
@@ -552,7 +579,7 @@ mod tests {
     fn content_without_commitment_status_keeps_state_bounded() {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
         for slot in 0..100 {
-            assert!(resume.deliver(&transaction(slot, 1)));
+            assert!(resume.deliver(&mut transaction(slot, 1)));
         }
 
         assert_eq!(resume.checkpoint(), Some(0));
@@ -566,8 +593,8 @@ mod tests {
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
         assert_eq!(resume.resubscribe_slot(Some(98)), Some(98));
 
-        assert!(resume.deliver(&transaction(100, 1)));
-        assert!(resume.deliver(&slot_status(100, SlotStatus::SlotConfirmed)));
+        assert!(resume.deliver(&mut transaction(100, 1)));
+        assert!(resume.deliver(&mut slot_status(100, SlotStatus::SlotConfirmed)));
         assert_eq!(resume.resubscribe_slot(None), Some(100 - REPEAT_WINDOW));
         assert_eq!(resume.resubscribe_slot(Some(98)), Some(98));
     }
@@ -587,10 +614,10 @@ mod tests {
         };
 
         let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
-        assert!(resume.deliver(&slot_status(990, SlotStatus::SlotFinalized)));
+        assert!(resume.deliver(&mut slot_status(990, SlotStatus::SlotFinalized)));
         for slot in 1000..=1040 {
-            assert!(resume.deliver(&transaction(slot, 1)));
-            assert!(resume.deliver(&confirmed(slot)));
+            assert!(resume.deliver(&mut transaction(slot, 1)));
+            assert!(resume.deliver(&mut confirmed(slot)));
         }
 
         assert_eq!(resume.checkpoint(), Some(1040));
@@ -602,7 +629,7 @@ mod tests {
     fn statuses_of_another_level_before_a_checkpoint_keep_state_bounded() {
         let mut resume = ResumePoint::new(SlotStatus::SlotFinalized);
         for slot in 0..10_000 {
-            assert!(resume.deliver(&slot_status(slot, SlotStatus::SlotProcessed)));
+            assert!(resume.deliver(&mut slot_status(slot, SlotStatus::SlotProcessed)));
         }
 
         assert_eq!(resume.checkpoint(), None);

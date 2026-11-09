@@ -568,10 +568,11 @@ impl SourceTrait for YellowstoneGrpcSource {
                                 hold_filter_updates = false;
                             }
 
-                            // A repeat of the checkpoint slot, or a slot status only the
-                            // resume filter asked for, stays here.
+                            // A repeat that each matched filter already got, or a slot
+                            // status only the resume filter asked for, stays here.
                             if mode == ReconnectMode::SlotResume
-                                && (!resume.deliver(&update) || !strip_resume_filter(&mut update))
+                                && (!resume.deliver(&mut update)
+                                    || !strip_resume_filter(&mut update))
                             {
                                 continue;
                             }
