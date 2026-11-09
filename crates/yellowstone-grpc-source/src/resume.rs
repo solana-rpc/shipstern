@@ -38,7 +38,12 @@ pub(crate) fn strip_resume_filter(update: &mut SubscribeUpdate) -> bool {
 /// What tells two updates of one slot apart.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum UpdateKey {
-    Account { pubkey: Vec<u8>, write_version: u64 },
+    // Each server numbers writes with its own counter, so the key has no `write_version`. Geyser
+    // keeps one write per pubkey in a slot; the signature is for a server that sends every write.
+    Account {
+        pubkey: Vec<u8>,
+        txn_signature: Option<Vec<u8>>,
+    },
     Transaction(Vec<u8>),
     TransactionStatus(Vec<u8>),
     Entry(u64),
@@ -77,7 +82,7 @@ fn classify(update: &SubscribeUpdate, commitment: SlotStatus) -> Option<(u64, Up
             let info = account.account.as_ref()?;
             let key = UpdateKey::Account {
                 pubkey: info.pubkey.clone(),
-                write_version: info.write_version,
+                txn_signature: info.txn_signature.clone(),
             };
             (account.slot, key, Role::Content)
         },
@@ -317,6 +322,16 @@ mod tests {
         }
     }
 
+    fn account_with_signature(slot: u64, write_version: u64, signature: u8) -> SubscribeUpdate {
+        let mut update = account(slot, write_version);
+        if let Some(UpdateOneof::Account(account)) = update.update_oneof.as_mut()
+            && let Some(info) = account.account.as_mut()
+        {
+            info.txn_signature = Some(vec![signature; 64]);
+        }
+        update
+    }
+
     fn slot_status(slot: u64, status: SlotStatus) -> SubscribeUpdate {
         SubscribeUpdate {
             update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
@@ -457,6 +472,22 @@ mod tests {
 
         assert!(resume.deliver(&transaction(10, 2)));
         assert_eq!(resume.checkpoint(), Some(10));
+    }
+
+    /// Each server numbers account writes with its own counter.
+    #[test]
+    fn account_repeat_with_another_write_version_is_dropped() {
+        let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
+        assert!(resume.deliver(&account_with_signature(10, 5, 7)));
+        assert!(!resume.deliver(&account_with_signature(10, 9_000_005, 7)));
+    }
+
+    /// Writes of one account by distinct transactions are distinct updates.
+    #[test]
+    fn account_writes_with_distinct_signatures_are_kept() {
+        let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
+        assert!(resume.deliver(&account_with_signature(10, 5, 7)));
+        assert!(resume.deliver(&account_with_signature(10, 6, 8)));
     }
 
     /// A server that is behind can send a completed slot again after the checkpoint passed it.
