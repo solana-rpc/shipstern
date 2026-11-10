@@ -47,7 +47,12 @@ enum UpdateKey {
     Transaction(Vec<u8>),
     TransactionStatus(Vec<u8>),
     Entry(u64),
-    Slot(i32),
+    // For lower status (e.g. Processed) a slot can have several banks. A resume on another
+    // process renumbers banks, so those statuses repeat, and an id can alias another bank's.
+    Slot {
+        status: i32,
+        bank_id: Option<u64>,
+    },
     BlockMeta,
     Block,
     // Each server numbers its banks in its own way, so the key has no `bank_id`. A confirmed
@@ -89,6 +94,8 @@ fn classify(update: &SubscribeUpdate, commitment: SlotStatus) -> Option<(u64, Up
         },
         UpdateOneof::Entry(entry) => (entry.slot, UpdateKey::Entry(entry.index), Role::Content),
         UpdateOneof::Slot(slot) => {
+            // guarded by new()
+            debug_assert!(commitment as i32 == SlotStatus::SlotConfirmed as i32 || commitment as i32 == SlotStatus::SlotFinalized as i32);
             let role = if slot.status == commitment as i32 {
                 Role::CommitmentStatus {
                     parent: slot.parent,
@@ -96,7 +103,14 @@ fn classify(update: &SubscribeUpdate, commitment: SlotStatus) -> Option<(u64, Up
             } else {
                 Role::OtherStatus
             };
-            (slot.slot, UpdateKey::Slot(slot.status), role)
+            let single_bank = [SlotStatus::SlotConfirmed, SlotStatus::SlotFinalized]
+                .contains(&slot.status());
+            let key = UpdateKey::Slot {
+                status: slot.status,
+                // keep bank_id to identify different banks - i.e. for all "not single bank" status
+                bank_id: slot.bank_id.filter(|_| !single_bank),
+            };
+            (slot.slot, key, role)
         },
         UpdateOneof::BlockMeta(meta) => (meta.slot, UpdateKey::BlockMeta, Role::Content),
         UpdateOneof::Block(block) => (block.slot, UpdateKey::Block, Role::Content),
@@ -650,6 +664,27 @@ pub(crate) mod tests {
         assert!(resume.deliver(&mut slot_status(10, SlotStatus::SlotConfirmed)));
 
         assert!(!resume.deliver(&mut processed));
+    }
+
+    /// Each bank of a slot has its own processed status, so the second is not a repeat. A slot
+    /// has one confirmed bank, so its status repeats whatever id another server gives it.
+    #[test]
+    fn processed_statuses_of_two_banks_in_one_slot_are_kept() {
+        let status_of = |status, bank_id| {
+            let mut update = slot_status(10, status);
+            if let Some(UpdateOneof::Slot(slot)) = update.update_oneof.as_mut() {
+                slot.bank_id = Some(bank_id);
+            }
+            update
+        };
+
+        let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
+        assert!(resume.deliver(&mut status_of(SlotStatus::SlotProcessed, 7)));
+        assert!(resume.deliver(&mut status_of(SlotStatus::SlotProcessed, 8)));
+        assert!(!resume.deliver(&mut status_of(SlotStatus::SlotProcessed, 8)));
+
+        assert!(resume.deliver(&mut status_of(SlotStatus::SlotConfirmed, 8)));
+        assert!(!resume.deliver(&mut status_of(SlotStatus::SlotConfirmed, 900)));
     }
 
     /// Content that keeps coming while the statuses stop must not grow the state.
