@@ -101,8 +101,8 @@ fn classify(update: &SubscribeUpdate, commitment: SlotStatus) -> Option<(u64, Up
             } else {
                 Role::OtherStatus
             };
-            let single_bank = [SlotStatus::SlotConfirmed, SlotStatus::SlotFinalized]
-                .contains(&slot.status());
+            let single_bank =
+                [SlotStatus::SlotConfirmed, SlotStatus::SlotFinalized].contains(&slot.status());
             let key = UpdateKey::Slot {
                 status: slot.status,
                 // keep bank_id to identify different banks - i.e. for all "not single bank" status
