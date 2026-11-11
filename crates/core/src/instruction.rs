@@ -70,8 +70,10 @@ pub struct InstructionShared {
     pub bank_id: u64,
     /// The signature of the transaction.
     pub signature: Vec<u8>,
-    /// Whether the transaction is a vote transaction. On Alpenglow, blocks hold no consensus
-    /// vote transactions; see [`crate::TransactionPrefilter::vote`].
+    /// Whether the transaction is a simple vote transaction: a legacy message, one or two
+    /// signatures, and one vote program instruction. On Alpenglow, consensus votes are not
+    /// transactions, so only vote account transactions, such as a withdraw, set it. See
+    /// [`crate::TransactionPrefilter::vote`].
     pub is_vote: bool,
     /// The index of the transaction in the block.
     pub txn_index: u64,

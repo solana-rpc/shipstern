@@ -39,6 +39,10 @@ Shipstern solves core challenges for Solana dApp developers:
 
 ## Quick Start
 
+The repo builds with Rust 1.97.1 (`rust-toolchain.toml`). `shipstern-mock`,
+`shipstern-solana-rpc-source`, `shipstern-solana-snapshot-source` and `shipstern-jetstream-source`
+use Agave `~4.3.2`, whose crates need Rust 1.97.1 or newer.
+
 A minimal example using Token Program parsers and a Logger handler:
 
 ```rust
@@ -116,6 +120,12 @@ Two more parsers carry no program address, because they read block-level updates
 rather than a program's accounts and instructions:
 [shipstern-block-meta-parser](./crates/block-meta-parser) for `BlockMeta` and
 [shipstern-slot-parser](./crates/slot-parser) for `Slot`.
+
+No crate parses block footers. Write a `Parser` for `BlockFooterUpdate`, set
+`PrefilterBuilder::block_footers` in its prefilter, and register it with
+`RuntimeBuilder::block_footer`. The gRPC source sends footers on an Alpenglow cluster,
+and the Fumarole source forwards the footer filter. A server on yellowstone-grpc proto
+12.7 or older ignores the footer filter. The jetstreamer source sends none.
 
 ### Codegen Macro
 
@@ -200,8 +210,14 @@ Shipstern supports several official data sources for ingesting Solana account an
 | [`yellowstone-fumarole-source`](./crates/yellowstone-fumarole-source) | **Fumarole Reliable Streams**: Scalable, reliable, and persistent streaming of Solana accounts and transactions. Fumarole merges data from multiple nodes for high availability, supports consumer groups for horizontal scalability, and allows clients to resume streams after interruptions. Currently in limited beta—contact Triton support for access. [Learn more](https://blog.triton.one/introducing-yellowstone-fumarole) or see the [GitHub repo](https://github.com/rpcpool/yellowstone-fumarole). |
 | [`solana-rpc-source`](./crates/solana-rpc-source)                     | **Solana RPC Source**: Pulls account data directly from a Solana node's JSON-RPC API using `getProgramAccounts`. It dispatches on a prefilter's account **owners** only: the `accounts` pubkey set and the `filters` comparisons (`Memcmp`, `DataSize`, and the rest) are not translated into the RPC request, so a prefilter that narrows on those still fetches every account the owner holds.                                                                                                                                                                                                                                                                                                                                                                                               |
 | [`solana-snapshot-source`](./crates/solana-snapshot-source)           | **Solana Snapshot Source**: Loads and processes Solana ledger snapshots for offline or historical analysis. Like the RPC source, it selects on account owners only.                                                                                                                                                                                                                                                                                                                                                                                                    |
-| [`jetstreamer-source`](./crates/jetstreamer-source)                   | **Jetstreamer Source**: Replays historical blocks from [Old Faithful](https://github.com/rpcpool/yellowstone-faithful) archives over a slot or epoch range, emitting the same `SubscribeUpdate` messages as a live stream. Archives hold only finalized history, so replayed slots report `SLOT_FINALIZED`. The crate is published as `shipstern-jetstream-source`. See [`examples/jetstreamer`](./examples/jetstreamer).                                                                |
+| [`jetstreamer-source`](./crates/jetstreamer-source)                   | **Jetstreamer Source**: Replays historical blocks from [Old Faithful](https://github.com/rpcpool/yellowstone-faithful) archives over a slot or epoch range, emitting the same `SubscribeUpdate` messages as a live stream. Archives hold only finalized history, so replayed slots report `SLOT_FINALIZED`. The package is `shipstern-jetstream-source`. It takes `jetstreamer-firehose` from git (`vaultic-win/jetstreamer` rev `e522a67e`), so cargo cannot publish this version of the package to crates.io. That rev reads the `VATDebit` rewards that the first block of each epoch holds from epoch 1064 on. The first jetstreamer release with this fix, v0.10.0, is only on GitHub and needs Agave 4.4. The source sends no block footers, and its `bank_id` is the slot. See [`examples/jetstreamer`](./examples/jetstreamer).                                                                |
 | [`preconf-source`](./crates/preconf-source)                           | **Triton Preconfirmations Source**: Streams the transactions that the Harmonic block builder and Jito BAM nodes report during the slot, as `SubscribeUpdateTransaction` with a minimal meta. Harmonic reports a transaction before the leader executes it, and BAM after the leader commits it. A preconf is an early signal, not settlement. It usually arrives ahead of Geyser when the client runs near the feed region. A slot can be skipped or forked out, and a leader can restart a slot. Triton must enable each feed on the token. See the [crate README](./crates/preconf-source/README.md), [`examples/preconf`](./examples/preconf) and the [Triton docs](https://docs.triton.one/chains/solana/preconfirmations-grpc). |
+
+The `bank_id` of an update depends on the source. The gRPC source passes the validator's
+value, which is local to one server. Fumarole slot statuses have no `bank_id`. The
+jetstreamer source sets the slot, and the preconf source sets 0. The snapshot source sets
+the slot on its one slot status. The RPC and snapshot sources send account updates with
+no `bank_id`.
 
 Refer to the crate documentation for setup instructions and configuration options.
 

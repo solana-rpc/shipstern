@@ -28,8 +28,10 @@ at field numbers that proto 14 reserves, so they are dropped.
 
 Each certificate in a footer is for its own slot, not the footer slot. The final
 certificate is for the newest block that the producer knew as finalized, and the
-reward certificates are for the footer slot minus 8. Bit i of a `signer_bitmap`
-is the validator at rank i in the epoch of the certificate slot. Agave ranks only
+reward certificates are for the footer slot minus 8. A `signer_bitmap` is a
+`solana-signer-store` bitmap: a version byte, a u16 LE bit count, then the
+bits, low bit of each byte first. Bit i of these bits is the validator at
+rank i in the epoch of the certificate slot. Agave ranks only
 vote accounts that have nonzero stake and a valid BLS key. Of these, an account
 that shares its BLS key or its node pubkey with another one is left out. The
 order is by stake, highest first, then by compressed BLS pubkey bytes, lowest
@@ -135,7 +137,9 @@ infrastructure that does not forward them.
 With `auto-reconnect` on, a lost stream is recovered in one of two ways, picked
 by the commitment. Both use `reconnect-max-retries`, and both need a server
 that stores slots: if it no longer holds the slot to resume from, the run ends
-with `OutOfRange`.
+with `OutOfRange`. The server replays only the processed, confirmed and
+finalized statuses, so a `FirstShredReceived`, `Completed` or `Dead` sent
+during the outage is lost.
 
 The server keeps a number of slots, not a time: 150 by default on
 yellowstone-grpc, and about 1,000 on Triton shared mainnet. At confirmed or
@@ -167,6 +171,11 @@ it. A `from_slot` and a `RuntimeHandle` are both fine here.
   because a resubscribe from the tip would skip updates.
 - The budget starts over once the new stream sends an update that is not a ping
   or a dropped repeat.
+- A stream that the server closes with no error status is also a loss, and the
+  source resumes.
+- A yellowstone-grpc server with `replay_stored_slots` set to 0 answers the
+  resume with `from_slot is not supported`. Then the run ends at once, with no
+  retry.
 - Repeats can still come, so handlers must accept them.
 
 **Processed: the client replays banks.** A slot can have several banks at

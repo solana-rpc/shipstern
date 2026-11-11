@@ -671,8 +671,9 @@ impl BlockPrefilter {
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub struct SlotPrefilter {
     /// If true (default), only receive slot updates at the connection's commitment level.
-    /// If false, receive processed, confirmed and finalized. To also receive `CreatedBank`
-    /// and `Dead`, set [`Self::interslot_updates`] to `Some(true)` as well.
+    /// If false, receive processed, confirmed and finalized. To also receive the interslot
+    /// statuses (`FirstShredReceived`, `CreatedBank`, `Completed`, `Dead`), set
+    /// [`Self::interslot_updates`] to `Some(true)` as well.
     pub filter_by_commitment: bool,
     /// Whether to receive the extra updates the server emits between slots.
     /// `None` leaves the server default. It has no effect while
@@ -1368,7 +1369,8 @@ impl PrefilterBuilder {
             cuckoo_accounts_include: block_cuckoo_accounts_include.unwrap_or_default(),
         };
 
-        // Interslot statuses need filter_by_commitment false (geyser v16.2.0 filter.rs:1508-1516).
+        // Interslot statuses need filter_by_commitment false
+        // (yellowstone-grpc v16.2.0 plugin/filter/filter.rs:1508-1516).
         let slot = SlotPrefilter {
             filter_by_commitment: slot_interslot_updates != Some(true),
             interslot_updates: slot_interslot_updates,

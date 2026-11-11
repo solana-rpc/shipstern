@@ -1570,7 +1570,7 @@ async fn malformed_block_meta_or_entry_is_skipped() {
     harness.expect_flush(51).await;
 }
 
-/// A server on Geyser proto 12.7 or older sends no bank ID, which decodes as 0.
+/// A server on yellowstone-grpc proto 12.7 or older sends no bank ID, which decodes as 0.
 #[tokio::test]
 async fn missing_bank_id_stops_coordinator() {
     let (input_tx, input_rx) = mpsc::channel(8);

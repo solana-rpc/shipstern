@@ -179,8 +179,8 @@ impl RuntimeBuilder {
     ///
     /// Footer and block meta handlers run as separate jobs, in no fixed order. To use a footer
     /// with other updates of its block, join them on (`slot`, `bank_id`) in your own state. The
-    /// join holds on the gRPC source. On Fumarole, the footer `bank_id` is a number that Fumarole
-    /// assigns.
+    /// join holds on the gRPC source. On Fumarole, slot statuses have no `bank_id`, so a slot
+    /// status cannot join a footer there.
     pub fn block_footer<T: DynPipeline<BlockFooterUpdate> + Send + Sync + 'static>(
         self,
         block_footer: T,

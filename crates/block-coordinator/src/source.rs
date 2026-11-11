@@ -38,7 +38,7 @@ fn validate_bank_id(update: &SubscribeUpdate) -> Result<(), &'static str> {
         Some(UpdateOneof::Account(account)) if account.bank_id.is_none() && !account.is_startup => {
             Err("Account update has no bank ID")
         },
-        // A server on Geyser proto 13 or newer sets a bank ID on each of these statuses.
+        // A server on yellowstone-grpc proto 13 or newer sets a bank ID on each of these statuses.
         Some(UpdateOneof::Slot(slot))
             if slot.bank_id.is_none()
                 && matches!(
@@ -205,7 +205,7 @@ impl SourceTrait for CoordinatorSource {
                 tracing::warn!(
                     source_label,
                     ?undelivered,
-                    "The coordinator source feeds only account and transaction pipelines"
+                    "The coordinator source forwards only account and transaction updates"
                 );
             }
         }

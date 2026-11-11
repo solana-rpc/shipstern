@@ -8,7 +8,12 @@ use shipstern_core::{ParseResult, Parser, Prefilter, ProgramParser, Pubkey, Slot
 ///
 /// For `CreatedBank` and `Dead`, add `slot_interslot_updates(true)` with a `FilterPipeline`.
 /// It also turns off the commitment filter, so the pipeline gets every status. A `Dead` status
-/// has no `bank_id`. This works on the gRPC source; Fumarole ignores `interslot_updates`.
+/// has no `bank_id`. On a confirmed or finalized stream, yellowstone-grpc 16.2.0 and newer
+/// sends `CreatedBank` only for the bank that reaches that level.
+///
+/// Fumarole ignores `interslot_updates` but applies the commitment filter. There the setting
+/// adds the processed, confirmed and finalized statuses, but no `CreatedBank` or `Dead`.
+/// A dead slot comes as one of these statuses, with `dead_error` set.
 ///
 /// ```rust, ignore
 /// Runtime::builder().slot(FilterPipeline::new(

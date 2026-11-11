@@ -34,7 +34,7 @@ pub struct SolanaAccountsRpcConfig {
     #[arg(long, env)]
     pub timeout: u64,
 
-    /// The commitment of the RPC calls. Unset gives confirmed. See [`CommitmentLevel`].
+    /// The commitment of the RPC calls. Unset gives confirmed.
     #[arg(long, env)]
     pub commitment_level: Option<CommitmentLevel>,
 }

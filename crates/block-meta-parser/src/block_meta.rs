@@ -8,8 +8,8 @@ use yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta;
 /// One reward entry of a block.
 ///
 /// `reward_type` is the raw proto value of `RewardType`. A `RewardType::VatDebit` entry has
-/// negative `lamports`. The same pubkey then also has a `RewardType::Voting` entry after it,
-/// so the first `post_balance` is an intermediate balance.
+/// negative `lamports`. The same pubkey can also have a `RewardType::Voting` entry after it.
+/// Then the first `post_balance` is an intermediate balance.
 ///
 #[shipstern]
 #[derive(Clone, PartialEq)]
@@ -41,7 +41,8 @@ pub struct BlockMetaUpdate {
     pub executed_transaction_count: u64,
     pub entries_count: u64,
     /// The bank of this block. Bank IDs are local to a connection. On the gRPC source, join with
-    /// the slot and footer updates of the same stream on (`slot`, `bank_id`).
+    /// the slot and footer updates of the same stream on (`slot`, `bank_id`). Jetstreamer sets
+    /// the slot, and a server without bank IDs gives 0.
     pub bank_id: u64,
 }
 
