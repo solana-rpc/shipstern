@@ -90,6 +90,10 @@ fn snapshot_config(snapshots_dir: &Path) -> SnapshotConfig {
         full_snapshot_archives_dir: snapshots_dir.to_path_buf(),
         incremental_snapshot_archives_dir: snapshots_dir.to_path_buf(),
         bank_snapshots_dir: snapshots_dir.to_path_buf(),
+        // Registered io_uring buffers count against RLIMIT_MEMLOCK; parallel tests exceed it (ENOMEM).
+        use_registered_io_uring_buffers: false,
+        // O_DIRECT fails on tmpfs temp dirs.
+        use_direct_io: false,
         ..SnapshotConfig::default()
     }
 }
