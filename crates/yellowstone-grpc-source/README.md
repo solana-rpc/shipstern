@@ -22,9 +22,9 @@ The [`Source`](https://github.com/solana-rpc/shipstern/blob/main/crates/runtime/
 ## Block footers
 
 A block footer pipeline gets one footer per block on an Alpenglow cluster. A
-server on Geyser proto 12.7 or older ignores the footer filter, and a cluster
-without Alpenglow sends no footers. A proto 13 server sends certificates at
-field numbers that proto 14 reserves, so they are dropped.
+server on yellowstone-grpc proto 12.7 or older ignores the footer filter, and a
+cluster without Alpenglow sends no footers. A proto 13 server sends certificates
+at field numbers that proto 14 reserves, so they are dropped.
 
 ## Runtime filter updates
 
@@ -120,22 +120,47 @@ infrastructure that does not forward them.
 ## Reconnect
 
 With `auto-reconnect` on, a lost stream is recovered in one of two ways, picked
-by the commitment. Both share `reconnect-max-retries` and the backoff, and both
-need a server that stores slots: if it no longer holds the slot to resume from,
-the run ends with `OutOfRange`.
+by the commitment. Both use `reconnect-max-retries`, and both need a server
+that stores slots: if it no longer holds the slot to resume from, the run ends
+with `OutOfRange`.
 
-**Confirmed or finalized: resume from the last slot.** The source subscribes
-again from the last slot it saw, with the newest filter set, and drops that
-slot's repeats by signature, pubkey and write version, or status. A slot at
-these commitments never changes once delivered, so nothing is missed and
-nothing repeats. A `from_slot` and a `RuntimeHandle` are both fine here. The
-budget starts over once the new stream delivers an update.
+The server keeps a number of slots, not a time: 150 by default on
+yellowstone-grpc, and about 1,000 on Triton shared mainnet. At confirmed or
+finalized each wait caps at 10 s, so an outage of W seconds needs at least
+(W + 34.5) / 10 retries. For example, 1,000 slots at about 214 ms each are
+about 214 s, which needs about 25 retries. At processed the client doubles each
+wait with no cap, so more retries help little.
+
+**Confirmed or finalized: resume from a slot checkpoint.** The checkpoint is the
+newest slot whose status at the commitment came, or an older slot whose content
+came without that status. The source subscribes again a few slots before it,
+with the newest filter set, and drops a repeat for each filter that already got
+it. A `from_slot` and a `RuntimeHandle` are both fine here.
+
+- If a slot's status names a parent whose own status has not come, the source
+  subscribes again from that parent, but not from more than 32 slots below the
+  checkpoint. A late grandparent is covered only by a later reconnect, and only
+  while it is within those 32 slots. If the server names no parent in a slot
+  status, a parent that comes more than 4 slots late is not replayed.
+- Until the first status comes, a loss replays 32 slots, because the parent of
+  the first slot is not known yet. So a reconnect in the first 32 slots can
+  deliver a slot from before the stream started, but never one before
+  `from_slot`.
+- If the server sends a slot's content but never its status at the commitment,
+  the checkpoint stays at that slot. A reconnect after the server drops it fails
+  with `OutOfRange` instead of skipping it. If that status comes much later, a
+  loss just then replays the slots since, or fails with `OutOfRange`.
+- With no `from_slot`, a stream lost before its first checkpoint ends the run,
+  because a resubscribe from the tip would skip updates.
+- The budget starts over once the new stream sends an update that is not a ping
+  or a dropped repeat.
+- Repeats can still come, so handlers must accept them.
 
 **Processed: the client replays banks.** A slot can have several banks at
 processed, so only the client's bank replay can retract the one that was cut
 off. It takes only a processed stream with no `from_slot` and no
 `RuntimeHandle`, because it cannot verify a changed request. The server must
-send bank IDs (Geyser proto 13 or newer):
+send bank IDs (yellowstone-grpc proto 13 or newer):
 
 - An account update with no `bank_id` ends the run with `FailedPrecondition`.
 - During a reconnect, a finalized slot with no `bank_id` ends the run with
@@ -143,8 +168,8 @@ send bank IDs (Geyser proto 13 or newer):
 
 The client adds its own `blocks_meta` and `slots` filters. A server that allows
 one filter of a kind refuses a run that also has a block-meta or slot pipeline.
-Set `auto-reconnect = false` for such a server, and for a server on Geyser
-proto 12.7 or older.
+Set `auto-reconnect = false` for such a server, and for a server on
+yellowstone-grpc proto 12.7 or older.
 
 A replay repeats the bank that was cut off, so handlers can see its updates
 twice. On a Yellowstone server older than 16.1.2, the bank in progress when the

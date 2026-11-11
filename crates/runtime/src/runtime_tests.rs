@@ -660,6 +660,41 @@ async fn test_stream_error_returns_error() {
     assert!(runtime.try_run_async().await.is_err());
 }
 
+/// Sends an error, which makes the buffer fail and close the channel, then reports the
+/// closed channel as `ReceiverDropped`, as `SourceContext::tx` documents.
+#[derive(Debug)]
+struct MockErrorThenReceiverDroppedSource;
+
+#[async_trait]
+impl SourceTrait for MockErrorThenReceiverDroppedSource {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext { tx, .. } = ctx;
+
+        wait_for_runtime_ready().await;
+
+        let _ = tx
+            .send(Err(tonic::Status::unavailable("buffer fails")))
+            .await;
+        tx.closed().await;
+
+        Ok(SourceExitStatus::ReceiverDropped)
+    }
+}
+
+/// The buffer's error is the run's error, even when the source's `ReceiverDropped` wins.
+#[tokio::test]
+async fn test_buffer_error_survives_a_receiver_dropped_exit() {
+    let runtime = Runtime::builder()
+        .try_build_with(MockErrorThenReceiverDroppedSource, default_buffer_config())
+        .unwrap();
+
+    assert_yellowstone_status(
+        runtime.try_run_async().await,
+        tonic::Code::Unavailable,
+        "buffer fails",
+    );
+}
+
 #[tokio::test]
 async fn test_source_exit_stream_error_maps_to_yellowstone_status() {
     let runtime = Runtime::builder()

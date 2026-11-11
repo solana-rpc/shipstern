@@ -1,6 +1,6 @@
 mod resume;
 
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 
 use async_trait::async_trait;
 use clap::ValueEnum;
@@ -15,11 +15,11 @@ use yellowstone_grpc_client::{
     Backoff, GeyserGrpcClient, ReconnectConfig, ReconnectEvent, SubscribeRequestSink,
 };
 use yellowstone_grpc_proto::{
-    geyser::{SlotStatus, SubscribeRequest, SubscribeUpdate},
+    geyser::{subscribe_update::UpdateOneof, SubscribeRequest, SubscribeUpdate},
     tonic::{codec::CompressionEncoding, transport::ClientTlsConfig, Code, Status},
 };
 
-use crate::resume::{add_resume_filter, strip_resume_filter, ResumePoint};
+use crate::resume::{add_resume_filter, strip_resume_filter, ResumeCommitment, ResumePoint};
 
 #[derive(Default, Copy, Debug, serde::Deserialize, Clone, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -90,12 +90,12 @@ pub struct YellowstoneGrpcConfig {
     ///
     /// Reconnect a lost gRPC stream. Defaults to `true`. See [`ReconnectMode`].
     ///
-    /// At confirmed or finalized the source subscribes again from the last slot it saw, and
+    /// At confirmed or finalized the source subscribes again a few slots before a checkpoint, and
     /// adds a `slots` filter so a slot is on record even before the first matching update. At
     /// processed the client replays the cut-off banks, which needs no `from_slot` and no
     /// `RuntimeHandle`, holds replayed updates in memory until they finalize, can repeat the
-    /// cut-off block, and adds its own `blocks_meta` and `slots` filters. Set it to `false` for
-    /// a server on Geyser proto 12.7 or older, or one without stored slots.
+    /// cut-off block, and adds its own `blocks_meta` and `slots` filters. Set it to `false` for a
+    /// server on yellowstone-grpc proto 12.7 or older, or one without stored slots.
     ///
     #[arg(long, env, default_value_t = true)]
     #[serde(default = "default_auto_reconnect")]
@@ -104,6 +104,12 @@ pub struct YellowstoneGrpcConfig {
     /// Max reconnect attempts before the stream gives up.
     ///
     /// Only applies when `auto_reconnect` is set. Defaults to 10 when unset.
+    ///
+    /// The server keeps a number of slots, not a time: 150 by default on yellowstone-grpc, and
+    /// about 1,000 on Triton shared mainnet. At confirmed or finalized each wait caps at 10 s, so
+    /// an outage of W seconds needs at least (W + 34.5) / 10 retries. For example, 1,000 slots at
+    /// about 214 ms each are about 214 s, which needs about 25 retries. At processed the client
+    /// doubles each wait with no cap, so after a few attempts the gap is longer than the window.
     #[arg(long, env)]
     pub reconnect_max_retries: Option<u32>,
 }
@@ -187,11 +193,11 @@ pub enum ReconnectMode {
     /// fixed request, since a slot can have several banks there and only the client's replay
     /// can retract one.
     BankReplay,
-    /// The source subscribes again from the last slot it saw and drops that slot's repeats.
-    /// A confirmed or finalized slot never changes once delivered, so this is exact. It adds
-    /// its own `slots` filter so the last slot is known even when nothing else matched, takes
-    /// a `from_slot` and filter updates, and ends the run with `OutOfRange` when the server no
-    /// longer holds the slot.
+    /// The source subscribes again a few slots before a checkpoint and drops the repeats it has
+    /// a record of. It adds its own `slots` filter, whose status shows that a slot is complete
+    /// even when nothing else matched, takes a `from_slot` and filter updates, and ends the run
+    /// with `OutOfRange` when the server no longer holds the slot it resumes from, as when a
+    /// status never comes. With no `from_slot`, a loss before the first checkpoint ends the run.
     SlotResume,
     /// The stream stops on loss.
     Off,
@@ -209,8 +215,8 @@ enum StreamStop {
 }
 
 /// A loss the network or the server caused, which a new subscription can recover from.
-/// `OutOfRange` is not one: the server no longer holds the checkpoint slot. Nor is the
-/// `Internal` a server without replay answers `from_slot` with: every retry sends it again.
+/// `OutOfRange` is not one: the server no longer holds the slot the resubscribe asks for. Nor
+/// is the `Internal` a server without replay answers `from_slot` with: every retry sends it again.
 fn is_recoverable(status: &Status) -> bool {
     if status.code() == Code::Internal && status.message().contains("from_slot is not supported") {
         return false;
@@ -230,10 +236,11 @@ fn is_recoverable(status: &Status) -> bool {
 /// The wait before reconnect attempt `attempt`, counted from 1, capped at `MAX_RECONNECT_DELAY`.
 fn retry_delay(backoff: &Backoff, attempt: u32) -> Duration {
     let exponent = attempt.saturating_sub(1).min(i32::MAX as u32) as i32;
-    backoff
-        .initial_interval
-        .mul_f64(backoff.multiplier.powi(exponent))
-        .min(MAX_RECONNECT_DELAY)
+    let secs = backoff.initial_interval.as_secs_f64() * backoff.multiplier.powi(exponent);
+
+    // A wait too long for `Duration` is past the cap anyway, and `mul_f64` panics on it.
+    Duration::try_from_secs_f64(secs)
+        .map_or(MAX_RECONNECT_DELAY, |delay| delay.min(MAX_RECONNECT_DELAY))
 }
 
 /// Count a loss and wait out its backoff. False once the budget is spent.
@@ -253,10 +260,36 @@ async fn wait_before_retry(backoff: &Backoff, attempts: &mut u32, from_slot: Opt
         max_retries = backoff.max_retries,
         ?delay,
         ?from_slot,
-        "Stream lost; subscribing again from the last seen slot"
+        "Stream lost; subscribing again"
     );
     tokio::time::sleep(delay).await;
     true
+}
+
+/// A ping or a pong. The server can send one before it reads the request.
+fn is_ping(update: &SubscribeUpdate) -> bool {
+    matches!(
+        update.update_oneof,
+        Some(UpdateOneof::Ping(_) | UpdateOneof::Pong(_))
+    )
+}
+
+/// Whether a `SlotResume` update goes to the runtime. An update that is not a ping or a dropped
+/// repeat starts the retry budget over, so a stream that sends nothing else spends it.
+fn accept_update(
+    resume: &mut ResumePoint,
+    update: &mut SubscribeUpdate,
+    attempts: &mut u32,
+) -> bool {
+    if !resume.deliver(update) {
+        return false;
+    }
+
+    if !is_ping(update) {
+        *attempts = 0;
+    }
+
+    strip_resume_filter(update)
 }
 
 /// Hand a terminal status to the runtime and turn it into the exit status.
@@ -454,18 +487,189 @@ async fn reconnect_update(
     }
 }
 
+/// Send updates from `open`'s streams to the runtime until the run ends. `open` is a parameter
+/// so that a test can drive the loop with no server.
+async fn run_stream<S, F, Fut>(
+    config: &YellowstoneGrpcConfig,
+    mode: ReconnectMode,
+    backoff: Option<Backoff>,
+    mut filters: Filters,
+    tx: mpsc::Sender<Result<SubscribeUpdate, Status>>,
+    mut filter_updates_rx: Option<watch::Receiver<Filters>>,
+    mut open: F,
+) -> Result<SourceExitStatus, ShipsternError>
+where
+    S: SinkExt<SubscribeRequest> + Unpin,
+    S::Error: std::fmt::Display,
+    F: FnMut(SubscribeRequest) -> Fut,
+    Fut: Future<Output = Result<(S, UpdateStream), ShipsternError>>,
+{
+    let commitment = match config.commitment_level {
+        Some(CommitmentLevel::Finalized) => ResumeCommitment::Finalized,
+        _ => ResumeCommitment::Confirmed,
+    };
+    let mut resume = ResumePoint::new(commitment);
+    let mut from_slot = config.from_slot;
+    let mut attempts: u32 = 0;
+    let mut filter_updates_sent: u64 = 0;
+
+    let exit_status = loop {
+        // The request that replays takes a set published while the stream was down. A
+        // closed slot can still hold one set that nobody read.
+        if let Some(rx) = filter_updates_rx.as_mut() {
+            filters = rx.borrow_and_update().clone();
+        }
+
+        let mut request = build_subscribe_request(filters.clone(), config, mode);
+        request.from_slot = from_slot;
+
+        // yellowstone-grpc before v16.2.0 keeps only the newest queued request, so an early
+        // filter update drops the replay. The resume filter brings data that ends the hold.
+        let mut hold_filter_updates =
+            mode == ReconnectMode::SlotResume && request.from_slot.is_some();
+
+        let (mut sink, mut stream) = match open(request).await {
+            Ok(opened) => opened,
+            Err(err) => {
+                // A failed reopen counts like a loss. A failed first connect is the caller's.
+                let retry = match &backoff {
+                    Some(backoff) if attempts > 0 => {
+                        wait_before_retry(backoff, &mut attempts, from_slot).await
+                    },
+                    _ => false,
+                };
+                if retry {
+                    continue;
+                }
+                return Err(err);
+            },
+        };
+
+        tracing::debug!("gRPC stream started");
+
+        let stop = loop {
+            tokio::select! {
+                update = stream.next() => match update {
+                    Some(Ok(mut update)) => {
+                        // The server sends data only after it reads the request, but a ping
+                        // can come before.
+                        if !is_ping(&update) {
+                            hold_filter_updates = false;
+                        }
+
+                        if mode == ReconnectMode::SlotResume
+                            && !accept_update(&mut resume, &mut update, &mut attempts)
+                        {
+                            continue;
+                        }
+
+                        if tx.send(Ok(update)).await.is_err() {
+                            tracing::info!("Receiver dropped, stopping source");
+                            break StreamStop::Exit(SourceExitStatus::ReceiverDropped);
+                        }
+                    },
+                    Some(Err(status)) => {
+                        // A server that rejects a filter set answers on the stream
+                        // rather than the sink, so this is where a bad update
+                        // surfaces. Report the count so an operator can tell that
+                        // apart from an unrelated server error.
+                        tracing::warn!(
+                            code = ?status.code(),
+                            message = %status.message(),
+                            filter_updates_sent,
+                            "Received error status from stream"
+                        );
+
+                        if mode == ReconnectMode::SlotResume && is_recoverable(&status) {
+                            break StreamStop::Lost(Some(status));
+                        }
+
+                        // Every other error ends the run. Only an older server fails the
+                        // bank replay on a missing bank_id, so name the fix for that one.
+                        if mode == ReconnectMode::BankReplay
+                            && status.code() == Code::FailedPrecondition
+                            && status.message().contains("bank_id")
+                        {
+                            tracing::warn!(
+                                "The server sends no bank_id, so the client's bank replay \
+                                 cannot reconnect; set auto-reconnect = false in the source \
+                                 config (YellowstoneGrpcConfig::auto_reconnect) to run \
+                                 without reconnect"
+                            );
+                        }
+                        break StreamStop::Exit(stream_error(&tx, status).await);
+                    },
+                    None if mode == ReconnectMode::SlotResume => break StreamStop::Lost(None),
+                    None => break StreamStop::Exit(SourceExitStatus::StreamEnded),
+                },
+
+                update = next_filter_update(&mut filter_updates_rx),
+                    if !hold_filter_updates => {
+                    let Some(new_filters) = update else {
+                        // Every handle is gone and no new one can be taken, so retire this
+                        // branch for the rest of the run.
+                        tracing::debug!(
+                            "Last runtime handle dropped, filter updates are off for this run"
+                        );
+                        filter_updates_rx = None;
+                        continue;
+                    };
+
+                    // A resubscribe must carry the newest set too.
+                    filters = new_filters.clone();
+                    send_filter_update(
+                        &mut sink,
+                        config,
+                        mode,
+                        new_filters,
+                        &mut filter_updates_sent,
+                    )
+                    .await;
+                },
+            }
+        };
+
+        let lost = match stop {
+            StreamStop::Exit(status) => break status,
+            StreamStop::Lost(lost) => lost,
+        };
+        from_slot = resume.resubscribe_slot(config.from_slot);
+        let retry = match (&backoff, from_slot) {
+            (Some(backoff), Some(_)) => wait_before_retry(backoff, &mut attempts, from_slot).await,
+            // A resubscribe from the tip would skip updates with no error.
+            (Some(_), None) => {
+                tracing::error!(
+                    "Stream lost before the first checkpoint and no from_slot is set; stopping"
+                );
+                false
+            },
+            (None, _) => false,
+        };
+        if !retry {
+            break match lost {
+                Some(status) => stream_error(&tx, status).await,
+                None => SourceExitStatus::StreamEnded,
+            };
+        }
+    };
+
+    Ok(exit_status)
+}
+
 #[async_trait]
 impl SourceTrait for YellowstoneGrpcSource {
-    /// Open the subscription and pump updates until the stream ends, sending
+    /// Open the subscription and send updates until the stream ends, sending
     /// each filter set published on the context's update slot to the server so
     /// it replaces the live subscription. In `SlotResume` mode a lost stream is
-    /// opened again from the last slot seen, with the newest filter set.
+    /// opened again a few slots before the checkpoint, with the newest filter
+    /// set, and a filter update waits until the server sends data for a request
+    /// with `from_slot`.
     ///
     async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, ShipsternError> {
         let SourceContext {
             filters,
             tx,
-            mut filter_updates,
+            filter_updates,
             ..
         } = ctx;
 
@@ -481,14 +685,7 @@ impl SourceTrait for YellowstoneGrpcSource {
         // With no RuntimeHandle the update channel is already closed, so no filter
         // update can arrive and the client may reconnect the stream.
         let has_handle = filter_updates.has_changed().is_ok();
-
-        // A closed slot can still hold one set that the runtime did not read.
-        let mut filters = if has_handle {
-            filters
-        } else {
-            filter_updates.borrow_and_update().clone()
-        };
-        let mut filter_updates_rx = Some(filter_updates);
+        let filter_updates_rx = Some(filter_updates);
 
         let mode = config.reconnect_mode(has_handle);
         match mode {
@@ -505,135 +702,9 @@ impl SourceTrait for YellowstoneGrpcSource {
             .then(|| config.backoff())
             .flatten();
 
-        let checkpoint_status = match config.commitment_level {
-            Some(CommitmentLevel::Finalized) => SlotStatus::SlotFinalized,
-            _ => SlotStatus::SlotConfirmed,
-        };
-        let mut resume = ResumePoint::new(checkpoint_status);
-        // Only the first subscribe takes the configured start. A resubscribe takes the
-        // checkpoint, and until there is one, the same start.
-        let mut from_slot = config.from_slot;
-        let mut attempts: u32 = 0;
-        let mut filter_updates_sent: u64 = 0;
+        let open = |request| open_stream(&config, mode, request);
 
-        let exit_status = loop {
-            let mut request = build_subscribe_request(filters.clone(), &config, mode);
-            request.from_slot = from_slot;
-
-            let (mut sink, mut stream) = match open_stream(&config, mode, request).await {
-                Ok(opened) => opened,
-                Err(err) => {
-                    // A failed reopen counts like a loss. A failed first connect is the caller's.
-                    let retry = match &backoff {
-                        Some(backoff) if attempts > 0 => {
-                            wait_before_retry(backoff, &mut attempts, from_slot).await
-                        },
-                        _ => false,
-                    };
-                    if retry {
-                        continue;
-                    }
-                    return Err(err);
-                },
-            };
-
-            tracing::debug!("gRPC stream started");
-
-            let stop = loop {
-                tokio::select! {
-                    update = stream.next() => match update {
-                        Some(Ok(mut update)) => {
-                            // A delivered update shows the connection works, so the budget
-                            // starts over.
-                            attempts = 0;
-
-                            // A repeat of the checkpoint slot, or a slot status only the
-                            // resume filter asked for, stays here.
-                            if mode == ReconnectMode::SlotResume
-                                && (!resume.deliver(&update) || !strip_resume_filter(&mut update))
-                            {
-                                continue;
-                            }
-
-                            if tx.send(Ok(update)).await.is_err() {
-                                tracing::info!("Receiver dropped, stopping source");
-                                // Defensive only - normally unreachable because Signal/Buffer
-                                // branch wins first when receiver drops.
-                                break StreamStop::Exit(SourceExitStatus::ReceiverDropped);
-                            }
-                        },
-                        Some(Err(status)) => {
-                            // A server that rejects a filter set answers on the stream
-                            // rather than the sink, so this is where a bad update
-                            // surfaces. Report the count so an operator can tell that
-                            // apart from an unrelated server error.
-                            tracing::warn!(
-                                code = ?status.code(),
-                                message = %status.message(),
-                                filter_updates_sent,
-                                "Received error status from stream"
-                            );
-
-                            // Only an older server makes the reconnect stream fail on a missing bank_id.
-                            if mode == ReconnectMode::BankReplay
-                                && status.code() == Code::FailedPrecondition
-                                && status.message().contains("bank_id")
-                            {
-                                tracing::warn!("The server sends no bank_id; set auto-reconnect = false");
-                            }
-
-                            if mode == ReconnectMode::SlotResume && is_recoverable(&status) {
-                                break StreamStop::Lost(Some(status));
-                            }
-                            break StreamStop::Exit(stream_error(&tx, status).await);
-                        },
-                        None if mode == ReconnectMode::SlotResume => break StreamStop::Lost(None),
-                        None => break StreamStop::Exit(SourceExitStatus::StreamEnded),
-                    },
-
-                    update = next_filter_update(&mut filter_updates_rx) => {
-                        let Some(new_filters) = update else {
-                            // Every handle is gone and no new one can be taken, so retire this
-                            // branch for the rest of the run.
-                            tracing::debug!(
-                                "Last runtime handle dropped, filter updates are off for this run"
-                            );
-                            filter_updates_rx = None;
-                            continue;
-                        };
-
-                        // A resubscribe must carry the newest set too.
-                        filters = new_filters.clone();
-                        send_filter_update(
-                            &mut sink,
-                            &config,
-                            mode,
-                            new_filters,
-                            &mut filter_updates_sent,
-                        )
-                        .await;
-                    },
-                }
-            };
-
-            let lost = match stop {
-                StreamStop::Exit(status) => break status,
-                StreamStop::Lost(lost) => lost,
-            };
-            from_slot = resume.checkpoint().or(from_slot);
-            let retry = match &backoff {
-                Some(backoff) => wait_before_retry(backoff, &mut attempts, from_slot).await,
-                None => false,
-            };
-            if !retry {
-                break match lost {
-                    Some(status) => stream_error(&tx, status).await,
-                    None => SourceExitStatus::StreamEnded,
-                };
-            }
-        };
-
-        Ok(exit_status)
+        run_stream(&config, mode, backoff, filters, tx, filter_updates_rx, open).await
     }
 }
 
@@ -649,18 +720,29 @@ impl FromConfig for YellowstoneGrpcSource {
 mod tests {
     use std::{
         collections::{HashMap, HashSet},
+        sync::{Arc, Mutex},
         time::Duration,
     };
 
+    use futures_util::StreamExt;
+    use shipstern::{sources::SourceExitStatus, Error as ShipsternError};
     use shipstern_core::{AccountPrefilter, Filters, Prefilter, Pubkey};
+    use tokio::sync::{mpsc, watch};
     use yellowstone_grpc_client::Backoff;
-    use yellowstone_grpc_proto::tonic::Status;
+    use yellowstone_grpc_proto::{
+        geyser::{subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate},
+        tonic::{Code, Status},
+    };
 
     use super::{
-        build_subscribe_request, is_recoverable, retry_delay, send_filter_update, CommitmentLevel,
-        ReconnectMode, SubscribeRequest, YellowstoneGrpcConfig,
+        accept_update, build_subscribe_request, is_recoverable, retry_delay, run_stream,
+        send_filter_update, CommitmentLevel, ReconnectMode, SubscribeRequest,
+        YellowstoneGrpcConfig,
     };
-    use crate::resume::RESUME_FILTER_KEY;
+    use crate::resume::{
+        tests::{slot_status, transaction},
+        ResumeCommitment, ResumePoint, RESUME_FILTER_KEY,
+    };
 
     fn config_from(toml_src: &str) -> YellowstoneGrpcConfig {
         toml::from_str(toml_src).expect("config must deserialize")
@@ -806,7 +888,7 @@ mod tests {
     }
 
     /// The client's bank replay takes only a processed stream from the tip with a fixed
-    /// request. Confirmed and finalized resume from the last slot whatever the request.
+    /// request. Confirmed and finalized resume from a slot checkpoint whatever the request.
     #[test]
     fn reconnect_mode_follows_commitment_and_request() {
         let config = |extra: &str| {
@@ -1138,8 +1220,8 @@ mod tests {
         assert_eq!(reconnect.backoff.max_retries, 25);
     }
 
-    /// The wait doubles until the cap, so a stream cut for a minute is retried while the
-    /// server still holds the slot, instead of once at two minutes.
+    /// The wait doubles until the cap. With the cap, a stream cut for 64 s comes back at
+    /// 65.5 s. Without it, the stream waits until 127.5 s.
     #[test]
     fn retry_delay_doubles_then_caps() {
         let backoff = Backoff::new(Duration::from_millis(500), 2.0, 10);
@@ -1150,6 +1232,15 @@ mod tests {
         assert_eq!(retry_delay(&backoff, 10), Duration::from_secs(10));
     }
 
+    /// From attempt 66 the uncapped wait is longer than `Duration` can hold.
+    #[test]
+    fn retry_delay_stays_capped_with_a_big_budget() {
+        let backoff = Backoff::new(Duration::from_millis(500), 2.0, 100);
+
+        assert_eq!(retry_delay(&backoff, 66), Duration::from_secs(10));
+        assert_eq!(retry_delay(&backoff, u32::MAX), Duration::from_secs(10));
+    }
+
     /// A server without replay rejects every `from_slot` the same way, so retrying it only
     /// spends the budget.
     #[test]
@@ -1158,6 +1249,233 @@ mod tests {
         assert!(!is_recoverable(&Status::internal(
             "from_slot is not supported"
         )));
+    }
+
+    fn ping() -> SubscribeUpdate {
+        SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::Ping(Default::default())),
+            ..Default::default()
+        }
+    }
+
+    /// A confirmed status that only the resume filter matched.
+    fn resume_only(slot: u64) -> SubscribeUpdate {
+        let mut update = slot_status(slot, SlotStatus::SlotConfirmed);
+        update.filters = vec![RESUME_FILTER_KEY.to_owned()];
+        update
+    }
+
+    /// A fresh status restarts the budget even when only the resume filter matched it, so a run
+    /// whose filters match nothing does not spend the budget over many outages. A repeat does not.
+    #[test]
+    fn only_an_update_that_is_not_a_repeat_restarts_the_reconnect_budget() {
+        let mut resume = ResumePoint::new(ResumeCommitment::Confirmed);
+        let mut attempts = 3;
+
+        assert!(!accept_update(
+            &mut resume,
+            &mut resume_only(10),
+            &mut attempts
+        ));
+        assert_eq!(attempts, 0);
+
+        attempts = 3;
+        assert!(!accept_update(
+            &mut resume,
+            &mut resume_only(10),
+            &mut attempts
+        ));
+        assert_eq!(attempts, 3);
+    }
+
+    type Script = Vec<Result<Vec<Result<SubscribeUpdate, Status>>, ()>>;
+    type Requests = Arc<Mutex<Vec<SubscribeRequest>>>;
+
+    /// What a scripted run of `run_stream` did.
+    struct Run {
+        exit: Option<Result<SourceExitStatus, ShipsternError>>,
+        /// The request of each open.
+        opens: Vec<SubscribeRequest>,
+        /// The filter updates the sink got.
+        updates: Vec<SubscribeRequest>,
+        delivered: Vec<Result<SubscribeUpdate, Status>>,
+    }
+
+    /// Run `run_stream` with no server. Open `n` gets `script[n]` and then stays silent, or fails on
+    /// `Err`. `publish` goes out during the first open. `exit` is `None` after 50 ms with no end.
+    async fn run_scripted(
+        extra: &str,
+        retries: u32,
+        script: Script,
+        publish: Option<Filters>,
+    ) -> Run {
+        let config = config_from(&format!(
+            "endpoint = \"https://example.rpcpool.com\"\ntimeout = 60\ncommitment-level = \
+             \"confirmed\"\n{extra}"
+        ));
+        let (tx, mut rx) = mpsc::channel(64);
+        let (filters_tx, filters_rx) = watch::channel(filters_owned_by(1));
+        let opens = Requests::default();
+        let updates = Requests::default();
+        let mut script = script.into_iter();
+
+        let open = |request: SubscribeRequest| {
+            opens.lock().unwrap().push(request);
+            if let Some(filters) = publish.clone().filter(|_| opens.lock().unwrap().len() == 1) {
+                filters_tx.send_replace(filters);
+            }
+
+            let log = Arc::clone(&updates);
+            let sink = Box::pin(futures_util::sink::unfold((), move |(), request| {
+                log.lock().unwrap().push(request);
+                std::future::ready(Ok::<_, Rejected>(()))
+            }));
+            let opened = match script.next() {
+                Some(Ok(items)) => {
+                    let stream = futures_util::stream::iter(items)
+                        .chain(futures_util::stream::pending())
+                        .boxed();
+                    Ok((sink, stream))
+                },
+                _ => Err(ShipsternError::Other("the open failed".into())),
+            };
+            std::future::ready(opened)
+        };
+
+        let exit = tokio::time::timeout(
+            Duration::from_millis(50),
+            run_stream(
+                &config,
+                ReconnectMode::SlotResume,
+                Some(Backoff::new(Duration::ZERO, 2.0, retries)),
+                filters_owned_by(1),
+                tx,
+                Some(filters_rx),
+                open,
+            ),
+        )
+        .await
+        .ok();
+
+        let mut delivered = Vec::new();
+        while let Ok(update) = rx.try_recv() {
+            delivered.push(update);
+        }
+        let opens = opens.lock().unwrap().clone();
+        let updates = updates.lock().unwrap().clone();
+
+        Run {
+            exit,
+            opens,
+            updates,
+            delivered,
+        }
+    }
+
+    fn from_slots(run: &Run) -> Vec<Option<u64>> {
+        run.opens.iter().map(|request| request.from_slot).collect()
+    }
+
+    /// A filter update sent before the replay starts drops the replay. A ping does not show the
+    /// start. A status that only the resume filter matched does.
+    #[tokio::test]
+    async fn filter_update_waits_for_data_after_a_request_with_from_slot() {
+        let held = run_scripted(
+            "from-slot = 90",
+            3,
+            vec![Ok(vec![Ok(ping())])],
+            Some(filters_owned_by(2)),
+        )
+        .await;
+        assert!(held.updates.is_empty());
+
+        let released = run_scripted(
+            "from-slot = 90",
+            3,
+            vec![Ok(vec![Ok(ping()), Ok(resume_only(100))])],
+            Some(filters_owned_by(2)),
+        )
+        .await;
+        assert_eq!(released.updates.len(), 1);
+    }
+
+    /// A set published while the update is held must be on the request that replays.
+    #[tokio::test]
+    async fn set_published_while_held_is_on_the_resubscribe() {
+        let run = run_scripted(
+            "from-slot = 90",
+            3,
+            vec![
+                Ok(vec![Ok(ping()), Err(Status::unavailable("cut"))]),
+                Ok(vec![Err(Status::invalid_argument("stop"))]),
+            ],
+            Some(filters_owned_by(2)),
+        )
+        .await;
+
+        assert!(run.updates.is_empty());
+        assert_eq!(from_slots(&run), [Some(90), Some(90)]);
+        assert_eq!(received_owners(&run.opens[1]), [
+            Pubkey::new([2; 32]).to_string()
+        ]);
+    }
+
+    /// With no `from_slot`, a loss before the first checkpoint stops the run: the tip would skip
+    /// updates. With one, a stream that only pings spends the budget.
+    #[tokio::test]
+    async fn a_stream_that_only_pings_is_not_retried_forever() {
+        let pings = || -> Script {
+            (0..5)
+                .map(|_| Ok(vec![Ok(ping()), Err(Status::unavailable("cut"))]))
+                .collect()
+        };
+        let stopped_on_the_loss = |run: &Run| {
+            matches!(
+                run.exit,
+                Some(Ok(SourceExitStatus::StreamError {
+                    code: Code::Unavailable,
+                    ..
+                }))
+            )
+        };
+
+        let from_the_tip = run_scripted("", 2, pings(), None).await;
+        assert_eq!(from_slots(&from_the_tip), [None]);
+        assert!(stopped_on_the_loss(&from_the_tip));
+
+        let from_a_slot = run_scripted("from-slot = 90", 2, pings(), None).await;
+        assert_eq!(from_slots(&from_a_slot), [Some(90); 3]);
+        assert!(stopped_on_the_loss(&from_a_slot));
+    }
+
+    /// A reopen that fails counts like a loss and is tried again. The replay then delivers only
+    /// what the runtime did not get, and never a status that only the resume filter matched.
+    #[tokio::test]
+    async fn resubscribe_after_a_failed_reopen_delivers_each_update_once() {
+        let run = run_scripted(
+            "",
+            5,
+            vec![
+                Ok(vec![
+                    Ok(transaction(100, 1)),
+                    Ok(resume_only(100)),
+                    Ok(resume_only(101)),
+                    Err(Status::unavailable("cut")),
+                ]),
+                Err(()),
+                Ok(vec![
+                    Ok(transaction(100, 1)),
+                    Ok(transaction(102, 1)),
+                    Err(Status::invalid_argument("stop")),
+                ]),
+            ],
+            None,
+        )
+        .await;
+
+        assert_eq!(from_slots(&run), [None, Some(97), Some(97)]);
+        let delivered: Vec<_> = run.delivered.iter().flatten().cloned().collect();
+        assert_eq!(delivered, [transaction(100, 1), transaction(102, 1)]);
     }
 
     /// Only `SlotResume` asks for slot statuses on its own, and it does so on every request,
