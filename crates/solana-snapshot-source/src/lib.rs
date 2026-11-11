@@ -200,10 +200,10 @@ pub struct SolanaSnapshotConfig {
     ///     └── incremental-snapshot-[...].tar.zst
     /// ```
     ///
-    /// If the directory also holds a newer bank snapshot, as a validator's ledger directory
-    /// can, the source loads that bank snapshot, as solana-ledger does.
+    /// A bank snapshot at the newest archive's slot or newer is loaded in place of the archives.
     ///
-    /// Note: Require a manual clean after with `rm -rf accounts accounts_hash_cache/`
+    /// Loading from the archives deletes every bank snapshot under `snapshots/` and the contents
+    /// of `accounts/`. Do not use the directory of a running validator.
     pub ledger_path: PathBuf,
     pub channel_size: usize,
 }
