@@ -11,13 +11,15 @@ authors.workspace = true
 [dependencies]
 yellowstone-grpc-proto = { workspace = true }
 solana-client.workspace = true
-solana-sdk.workspace = true
+solana-account.workspace = true
+solana-pubkey.workspace = true
+solana-signature.workspace = true
+bs58.workspace = true
 solana-rpc-client-api.workspace = true
 shipstern-core = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 regex.workspace = true
-# solana-transaction-status 4.x hides its whole API behind this feature; mock
-# must ask for it rather than rely on unification with solana-ledger.
+# solana-transaction-status 4.x hides its whole API behind this feature.
 solana-transaction-status = { workspace = true, features = ["agave-unstable-api"] }
 futures.workspace = true

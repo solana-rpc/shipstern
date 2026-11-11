@@ -25,7 +25,6 @@ prost-types = { workspace = true }
 jetstreamer-firehose = { workspace = true }
 prometheus = { workspace = true, optional = true }
 
-# Solana dependencies - upgraded to 4.2 with the main workspace
 solana-transaction = { workspace = true }
 solana-msg = { workspace = true }
 solana-message = { workspace = true }
@@ -40,9 +39,9 @@ wincode = { workspace = true }
 
 [dev-dependencies]
 toml = { workspace = true }
-solana-reward-info = "6"
+solana-reward-info = "7"
 solana-hash = { workspace = true }
-# `solana_runtime::reward_info` is a private module in 4.2, so `RewardInfo` is
+# `solana_runtime::reward_info` is a private module, so `RewardInfo` is
 # unnameable. `StakeRewardInfo` is its only public constructor, via `From`.
 solana-accounts-db = { workspace = true }
 # Only used to assert that bincode does *not* produce V1 wire bytes; upstream

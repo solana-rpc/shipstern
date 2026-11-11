@@ -312,6 +312,9 @@ impl ShipsternStreamHandler {
                 block_height,
                 executed_transaction_count,
                 entry_count,
+                commission_rate_in_basis_points: _,
+                block_markers: _,
+                block_id: _,
             } => {
                 // Always drain, even when nothing consumes the entries: a slot
                 // whose buffer is left behind pins its entries for the rest of
@@ -1119,10 +1122,13 @@ slot-end = 2000
                     keyed_rewards: Vec::new(),
                     num_partitions: None,
                 },
+                commission_rate_in_basis_points: false,
                 block_time: None,
                 block_height: None,
                 executed_transaction_count: 6,
                 entry_count: 3,
+                block_markers: None,
+                block_id: None,
             })
             .await
             .expect("block emission");
@@ -1274,10 +1280,13 @@ slot-end = 2000
                 keyed_rewards: Vec::new(),
                 num_partitions: None,
             },
+            commission_rate_in_basis_points: false,
             block_time: Some(1_700_000_000),
             block_height: Some(7),
             executed_transaction_count: 6,
             entry_count: 3,
+            block_markers: None,
+            block_id: None,
         }
     }
 
@@ -1483,9 +1492,9 @@ slot-end = 2000
         let voting_pk = Pubkey::new_unique();
         let odd_pk = Pubkey::new_unique();
 
-        // `solana_runtime::reward_info::RewardInfo` sits behind a private module
-        // in 4.2, so the fixtures are built as `StakeRewardInfo` and converted
-        // through the public `From` impl.
+        // `solana_runtime::reward_info::RewardInfo` sits behind a private module,
+        // so the fixtures are built as `StakeRewardInfo` and converted through
+        // the public `From` impl.
         let input = KeyedRewardsAndNumPartitions {
             keyed_rewards: vec![
                 (
@@ -1649,53 +1658,65 @@ slot-end = 2000
         assert_eq!(decoded, err);
     }
 
-    /// Agave 4.2 added `RewardType::DeactivatedStake`, and the proto gained a
-    /// matching `DeactivatedStake = 5`. The old wildcard arm mapped it to
-    /// `Unspecified`, which silently lost the reward type.
+    /// `DeactivatedStake` (Agave 4.2) and `VATDebit` (Agave 4.3) carry negative lamports. A wildcard
+    /// arm once mapped `DeactivatedStake` to `Unspecified` and lost the type.
     #[test]
-    fn deactivated_stake_reward_type_survives_both_conversions() {
+    fn newer_reward_types_survive_both_conversions() {
         use solana_accounts_db::stake_rewards::StakeRewardInfo;
         use solana_pubkey::Pubkey;
-        use solana_reward_info::RewardType as SdkRewardType;
+        use solana_reward_info::RewardType;
         use solana_runtime::bank::KeyedRewardsAndNumPartitions;
-        use solana_transaction_status::{
-            Reward, RewardType as StatusRewardType, TransactionStatusMeta,
-        };
+        use solana_transaction_status::{Reward, TransactionStatusMeta};
         use yellowstone_grpc_proto::solana::storage::confirmed_block as proto;
 
-        let keyed = convert::keyed_rewards(&KeyedRewardsAndNumPartitions {
-            keyed_rewards: vec![(
-                Pubkey::new_unique(),
-                StakeRewardInfo {
-                    reward_type: SdkRewardType::DeactivatedStake,
-                    lamports: -5,
-                    post_balance: 0,
-                    commission_bps: None,
-                }
-                .into(),
-            )],
-            num_partitions: None,
-        });
-        assert_eq!(
-            keyed.rewards[0].reward_type,
-            proto::RewardType::DeactivatedStake as i32
-        );
+        for (reward_type, lamports, expected) in [
+            (
+                RewardType::DeactivatedStake,
+                -5,
+                proto::RewardType::DeactivatedStake,
+            ),
+            (
+                RewardType::VATDebit,
+                -800_000_000,
+                proto::RewardType::VatDebit,
+            ),
+        ] {
+            let keyed = convert::keyed_rewards(&KeyedRewardsAndNumPartitions {
+                keyed_rewards: vec![(
+                    Pubkey::new_unique(),
+                    StakeRewardInfo {
+                        reward_type,
+                        lamports,
+                        post_balance: 0,
+                        commission_bps: None,
+                    }
+                    .into(),
+                )],
+                num_partitions: None,
+            });
+            assert_eq!(
+                keyed.rewards[0].reward_type, expected as i32,
+                "{reward_type:?}"
+            );
+            assert_eq!(keyed.rewards[0].lamports, lamports, "{reward_type:?}");
 
-        let meta = convert::transaction_status_meta(TransactionStatusMeta {
-            rewards: Some(vec![Reward {
-                pubkey: "staker".to_string(),
-                lamports: -5,
-                post_balance: 0,
-                reward_type: Some(StatusRewardType::DeactivatedStake),
-                commission: None,
-                commission_bps: None,
-            }]),
-            ..Default::default()
-        });
-        assert_eq!(
-            meta.rewards[0].reward_type,
-            proto::RewardType::DeactivatedStake as i32
-        );
+            let meta = convert::transaction_status_meta(TransactionStatusMeta {
+                rewards: Some(vec![Reward {
+                    pubkey: "staker".to_string(),
+                    lamports,
+                    post_balance: 0,
+                    reward_type: Some(reward_type),
+                    commission: None,
+                    commission_bps: None,
+                }]),
+                ..Default::default()
+            });
+            assert_eq!(
+                meta.rewards[0].reward_type, expected as i32,
+                "{reward_type:?}"
+            );
+            assert_eq!(meta.rewards[0].lamports, lamports, "{reward_type:?}");
+        }
     }
 
     mod transaction_versions {
@@ -2593,7 +2614,7 @@ mod convert {
     /// Convert the firehose's `KeyedRewardsAndNumPartitions` into the proto
     /// `Rewards` that `SubscribeUpdateBlock` carries.
     ///
-    /// Agave 4.2 keeps only `commission_bps` (SIMD-0291), forwarded verbatim. The
+    /// Agave keeps only `commission_bps` (SIMD-0291), forwarded verbatim. The
     /// percent `commission` is still filled for `shipstern-block-meta-parser`, but
     /// only when the bps divide evenly, so it never reports a rounded commission.
     ///
@@ -2616,6 +2637,7 @@ mod convert {
                     RewardType::Staking => proto::RewardType::Staking,
                     RewardType::Voting => proto::RewardType::Voting,
                     RewardType::DeactivatedStake => proto::RewardType::DeactivatedStake,
+                    RewardType::VATDebit => proto::RewardType::VatDebit,
                 } as i32;
 
                 proto::Reward {
@@ -2813,6 +2835,7 @@ mod convert {
                         Some(RewardType::DeactivatedStake) => {
                             proto::RewardType::DeactivatedStake as i32
                         },
+                        Some(RewardType::VATDebit) => proto::RewardType::VatDebit as i32,
                         None => proto::RewardType::Unspecified as i32,
                     },
                     // Unlike `RewardInfo`, `solana_transaction_status::Reward`

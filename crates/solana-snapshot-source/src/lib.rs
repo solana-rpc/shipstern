@@ -4,7 +4,13 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
 };
 
-use agave_snapshots::snapshot_config::{SnapshotConfig, SnapshotUsage};
+use agave_snapshots::{
+    paths::{
+        get_highest_full_snapshot_archive_info, get_highest_incremental_snapshot_archive_info,
+    },
+    snapshot_archive_info::SnapshotArchiveInfoGetter,
+    snapshot_config::{SnapshotConfig, SnapshotUsage},
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use shipstern::{
@@ -14,13 +20,15 @@ use shipstern::{
 use shipstern_core::{Filters, Pubkey};
 use solana_account::ReadableAccount;
 use solana_accounts_db::{
-    accounts_db::AccountsDbConfig, is_loadable::IsLoadable,
-    utils::create_all_accounts_run_and_snapshot_dirs,
+    accounts_db::AccountsDbConfig,
+    is_loadable::IsLoadable,
+    utils::{create_all_accounts_run_and_snapshot_dirs, move_and_async_delete_path_contents},
 };
 use solana_genesis_utils::open_genesis_config;
-use solana_ledger::{bank_forks_utils, blockstore_processor::ProcessOptions};
 use solana_pubkey::Pubkey as SolanaPubkey;
-use solana_runtime::bank::Bank;
+use solana_runtime::{
+    bank::Bank, runtime_config::RuntimeConfig, snapshot_bank_utils, snapshot_utils,
+};
 use tokio::sync::mpsc;
 use yellowstone_grpc_proto::geyser::{
     subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate, SubscribeUpdateAccount,
@@ -53,12 +61,6 @@ impl SolanaSnapshot {
             ..AccountsDbConfig::default()
         };
 
-        let process_options = ProcessOptions {
-            accounts_db_skip_shrink: true,
-            accounts_db_config,
-            ..Default::default()
-        };
-
         let snapshot_path = ledger_path.join("snapshots");
         let account_path = ledger_path.join("accounts");
         let snapshot_config = SnapshotConfig {
@@ -77,35 +79,108 @@ impl SolanaSnapshot {
             })?;
         let account_paths = account_run_paths;
 
-        // ledger 4.x replaced `load_bank_forks` with a snapshot-only entry point
-        // that no longer opens the blockstore, and returns `None` when the
-        // snapshot archives directory holds nothing loadable.
-        tracing::info!("Loading bank forks");
-        let loaded = bank_forks_utils::try_load_bank_forks_from_snapshot(
-            &genesis_config,
-            &account_paths,
-            &snapshot_config,
-            &process_options,
-            None,
-            Arc::new(AtomicBool::new(false)),
-        )
-        .map_err(|e| {
-            ShipsternError::Io(std::io::Error::other(format!(
-                "Failed to load bank forks: {e}"
-            )))
-        })?;
-
-        let Some((bank_forks, _starting_snapshot_hashes)) = loaded else {
+        let Some(full_snapshot_archive_info) =
+            get_highest_full_snapshot_archive_info(&snapshot_config.full_snapshot_archives_dir)
+        else {
             return Err(ShipsternError::Io(std::io::Error::other(format!(
                 "No loadable snapshot found under {:?}",
                 snapshot_config.full_snapshot_archives_dir
             ))));
         };
 
-        let bank = bank_forks.read().unwrap().working_bank();
+        let incremental_snapshot_archive_info = get_highest_incremental_snapshot_archive_info(
+            &snapshot_config.incremental_snapshot_archives_dir,
+            full_snapshot_archive_info.slot(),
+        );
+
+        let latest_snapshot_archive_slot = std::cmp::max(
+            full_snapshot_archive_info.slot(),
+            incremental_snapshot_archive_info
+                .as_ref()
+                .map(SnapshotArchiveInfoGetter::slot)
+                .unwrap_or(0),
+        );
+
+        // The same branch as solana-ledger `try_load_bank_forks_from_snapshot` with `WhenNewest`.
+        let fastboot_snapshot =
+            snapshot_utils::get_highest_loadable_bank_snapshot(&snapshot_config)
+                .filter(|bank_snapshot| bank_snapshot.slot >= latest_snapshot_archive_slot);
+
+        let bank = if let Some(fastboot_snapshot) = fastboot_snapshot {
+            tracing::info!(
+                "Loading bank from snapshot dir {:?}",
+                fastboot_snapshot.snapshot_dir
+            );
+            snapshot_bank_utils::bank_from_snapshot_dir(
+                &account_paths,
+                &fastboot_snapshot,
+                &genesis_config,
+                &RuntimeConfig::default(),
+                None,  // debug_keys
+                None,  // leader_for_tests
+                None,  // limit_load_slot_count_from_snapshot
+                false, // verify_index
+                accounts_db_config,
+                None, // accounts_update_notifier
+                Arc::new(AtomicBool::new(false)),
+            )
+            .map_err(|e| {
+                ShipsternError::Io(std::io::Error::other(format!(
+                    "Failed to load bank from snapshot dir {:?}: {e}",
+                    fastboot_snapshot.snapshot_path()
+                )))
+            })?
+        } else {
+            // The archive unpacks into the run dirs, so the state of an earlier run goes first.
+            {
+                snapshot_utils::purge_all_bank_snapshots(&snapshot_config.bank_snapshots_dir);
+
+                for account_path in &account_paths {
+                    move_and_async_delete_path_contents(account_path);
+                }
+
+                snapshot_utils::wipe_account_snapshot_dirs(&account_paths);
+            }
+
+            tracing::info!("Loading bank from snapshot archives");
+            snapshot_bank_utils::bank_from_snapshot_archives(
+                &account_paths,
+                &full_snapshot_archive_info,
+                incremental_snapshot_archive_info.as_ref(),
+                &snapshot_config,
+                &genesis_config,
+                &RuntimeConfig::default(),
+                None,  // debug_keys
+                None,  // leader_for_tests
+                None,  // limit_load_slot_count_from_snapshot
+                true,  // accounts_db_skip_shrink
+                false, // accounts_db_force_initial_clean
+                false, // verify_index
+                accounts_db_config,
+                None, // accounts_update_notifier
+                Arc::new(AtomicBool::new(false)),
+            )
+            .map_err(|e| {
+                let incremental_snapshot_archive =
+                    incremental_snapshot_archive_info.as_ref().map_or_else(
+                        || "none".to_string(),
+                        |info| info.path().display().to_string(),
+                    );
+
+                ShipsternError::Io(std::io::Error::other(format!(
+                    "Failed to load bank from snapshot archives: {e}, full snapshot archive: {}, \
+                     incremental snapshot archive: {incremental_snapshot_archive}",
+                    full_snapshot_archive_info.path().display(),
+                )))
+            })?
+        };
+
         let slot = bank.slot();
 
-        Ok(Self { bank, slot })
+        Ok(Self {
+            bank: Arc::new(bank),
+            slot,
+        })
     }
 }
 
@@ -125,7 +200,10 @@ pub struct SolanaSnapshotConfig {
     ///     └── incremental-snapshot-[...].tar.zst
     /// ```
     ///
-    /// Note: Require a manual clean after with `rm -rf rocksdb/ accounts accounts_hash_cache/`
+    /// A bank snapshot at the newest archive's slot or newer is loaded in place of the archives.
+    ///
+    /// Loading from the archives deletes every bank snapshot under `snapshots/` and the contents
+    /// of `accounts/`. Do not use the directory of a running validator.
     pub ledger_path: PathBuf,
     pub channel_size: usize,
 }
