@@ -94,8 +94,6 @@ fn classify(update: &SubscribeUpdate, commitment: SlotStatus) -> Option<(u64, Up
         },
         UpdateOneof::Entry(entry) => (entry.slot, UpdateKey::Entry(entry.index), Role::Content),
         UpdateOneof::Slot(slot) => {
-            // guarded by new()
-            debug_assert!(commitment as i32 == SlotStatus::SlotConfirmed as i32 || commitment as i32 == SlotStatus::SlotFinalized as i32);
             let role = if slot.status == commitment as i32 {
                 Role::CommitmentStatus {
                     parent: slot.parent,
@@ -678,7 +676,7 @@ pub(crate) mod tests {
             update
         };
 
-        let mut resume = ResumePoint::new(SlotStatus::SlotConfirmed);
+        let mut resume = ResumePoint::new(ResumeCommitment::Confirmed);
         assert!(resume.deliver(&mut status_of(SlotStatus::SlotProcessed, 7)));
         assert!(resume.deliver(&mut status_of(SlotStatus::SlotProcessed, 8)));
         assert!(!resume.deliver(&mut status_of(SlotStatus::SlotProcessed, 8)));
