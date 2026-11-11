@@ -274,8 +274,8 @@ impl<S: SourceTrait> Runtime<S> {
     /// │   drain -> Ok    ServerHangup     ServerHangup     Other            │
     /// │                                                                     │
     /// │    ┌──────────────────────────────────────────────────────────┐     │
-    /// │    │ ReceiverDropped: defensive only - normally unreachable   │     │
-    /// │    │ because Signal/Buffer branch wins first when rx drops    │     │
+    /// │    │ ReceiverDropped: join the buffer and return its result,  │     │
+    /// │    │ so a buffer error that closed rx is still the error      │     │
     /// │    └──────────────────────────────────────────────────────────┘     │
     /// └─────────────────────────────────────────────────────────────────────┘
     /// ```
@@ -401,9 +401,8 @@ impl<S: SourceTrait> Runtime<S> {
             },
             StopType::SourceExit(Ok(Ok(status))) => match status {
                 SourceExitStatus::ReceiverDropped => {
-                    tracing::info!("Source stopped: receiver dropped (shutdown)");
-                    Self::force_stop_buffer(buffer).await;
-                    Ok(())
+                    tracing::info!("Source stopped: receiver dropped");
+                    buffer.join().await.map(stop::StopCode::as_unit)
                 },
                 SourceExitStatus::Completed => {
                     tracing::info!("Source completed successfully; draining runtime buffer");
