@@ -4,6 +4,13 @@ use shipstern_core::{ParseResult, Parser, Prefilter, ProgramParser, Pubkey};
 use shipstern_proc_macro::shipstern;
 use yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta;
 
+///
+/// One reward entry of a block.
+///
+/// `reward_type` is the raw proto value of `RewardType`. A `RewardType::VatDebit` entry has
+/// negative `lamports`. The same pubkey can also have a `RewardType::Voting` entry after it.
+/// Then the first `post_balance` is an intermediate balance.
+///
 #[shipstern]
 #[derive(Clone, PartialEq)]
 pub struct Reward {
@@ -33,6 +40,10 @@ pub struct BlockMetaUpdate {
     pub parent_blockhash: String,
     pub executed_transaction_count: u64,
     pub entries_count: u64,
+    /// The bank of this block. Bank IDs are local to a connection. On the gRPC source, join with
+    /// the slot and footer updates of the same stream on (`slot`, `bank_id`). Jetstreamer sets
+    /// the slot, and a server without bank IDs gives 0.
+    pub bank_id: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -72,6 +83,7 @@ impl Parser for BlockMetaParser {
             parent_blockhash: block_meta.parent_blockhash.clone(),
             executed_transaction_count: block_meta.executed_transaction_count,
             entries_count: block_meta.entries_count,
+            bank_id: block_meta.bank_id,
         })
     }
 }
@@ -82,5 +94,23 @@ impl ProgramParser for BlockMetaParser {
         "B111111111111111111111111111111111111111112"
             .parse()
             .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn parse_keeps_bank_id() {
+        let block_meta = SubscribeUpdateBlockMeta {
+            slot: 7,
+            bank_id: 3,
+            ..Default::default()
+        };
+
+        let parsed = BlockMetaParser.parse(&block_meta).await.unwrap();
+
+        assert_eq!((parsed.slot, parsed.bank_id), (7, 3));
     }
 }

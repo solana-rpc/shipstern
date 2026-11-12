@@ -163,8 +163,9 @@
 //! │    ▼                                             ▼                          │
 //! │  DeadSlotDetected(A)                       ForksDetected(B)                 │
 //! │                                                                             │
-//! │  Note: In practice, confirmed slots won't be forked because confirmation    │
-//! │  requires supermajority (2/3+) votes — siblings can't both get enough.      │
+//! │  Note: A confirmed slot does not fork. On Alpenglow, Agave 4.3.2 reports    │
+//! │  confirmed only when it roots a finalized block. Finalization needs 80% of  │
+//! │  stake in one round, or 60% in two rounds.                                  │
 //! │                                                                             │
 //! └─────────────────────────────────────────────────────────────────────────────┘
 //! ```
@@ -1569,7 +1570,7 @@ async fn malformed_block_meta_or_entry_is_skipped() {
     harness.expect_flush(51).await;
 }
 
-/// A server on Geyser proto 12.7 or older sends no bank ID, which decodes as 0.
+/// A server on yellowstone-grpc proto 12.7 or older sends no bank ID, which decodes as 0.
 #[tokio::test]
 async fn missing_bank_id_stops_coordinator() {
     let (input_tx, input_rx) = mpsc::channel(8);

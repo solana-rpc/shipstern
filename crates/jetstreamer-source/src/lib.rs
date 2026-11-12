@@ -656,7 +656,12 @@ impl SlotRangeConfig {
     }
 }
 
+///
 /// Jetstream source for historical Solana data streaming
+///
+/// Mainnet archives up to slot 459,652,999 hold consensus vote transactions. Blocks from slot
+/// 459,653,000, after the Alpenglow switch, hold none.
+///
 #[derive(Debug)]
 pub struct JetstreamSource {
     config: JetstreamSourceConfig,

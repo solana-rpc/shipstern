@@ -109,7 +109,8 @@ impl fmt::Display for CoordinatorError {
             } => write!(f, "Bank {bank_id} is in slot {slot} and slot {other_slot}"),
             Self::MissingBankId { slot } => write!(
                 f,
-                "Slot {slot} has no bank ID. The server likely runs Geyser proto 12.7 or older"
+                "Slot {slot} has no bank ID. The server likely runs yellowstone-grpc proto 12.7 \
+                 or older"
             ),
             Self::ReadySlotMissingMetadata { slot } => {
                 write!(f, "Ready slot missing metadata: slot {slot}")

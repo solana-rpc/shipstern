@@ -72,8 +72,8 @@ enum Role {
     OtherStatus,
 }
 
-/// The slot an update belongs to, its key in that slot, and its role. A ping, a pong or a
-/// parent update carries nothing to key.
+/// The slot an update belongs to, its key in that slot, and its role. A ping, a pong, a
+/// parent update, a `Completed` or a `Dead` carries nothing to key.
 fn classify(update: &SubscribeUpdate, commitment: SlotStatus) -> Option<(u64, UpdateKey, Role)> {
     let classified = match update.update_oneof.as_ref()? {
         UpdateOneof::Account(account) => {
@@ -94,6 +94,15 @@ fn classify(update: &SubscribeUpdate, commitment: SlotStatus) -> Option<(u64, Up
         },
         UpdateOneof::Entry(entry) => (entry.slot, UpdateKey::Entry(entry.index), Role::Content),
         UpdateOneof::Slot(slot) => {
+            // A slot can die again after a replay, and complete again after a purge and repair,
+            // so a second copy is new.
+            if matches!(
+                slot.status(),
+                SlotStatus::SlotCompleted | SlotStatus::SlotDead
+            ) {
+                return None;
+            }
+
             let role = if slot.status == commitment as i32 {
                 Role::CommitmentStatus {
                     parent: slot.parent,
@@ -683,6 +692,16 @@ pub(crate) mod tests {
 
         assert!(resume.deliver(&mut status_of(SlotStatus::SlotConfirmed, 8)));
         assert!(!resume.deliver(&mut status_of(SlotStatus::SlotConfirmed, 900)));
+    }
+
+    /// `Dead` names no bank. A slot that dies, replays and dies again sends a second `Dead`,
+    /// which is not a repeat.
+    #[test]
+    fn second_dead_of_a_slot_is_delivered() {
+        let mut resume = ResumePoint::new(ResumeCommitment::Confirmed);
+        assert!(resume.deliver(&mut slot_status(10, SlotStatus::SlotConfirmed)));
+        assert!(resume.deliver(&mut slot_status(11, SlotStatus::SlotDead)));
+        assert!(resume.deliver(&mut slot_status(11, SlotStatus::SlotDead)));
     }
 
     /// Content that keeps coming while the statuses stop must not grow the state.
