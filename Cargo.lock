@@ -6046,7 +6046,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -6068,7 +6068,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-block-coordinator"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "bs58",
@@ -6093,7 +6093,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-block-meta-parser"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "prost 0.14.4",
  "prost-types 0.14.4",
@@ -6106,7 +6106,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-bpf-loader-parser"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "bincode",
  "prost 0.14.4",
@@ -6122,7 +6122,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-codama-from-anchor"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anchor-lang-idl",
  "bs58",
@@ -6136,7 +6136,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-core"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "base64 0.22.1",
  "borsh",
@@ -6205,7 +6205,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-example-jetstreamer"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "bs58",
@@ -6221,7 +6221,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-example-preconf"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "clap",
  "rustls",
@@ -6279,7 +6279,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-jetstream-source"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6315,7 +6315,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-kafka-sink"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "futures",
  "mockito",
@@ -6334,7 +6334,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-mock"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "bs58",
  "futures",
@@ -6353,7 +6353,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-parser"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "base64 0.22.1",
  "bs58",
@@ -6368,7 +6368,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-preconf-source"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6393,7 +6393,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-proc-macro"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "base64 0.22.1",
  "bs58",
@@ -6411,7 +6411,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-proto"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "prost 0.14.4",
  "prost-types 0.14.4",
@@ -6424,7 +6424,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-slot-parser"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "shipstern-core",
  "shipstern-mock",
@@ -6433,7 +6433,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-solana-rpc-source"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -6451,7 +6451,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-solana-snapshot-source"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "agave-fs",
  "agave-snapshots",
@@ -6478,7 +6478,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-spl-token-extensions-parser"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "borsh",
  "bs58",
@@ -6505,7 +6505,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-spl-token-parser"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "bs58",
  "bytemuck",
@@ -6528,7 +6528,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-stake-pool-parser"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "borsh",
  "prost 0.14.4",
@@ -6545,7 +6545,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-stream"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -6576,7 +6576,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-yellowstone-fumarole-source"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "bytesize 2.7.0",
@@ -6596,7 +6596,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-yellowstone-grpc-source"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "clap",
