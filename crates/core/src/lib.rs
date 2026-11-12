@@ -1369,8 +1369,7 @@ impl PrefilterBuilder {
             cuckoo_accounts_include: block_cuckoo_accounts_include.unwrap_or_default(),
         };
 
-        // Interslot statuses need filter_by_commitment false
-        // (yellowstone-grpc v16.2.0 plugin/filter/filter.rs:1508-1516).
+        // The server sends interslot statuses only when filter_by_commitment is false.
         let slot = SlotPrefilter {
             filter_by_commitment: slot_interslot_updates != Some(true),
             interslot_updates: slot_interslot_updates,
