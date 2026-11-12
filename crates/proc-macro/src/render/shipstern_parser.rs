@@ -184,10 +184,18 @@ pub fn shipstern_parser(
                 ::core::result::Result::Ok(buf.to_vec())
             }
 
+            /// Borsh: write exactly N bytes. A value of another length would decode to other values.
             fn borsh_serialize_fixed_bytes<const N: usize, W: ::borsh::io::Write>(
                 val: &[u8],
                 writer: &mut W,
             ) -> ::core::result::Result<(), ::borsh::io::Error> {
+                if val.len() != N {
+                    return ::core::result::Result::Err(::borsh::io::Error::new(
+                        ::borsh::io::ErrorKind::InvalidInput,
+                        "invalid fixed-byte length",
+                    ));
+                }
+
                 writer.write_all(val)
             }
 
@@ -220,7 +228,7 @@ pub fn shipstern_parser(
                     ::core::option::Option::Some(v) => {
                         ::borsh::BorshSerialize::serialize(&1u8, writer)?;
 
-                        writer.write_all(v)
+                        borsh_serialize_fixed_bytes::<N, _>(v, writer)
                     }
                     ::core::option::Option::None => {
                         ::borsh::BorshSerialize::serialize(&0u8, writer)
@@ -228,35 +236,77 @@ pub fn shipstern_parser(
                 }
             }
 
-            fn borsh_deserialize_vec_fixed_bytes<const N: usize, R: ::borsh::io::Read>(
+            /// Borsh: read a u32 LE count, then that many items with `read_item`. The untrusted
+            /// count reserves at most 4 KiB, as in borsh's `Vec<T>`, so the list grows with the input.
+            fn borsh_deserialize_counted<T, R: ::borsh::io::Read>(
                 reader: &mut R,
-            ) -> ::core::result::Result<Vec<Vec<u8>>, ::borsh::io::Error> {
+                mut read_item: impl FnMut(&mut R) -> ::core::result::Result<T, ::borsh::io::Error>,
+            ) -> ::core::result::Result<Vec<T>, ::borsh::io::Error> {
                 let len: u32 = ::borsh::BorshDeserialize::deserialize_reader(reader)?;
 
-                // Grow only as actual input arrives, never allocate from the untrusted count.
-                let mut result = Vec::new();
+                let capacity = (len as usize).min(4096 / ::core::mem::size_of::<T>().max(1));
+                let mut result = Vec::with_capacity(capacity);
 
                 for _ in 0..len {
-                    let mut buf = [0u8; N];
-
-                    reader.read_exact(&mut buf)?;
-                    result.push(buf.to_vec());
+                    result.push(read_item(reader)?);
                 }
 
                 ::core::result::Result::Ok(result)
+            }
+
+            /// Borsh: write a u32 LE count, then each item with `write_item`.
+            fn borsh_serialize_counted<T, W: ::borsh::io::Write>(
+                val: &[T],
+                writer: &mut W,
+                mut write_item: impl FnMut(&T, &mut W) -> ::core::result::Result<(), ::borsh::io::Error>,
+            ) -> ::core::result::Result<(), ::borsh::io::Error> {
+                let len = u32::try_from(val.len()).map_err(|_| ::borsh::io::Error::new(
+                    ::borsh::io::ErrorKind::InvalidInput,
+                    "list count overflow",
+                ))?;
+
+                ::borsh::BorshSerialize::serialize(&len, writer)?;
+
+                for v in val {
+                    write_item(v, writer)?;
+                }
+
+                ::core::result::Result::Ok(())
+            }
+
+            /// Borsh: write exactly N items with `write_item` and no count prefix.
+            fn borsh_serialize_fixed_count<T, const N: usize, W: ::borsh::io::Write>(
+                val: &[T],
+                writer: &mut W,
+                mut write_item: impl FnMut(&T, &mut W) -> ::core::result::Result<(), ::borsh::io::Error>,
+            ) -> ::core::result::Result<(), ::borsh::io::Error> {
+                if val.len() != N {
+                    return ::core::result::Result::Err(::borsh::io::Error::new(
+                        ::borsh::io::ErrorKind::InvalidInput,
+                        "invalid fixed array length",
+                    ));
+                }
+
+                for v in val {
+                    write_item(v, writer)?;
+                }
+
+                ::core::result::Result::Ok(())
+            }
+
+            /// Borsh: deserialize a u32 LE-counted list of N-byte items. Each item is its own `Vec<u8>`,
+            /// so a list of 1-byte items can take up to about 80 bytes of memory for each input byte.
+            fn borsh_deserialize_vec_fixed_bytes<const N: usize, R: ::borsh::io::Read>(
+                reader: &mut R,
+            ) -> ::core::result::Result<Vec<Vec<u8>>, ::borsh::io::Error> {
+                borsh_deserialize_counted(reader, borsh_deserialize_fixed_bytes::<N, R>)
             }
 
             fn borsh_serialize_vec_fixed_bytes<const N: usize, W: ::borsh::io::Write>(
                 val: &[Vec<u8>],
                 writer: &mut W,
             ) -> ::core::result::Result<(), ::borsh::io::Error> {
-                ::borsh::BorshSerialize::serialize(&(val.len() as u32), writer)?;
-
-                for v in val {
-                    writer.write_all(v)?;
-                }
-
-                ::core::result::Result::Ok(())
+                borsh_serialize_counted(val, writer, |v, w| borsh_serialize_fixed_bytes::<N, _>(v, w))
             }
 
             /// Borsh: deserialize a fixed-count array (no length prefix on-chain).
@@ -277,11 +327,7 @@ pub fn shipstern_parser(
                 val: &[T],
                 writer: &mut W,
             ) -> ::core::result::Result<(), ::borsh::io::Error> {
-                for v in val {
-                    <T as ::borsh::BorshSerialize>::serialize(v, writer)?;
-                }
-
-                ::core::result::Result::Ok(())
+                borsh_serialize_fixed_count::<_, N, _>(val, writer, <T as ::borsh::BorshSerialize>::serialize)
             }
 
             /// Borsh: deserialize a fixed-count array of fixed-size byte fields (no length prefix).
@@ -305,11 +351,9 @@ pub fn shipstern_parser(
                 val: &[Vec<u8>],
                 writer: &mut W,
             ) -> ::core::result::Result<(), ::borsh::io::Error> {
-                for v in val {
-                    writer.write_all(v)?;
-                }
-
-                ::core::result::Result::Ok(())
+                borsh_serialize_fixed_count::<_, N, _>(val, writer, |v, w| {
+                    borsh_serialize_fixed_bytes::<BYTE_SIZE, _>(v, w)
+                })
             }
 
             /// Borsh: deserialize a fixed-count array of f32 permissively (no length prefix, allows NaN).
@@ -333,11 +377,7 @@ pub fn shipstern_parser(
                 val: &[f32],
                 writer: &mut W,
             ) -> ::core::result::Result<(), ::borsh::io::Error> {
-                for v in val {
-                    writer.write_all(&v.to_le_bytes())?;
-                }
-
-                ::core::result::Result::Ok(())
+                borsh_serialize_fixed_count::<_, N, _>(val, writer, borsh_serialize_f32_permissive::<W>)
             }
 
             fn borsh_deserialize_fixed_array_f64_permissive<const N: usize, R: ::borsh::io::Read>(
@@ -360,11 +400,7 @@ pub fn shipstern_parser(
                 val: &[f64],
                 writer: &mut W,
             ) -> ::core::result::Result<(), ::borsh::io::Error> {
-                for v in val {
-                    writer.write_all(&v.to_le_bytes())?;
-                }
-
-                ::core::result::Result::Ok(())
+                borsh_serialize_fixed_count::<_, N, _>(val, writer, borsh_serialize_f64_permissive::<W>)
             }
 
             /// Borsh: deserialize f32 permissively (allows NaN/Infinity).
@@ -425,33 +461,14 @@ pub fn shipstern_parser(
             fn borsh_deserialize_vec_f32_permissive<R: ::borsh::io::Read>(
                 reader: &mut R,
             ) -> ::core::result::Result<Vec<f32>, ::borsh::io::Error> {
-                let len: u32 = ::borsh::BorshDeserialize::deserialize_reader(reader)?;
-
-                // Grow only as actual input arrives, never allocate from the untrusted count.
-                let mut result = Vec::new();
-
-                for _ in 0..len {
-                    let mut buf = [0u8; 4];
-
-                    reader.read_exact(&mut buf)?;
-
-                    result.push(f32::from_le_bytes(buf));
-                }
-
-                ::core::result::Result::Ok(result)
+                borsh_deserialize_counted(reader, borsh_deserialize_f32_permissive::<R>)
             }
 
             fn borsh_serialize_vec_f32_permissive<W: ::borsh::io::Write>(
                 val: &[f32],
                 writer: &mut W,
             ) -> ::core::result::Result<(), ::borsh::io::Error> {
-                ::borsh::BorshSerialize::serialize(&(val.len() as u32), writer)?;
-
-                for v in val {
-                    writer.write_all(&v.to_le_bytes())?;
-                }
-
-                ::core::result::Result::Ok(())
+                borsh_serialize_counted(val, writer, borsh_serialize_f32_permissive::<W>)
             }
 
             /// Borsh: deserialize f64 permissively (allows NaN/Infinity).
@@ -512,32 +529,14 @@ pub fn shipstern_parser(
             fn borsh_deserialize_vec_f64_permissive<R: ::borsh::io::Read>(
                 reader: &mut R,
             ) -> ::core::result::Result<Vec<f64>, ::borsh::io::Error> {
-                let len: u32 = ::borsh::BorshDeserialize::deserialize_reader(reader)?;
-
-                // Grow only as actual input arrives, never allocate from the untrusted count.
-                let mut result = Vec::new();
-
-                for _ in 0..len {
-                    let mut buf = [0u8; 8];
-
-                    reader.read_exact(&mut buf)?;
-                    result.push(f64::from_le_bytes(buf));
-                }
-
-                ::core::result::Result::Ok(result)
+                borsh_deserialize_counted(reader, borsh_deserialize_f64_permissive::<R>)
             }
 
             fn borsh_serialize_vec_f64_permissive<W: ::borsh::io::Write>(
                 val: &[f64],
                 writer: &mut W,
             ) -> ::core::result::Result<(), ::borsh::io::Error> {
-                ::borsh::BorshSerialize::serialize(&(val.len() as u32), writer)?;
-
-                for v in val {
-                    writer.write_all(&v.to_le_bytes())?;
-                }
-
-                ::core::result::Result::Ok(())
+                borsh_serialize_counted(val, writer, borsh_serialize_f64_permissive::<W>)
             }
 
             pub const PROGRAM_ID: [u8; 32] = #program_pubkey;

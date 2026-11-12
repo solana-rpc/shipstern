@@ -21,11 +21,32 @@
               "name": "items",
               "type": {
                 "kind": "arrayTypeNode",
-                "item": {"kind": "fixedSizeTypeNode", "size": 32, "type": {"kind": "bytesTypeNode"}},
-                "count": {"kind": "prefixedCountNode", "prefix": {"kind": "numberTypeNode", "format": "u32", "endian": "le"}}
+                "item": {
+                  "kind": "fixedSizeTypeNode",
+                  "size": 32,
+                  "type": {
+                    "kind": "bytesTypeNode"
+                  }
+                },
+                "count": {
+                  "kind": "prefixedCountNode",
+                  "prefix": {
+                    "kind": "numberTypeNode",
+                    "format": "u32",
+                    "endian": "le"
+                  }
+                }
               }
             },
-            {"kind": "structFieldTypeNode", "name": "sentinel", "type": {"kind": "numberTypeNode", "format": "u8", "endian": "le"}}
+            {
+              "kind": "structFieldTypeNode",
+              "name": "sentinel",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
           ]
         }
       },
@@ -40,11 +61,30 @@
               "name": "items",
               "type": {
                 "kind": "arrayTypeNode",
-                "item": {"kind": "numberTypeNode", "format": "f32", "endian": "le"},
-                "count": {"kind": "prefixedCountNode", "prefix": {"kind": "numberTypeNode", "format": "u32", "endian": "le"}}
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "f32",
+                  "endian": "le"
+                },
+                "count": {
+                  "kind": "prefixedCountNode",
+                  "prefix": {
+                    "kind": "numberTypeNode",
+                    "format": "u32",
+                    "endian": "le"
+                  }
+                }
               }
             },
-            {"kind": "structFieldTypeNode", "name": "sentinel", "type": {"kind": "numberTypeNode", "format": "u8", "endian": "le"}}
+            {
+              "kind": "structFieldTypeNode",
+              "name": "sentinel",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
           ]
         }
       },
@@ -59,11 +99,120 @@
               "name": "items",
               "type": {
                 "kind": "arrayTypeNode",
-                "item": {"kind": "numberTypeNode", "format": "f64", "endian": "le"},
-                "count": {"kind": "prefixedCountNode", "prefix": {"kind": "numberTypeNode", "format": "u32", "endian": "le"}}
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "f64",
+                  "endian": "le"
+                },
+                "count": {
+                  "kind": "prefixedCountNode",
+                  "prefix": {
+                    "kind": "numberTypeNode",
+                    "format": "u32",
+                    "endian": "le"
+                  }
+                }
               }
             },
-            {"kind": "structFieldTypeNode", "name": "sentinel", "type": {"kind": "numberTypeNode", "format": "u8", "endian": "le"}}
+            {
+              "kind": "structFieldTypeNode",
+              "name": "sentinel",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "fixedShapes",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "key",
+              "type": {
+                "kind": "fixedSizeTypeNode",
+                "size": 4,
+                "type": {
+                  "kind": "bytesTypeNode"
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "maybeKey",
+              "type": {
+                "kind": "optionTypeNode",
+                "fixed": false,
+                "item": {
+                  "kind": "fixedSizeTypeNode",
+                  "size": 4,
+                  "type": {
+                    "kind": "bytesTypeNode"
+                  }
+                },
+                "prefix": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "bytesPair",
+              "type": {
+                "kind": "arrayTypeNode",
+                "item": {
+                  "kind": "fixedSizeTypeNode",
+                  "size": 4,
+                  "type": {
+                    "kind": "bytesTypeNode"
+                  }
+                },
+                "count": {
+                  "kind": "fixedCountNode",
+                  "value": 2
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "numberPair",
+              "type": {
+                "kind": "arrayTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u16",
+                  "endian": "le"
+                },
+                "count": {
+                  "kind": "fixedCountNode",
+                  "value": 2
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "floatPair",
+              "type": {
+                "kind": "arrayTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "f32",
+                  "endian": "le"
+                },
+                "count": {
+                  "kind": "fixedCountNode",
+                  "value": 2
+                }
+              }
+            }
           ]
         }
       }

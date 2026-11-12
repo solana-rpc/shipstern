@@ -318,6 +318,47 @@ impl SchemaIr {
         }
     }
 
+    /// Whether the generated Rust type is zero-sized: a struct or tuple with no fields, or
+    /// with only zero-sized fields. Borsh's `Vec<T>` rejects a zero-sized `T` at run time.
+    pub fn is_zero_sized_rust_type(&self, type_node: &TypeNode) -> bool {
+        self.is_zero_sized_rust_type_inner(type_node, &mut HashSet::new())
+    }
+
+    fn is_zero_sized_rust_type_inner(
+        &self,
+        type_node: &TypeNode,
+        visiting_links: &mut HashSet<String>,
+    ) -> bool {
+        use codama_nodes::{DefaultValueStrategy, TypeNode as T};
+
+        match type_node {
+            T::Struct(struct_type) => struct_type
+                .fields
+                .iter()
+                .filter(|field| field.default_value_strategy != Some(DefaultValueStrategy::Omitted))
+                .all(|field| self.is_zero_sized_rust_type_inner(&field.r#type, visiting_links)),
+            T::Tuple(tuple) => tuple
+                .items
+                .iter()
+                .all(|item| self.is_zero_sized_rust_type_inner(item, visiting_links)),
+            T::Link(link) => {
+                let name = crate::utils::to_pascal_case(&link.name);
+
+                if !visiting_links.insert(name.clone()) {
+                    return false;
+                }
+
+                let result = self
+                    .defined_type_nodes
+                    .get(&name)
+                    .is_some_and(|node| self.is_zero_sized_rust_type_inner(node, visiting_links));
+                visiting_links.remove(&name);
+                result
+            },
+            _ => false,
+        }
+    }
+
     /// Insert a generated helper type, allocating a numeric suffix when its
     /// requested name is already used by a different type.
     pub fn push_unique_type(&mut self, mut msg: TypeIr) -> String {

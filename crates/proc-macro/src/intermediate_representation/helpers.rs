@@ -166,7 +166,13 @@ pub fn materialize_type(
                 codama_nodes::CountNode::Fixed(fixed) => {
                     LabelIr::FixedArray(crate::utils::as_index(fixed.value))
                 },
-                _ => LabelIr::Repeated,
+                codama_nodes::CountNode::Prefixed(prefixed) => {
+                    counted_list_label(base_name, prefixed, &array.item, ir)
+                },
+                codama_nodes::CountNode::Remainder(_) => panic!(
+                    "list `{base_name}`: remainderCountNode is not supported; generated parsers \
+                     read a u32 LE count"
+                ),
             };
 
             // Array<struct> can use the field helper directly. More complex
@@ -227,6 +233,35 @@ pub fn materialize_type(
 
         other => ir.resolve_field(LabelIr::Singular, map_type(other)),
     }
+}
+
+/// The label of a list with a count prefix. Generated parsers read the count as a u32 LE, and
+/// an item that reads no input must be zero-sized in Rust, so that borsh rejects the list.
+fn counted_list_label(
+    base_name: &str,
+    prefixed: &codama_nodes::PrefixedCountNode,
+    item: &codama_nodes::TypeNode,
+    ir: &SchemaIr,
+) -> LabelIr {
+    use codama_nodes::{Endianness, NestedTypeNodeTrait, NumberFormat};
+
+    let prefix = prefixed.prefix.get_nested_type_node();
+
+    assert!(
+        prefix.format == NumberFormat::U32 && prefix.endian == Endianness::Le,
+        "list `{base_name}`: unsupported count prefix {:?} {:?}; generated parsers read a u32 LE \
+         count",
+        prefix.format,
+        prefix.endian
+    );
+
+    assert!(
+        ir.fixed_size_of_type(item) != Some(0) || ir.is_zero_sized_rust_type(item),
+        "list `{base_name}`: items with a wire size of 0 are not supported; the count would not \
+         be bounded by the input"
+    );
+
+    LabelIr::Repeated
 }
 
 fn option_encoding(
@@ -467,5 +502,88 @@ pub fn event_struct(
         T::FixedSize(w) => event_struct(&w.r#type),
         T::SizePrefix(w) => event_struct(&w.r#type),
         other => Err(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use codama_nodes::{
+        ArrayTypeNode, BytesTypeNode, FixedSizeTypeNode, NumberTypeNode, StructFieldTypeNode,
+        StructTypeNode, TypeNode, U32, U64,
+    };
+
+    use super::*;
+
+    fn list_label(list: ArrayTypeNode) -> LabelIr {
+        let (label, _) = materialize_type(
+            "Items",
+            &TypeNode::Array(list),
+            &mut SchemaIr::default(),
+            &TypeKindIr::Helper,
+        );
+
+        label
+    }
+
+    fn bytes(size: usize) -> FixedSizeTypeNode<TypeNode> {
+        FixedSizeTypeNode::new(BytesTypeNode::new(), size)
+    }
+
+    #[test]
+    fn a_u32_le_count_builds_a_repeated_list() {
+        let label = list_label(ArrayTypeNode::prefixed(bytes(32), NumberTypeNode::le(U32)));
+
+        assert!(matches!(label, LabelIr::Repeated));
+    }
+
+    /// A fixed count bounds the loop, so zero-size items are safe there.
+    #[test]
+    fn a_fixed_count_of_zero_size_items_builds() {
+        let label = list_label(ArrayTypeNode::fixed(bytes(0), 3));
+
+        assert!(matches!(label, LabelIr::FixedArray(3)));
+    }
+
+    #[test]
+    #[should_panic(expected = "list `Items`: unsupported count prefix U64 Le")]
+    fn a_u64_count_fails_the_build() {
+        list_label(ArrayTypeNode::prefixed(bytes(32), NumberTypeNode::le(U64)));
+    }
+
+    #[test]
+    #[should_panic(expected = "list `Items`: unsupported count prefix U32 Be")]
+    fn a_big_endian_count_fails_the_build() {
+        list_label(ArrayTypeNode::prefixed(bytes(32), NumberTypeNode::be(U32)));
+    }
+
+    #[test]
+    #[should_panic(expected = "list `Items`: remainderCountNode is not supported")]
+    fn a_remainder_count_fails_the_build() { list_label(ArrayTypeNode::remainder(bytes(32))); }
+
+    #[test]
+    #[should_panic(expected = "list `Items`: items with a wire size of 0 are not supported")]
+    fn zero_size_bytes_fail_the_build() {
+        list_label(ArrayTypeNode::prefixed(bytes(0), NumberTypeNode::le(U32)));
+    }
+
+    /// An empty struct is zero-sized in Rust, and borsh's `Vec<T>` rejects it at run time.
+    #[test]
+    fn an_empty_struct_item_builds() {
+        let label = list_label(ArrayTypeNode::prefixed(
+            StructTypeNode::new(vec![]),
+            NumberTypeNode::le(U32),
+        ));
+
+        assert!(matches!(label, LabelIr::Repeated));
+    }
+
+    /// The `Vec<u8>` field makes the struct non-zero-sized, so borsh would loop on the count.
+    #[test]
+    #[should_panic(expected = "list `Items`: items with a wire size of 0 are not supported")]
+    fn a_struct_of_zero_size_bytes_fails_the_build() {
+        list_label(ArrayTypeNode::prefixed(
+            StructTypeNode::new(vec![StructFieldTypeNode::new("pad", bytes(0))]),
+            NumberTypeNode::le(U32),
+        ));
     }
 }
