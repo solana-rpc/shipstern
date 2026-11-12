@@ -137,9 +137,11 @@ infrastructure that does not forward them.
 With `auto-reconnect` on, a lost stream is recovered in one of two ways, picked
 by the commitment. Both use `reconnect-max-retries`, and both need a server
 that stores slots: if it no longer holds the slot to resume from, the run ends
-with `OutOfRange`. The server replays only the processed, confirmed and
-finalized statuses, so a `FirstShredReceived`, `Completed` or `Dead` sent
-during the outage is lost.
+with `OutOfRange`. A yellowstone-grpc server replays only the processed,
+confirmed and finalized statuses, so a `FirstShredReceived`, `Completed` or
+`Dead` sent during the outage is lost. A richat server refuses a confirmed or
+finalized resume with `InvalidArgument`, so such a run ends at the first
+stream loss.
 
 The server keeps a number of slots, not a time: 150 by default on
 yellowstone-grpc, and about 1,000 on Triton shared mainnet. At confirmed or
