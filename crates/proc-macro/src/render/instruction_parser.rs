@@ -458,6 +458,13 @@ fn single_instruction_helper_fn(
         })
         .collect();
 
+    let trailing_fixed_start = fixed_keys
+        .iter()
+        .rposition(Option::is_none)
+        .map_or(0, |idx| idx + 1);
+    let has_fixed_tail = trailing_fixed_start < fixed_keys.len();
+    let trailing_fixed_at = crate::utils::unsuffixed(trailing_fixed_start as u64);
+
     let accounts_fields = instruction
         .accounts
         .iter()
@@ -486,6 +493,18 @@ fn single_instruction_helper_fn(
                     return quote! { #field_name: *accounts.get(#at).ok_or(ParseError::from(#error_msg))? };
                 };
 
+                if idx >= trailing_fixed_start {
+                    return quote! {
+                        #field_name: {
+                            let fixed = ::shipstern_core::Pubkey::new(#fixed);
+                            if accounts.get(__shipstern_remaining_account_index) == Some(&fixed) {
+                                __shipstern_remaining_account_index += 1;
+                            }
+                            fixed
+                        }
+                    };
+                }
+
                 quote! {
                     #field_name: accounts
                         .get(#at)
@@ -509,10 +528,12 @@ fn single_instruction_helper_fn(
         .collect::<Vec<_>>();
 
     // A program that dropped an IDL account shifts later ones a slot early. Refuse a fill if a
-    // fixed slot differs, another slot holds a fill address, or an earlier optional is missing.
+    // non-tail fixed slot differs, another slot holds a fill address, or an earlier optional
+    // is missing. Mismatched keys in the fixed tail belong to remaining_accounts instead.
     let shifted_guard = fixed_keys
         .iter()
         .rposition(Option::is_some)
+        .filter(|_| trailing_fixed_start != 0)
         .map(|last_fixed| {
             let optional_before = instruction
                 .accounts
@@ -523,7 +544,6 @@ fn single_instruction_helper_fn(
                 .map(|(idx, _)| crate::utils::unsuffixed(idx as u64));
 
             let last_fixed = crate::utils::unsuffixed(last_fixed as u64);
-
             quote! {
                 if accounts.len() <= #last_fixed {
                     let fixed: &[(usize, ::shipstern_core::Pubkey)] = &[#(#fixed_accounts),*];
@@ -531,8 +551,8 @@ fn single_instruction_helper_fn(
 
                     let shifted = optional.iter().any(|at| *at >= accounts.len())
                         || fixed.iter().any(|(at, key)| match accounts.get(*at) {
-                            Some(carried) => carried != key,
-                            None => accounts.iter().enumerate().any(|(idx, carried)| {
+                            Some(carried) if *at < #trailing_fixed_at => carried != key,
+                            _ => accounts.iter().take(#trailing_fixed_at).enumerate().any(|(idx, carried)| {
                                 carried == key
                                     && !fixed.iter().any(|(fixed_at, _)| *fixed_at == idx)
                             }),
@@ -559,12 +579,23 @@ fn single_instruction_helper_fn(
         .iter()
         .any(|a| crate::utils::to_snake_case(&a.name) == "remaining_accounts");
 
+    let remaining_start = if has_fixed_tail {
+        quote! { __shipstern_remaining_account_index }
+    } else {
+        quote! { #num_defined_accounts }
+    };
+    let remaining_index = has_fixed_tail.then(|| {
+        quote! {
+            let mut __shipstern_remaining_account_index = #trailing_fixed_at;
+        }
+    });
+
     let remaining_accounts_field = if has_explicit_remaining {
         quote! {}
     } else {
         quote! {
             remaining_accounts: accounts
-                .get(#num_defined_accounts..)
+                .get(#remaining_start..)
                 .unwrap_or_default()
                 .to_vec(),
         }
@@ -586,6 +617,7 @@ fn single_instruction_helper_fn(
             data: &[u8],
         ) -> ParseResult<#wrapper_ident> {
             #shifted_guard
+            #remaining_index
 
             Ok(#wrapper_ident {
                 instruction: instruction::Instruction::#variant_ident {
