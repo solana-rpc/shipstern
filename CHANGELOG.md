@@ -39,6 +39,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `shipstern-proc-macro`: generated parsers no longer reserve memory from the `u32` element count of a list of fixed-size byte arrays, `f32` or `f64`. A count larger than the input requested up to about 103 GB before the first element was read, and a failed allocation aborts the process. The parser now grows the list as elements arrive, as the size-prefixed reader already does.
 - `shipstern-jetstream-source`: a replay from epoch 1064 on stalled at the first block of an epoch without an error because the pinned firehose retried unknown `VATDebit` rewards without limit; vaultic-win/jetstreamer e522a67e fixes this by sending these rewards as `RewardType::VatDebit` (for [#367](https://github.com/solana-rpc/shipstern/issues/367) by @senzenn).
 - `shipstern-core`, `shipstern-mock`: a top-level precompile no longer takes the log lines of the next instruction, so `log_messages()` of each later instruction returns its own invoke-to-close range ([#377](https://github.com/solana-rpc/shipstern/pull/377) by @senzenn).
 - `shipstern-proc-macro`: generated parsers read and write an enum tag with the width and byte order that Codama `EnumTypeNode.size` gives, so the System nonce account (`u32` tags) decodes ([#378](https://github.com/solana-rpc/shipstern/pull/378) by @senzenn).

@@ -233,7 +233,8 @@ pub fn shipstern_parser(
             ) -> ::core::result::Result<Vec<Vec<u8>>, ::borsh::io::Error> {
                 let len: u32 = ::borsh::BorshDeserialize::deserialize_reader(reader)?;
 
-                let mut result = Vec::with_capacity(len as usize);
+                // Grow only as actual input arrives, never allocate from the untrusted count.
+                let mut result = Vec::new();
 
                 for _ in 0..len {
                     let mut buf = [0u8; N];
@@ -426,7 +427,8 @@ pub fn shipstern_parser(
             ) -> ::core::result::Result<Vec<f32>, ::borsh::io::Error> {
                 let len: u32 = ::borsh::BorshDeserialize::deserialize_reader(reader)?;
 
-                let mut result = Vec::with_capacity(len as usize);
+                // Grow only as actual input arrives, never allocate from the untrusted count.
+                let mut result = Vec::new();
 
                 for _ in 0..len {
                     let mut buf = [0u8; 4];
@@ -512,7 +514,8 @@ pub fn shipstern_parser(
             ) -> ::core::result::Result<Vec<f64>, ::borsh::io::Error> {
                 let len: u32 = ::borsh::BorshDeserialize::deserialize_reader(reader)?;
 
-                let mut result = Vec::with_capacity(len as usize);
+                // Grow only as actual input arrives, never allocate from the untrusted count.
+                let mut result = Vec::new();
 
                 for _ in 0..len {
                     let mut buf = [0u8; 8];
