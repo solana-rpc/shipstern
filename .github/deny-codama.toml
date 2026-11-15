@@ -16,7 +16,7 @@
 # the root deny.toml carries workspace-specific bans that do not hold there. Keeping
 # only this rule here lets the same guard run against every manifest unchanged.
 #
-# codama-nodes is pinned `=0.13.2` in the root Cargo.toml. Moving that pin is a
+# codama-nodes is pinned `=0.13.3` in the root Cargo.toml. Moving that pin is a
 # deliberate migration, and the practice is to diff generated parser output against
 # the previous version first. CI does not enforce that: the codama-pin job checks
 # that the pin is exact and that one version resolves, not which version, and not
