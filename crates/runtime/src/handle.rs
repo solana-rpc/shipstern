@@ -93,6 +93,8 @@ impl FilterState {
 /// - Keys are parser IDs with a registered pipeline. Instruction parsers share one
 ///   entry under [`InstructionPipeline::ID`](crate::instruction::InstructionPipeline::ID).
 ///   A key dropped by [`Filters::remove`] can be merged back.
+/// - A [`FilterPipeline`](crate::filter_pipeline::FilterPipeline) checks its own transaction
+///   filter in the client. An update does not change that check.
 /// - `Ok(())` means the source has the set, not that the server applied it.
 ///   Handlers see the old set until the queued backlog drains.
 /// - Only the newest set is sent. A set the sink rejects is dropped with a warning.
