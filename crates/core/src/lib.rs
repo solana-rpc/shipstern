@@ -1609,6 +1609,10 @@ impl PrefilterBuilder {
     ///
     /// **Note:** If the transaction does not include ALL of the accounts set here, the
     /// transaction will not be retrieved.
+    ///
+    /// The runtime merges all instruction parsers into one filter, so required sets add up and
+    /// every parser then needs every key. Select a parser's program with
+    /// [`Self::transaction_accounts_include`].
     pub fn transaction_accounts<I: IntoIterator>(self, it: I) -> Self
     where I::Item: AsRef<[u8]> {
         self.mutate(|this| {

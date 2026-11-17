@@ -6,7 +6,7 @@ use std::{borrow::Cow, collections::HashMap, pin::Pin};
 use futures_util::{Future, FutureExt, StreamExt};
 use shipstern_core::{
     AccountUpdate, BlockFooterUpdate, BlockMetaUpdate, BlockUpdate, Filters, GetPrefilter,
-    ParseError, Parser, ParserId, Prefilter, SlotUpdate, TransactionUpdate,
+    ParseError, Parser, ParserId, Prefilter, SlotUpdate, TransactionPrefilter, TransactionUpdate,
 };
 use smallvec::SmallVec;
 use tracing::{trace, Instrument, Span};
@@ -199,6 +199,10 @@ pub trait DynPipeline<T>: std::fmt::Debug + ParserId + GetPrefilter {
         &'h self,
         value: &'h T,
     ) -> Pin<Box<dyn Future<Output = Result<(), PipelineErrors>> + Send + 'h>>;
+
+    /// A transaction filter that a bundle checks in the client. Bundled parsers share one
+    /// server filter, so other members can bring transactions that this filter rejects.
+    fn client_filter(&self) -> Option<&TransactionPrefilter> { None }
 }
 
 impl<T> DynPipeline<T> for std::convert::Infallible {
@@ -242,6 +246,11 @@ impl<T> DynPipeline<T> for BoxPipeline<'_, T> {
         value: &'h T,
     ) -> Pin<Box<dyn Future<Output = Result<(), PipelineErrors>> + Send + 'h>> {
         <dyn DynPipeline<T>>::handle(&**self, value)
+    }
+
+    #[inline]
+    fn client_filter(&self) -> Option<&TransactionPrefilter> {
+        <dyn DynPipeline<T>>::client_filter(&**self)
     }
 }
 

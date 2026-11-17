@@ -35,6 +35,7 @@ shipstern-spl-token-extensions-parser = { workspace = true, features = [
 ] }
 shipstern-block-meta-parser = { workspace = true, features = ["proto"] }
 shipstern-stake-pool-parser = { workspace = true, features = ["proto"] }
+shipstern-bpf-loader-parser = { workspace = true, features = ["proto"] }
 
 serde = { workspace = true, optional = true }
 

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking** `shipstern-proc-macro` and the instruction parser crates: instruction parsers select their program with `transaction_accounts_include`, not `transaction_accounts`. The runtime merges all instruction parsers into one filter, so it received only transactions that touched every program. Include keys merged into `InstructionPipeline::ID` now widen it ([#340](https://github.com/solana-rpc/shipstern/pull/340) by @hack-wrench and @senzenn).
+- `shipstern`: a bundled `FilterPipeline` also checks its transaction filter in the client and skips a transaction that the filter rejects, on every source. The check drops a false cuckoo match, and a filter update through `RuntimeHandle` does not change it. `DynPipeline::client_filter` is new and returns `None` by default (by @senzenn).
+
+### Fixed
+
+- `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions (by @senzenn).
+
 ## [0.13.0] - 2026-11-12
 
 ### Added

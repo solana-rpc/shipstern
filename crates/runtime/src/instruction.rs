@@ -4,10 +4,14 @@
 use std::fmt::{self, Debug};
 
 use shipstern_core::{instruction::InstructionUpdate, GetPrefilter, ParserId, TransactionUpdate};
+use smallvec::SmallVec;
 
-use crate::handler::{BoxPipeline, DynPipeline, PipelineErrors};
 #[cfg(feature = "prometheus")]
 use crate::metrics;
+use crate::{
+    filter_pipeline::transaction_matches,
+    handler::{BoxPipeline, DynPipeline, PipelineErrors},
+};
 
 /// Builds the instruction tree for a transaction once and dispatches every
 /// instruction to every bundled sub-pipeline.
@@ -30,7 +34,9 @@ impl InstructionPipeline {
     /// Because the runtime collapses them into one pipeline, the runtime's
     /// filter set carries a single entry under this ID whose prefilter is the
     /// union of all of them. A filter update naming an individual instruction
-    /// parser is refused as unknown; key it here instead.
+    /// parser is refused as unknown; key it here instead. Parsers select their
+    /// program with an include set, so merging more include keys here widens the
+    /// filter for every parser.
     ///
     /// ```rust, ignore
     /// handle.update_filters(|filters| {
@@ -59,11 +65,25 @@ impl InstructionPipeline {
         let mut err = None;
         let ixs = InstructionUpdate::build_from_txn(txn).map_err(PipelineErrors::parse)?;
 
+        // Members share one server filter, so skip each one whose own filter rejects the transaction.
+        let skip: SmallVec<[bool; 8]> = self
+            .0
+            .iter()
+            .map(|pipe| {
+                pipe.client_filter()
+                    .is_some_and(|f| !transaction_matches(f, txn))
+            })
+            .collect();
+
         // Fan every instruction (walking the full CPI tree) out to every parser;
         // parsers self-filter by program id via ParseError::Filtered. See the
         // type-level docs for cost characteristics and the indexing follow-up.
         for insn in ixs.iter().flat_map(|i| i.visit_all()) {
-            for pipe in &*self.0 {
+            for (pipe, &skip) in self.0.iter().zip(&skip) {
+                if skip {
+                    continue;
+                }
+
                 let res = pipe.handle(insn).await;
 
                 #[cfg(feature = "prometheus")]
@@ -204,7 +224,10 @@ mod tests {
     };
 
     use super::{InstructionPipeline, PipelineErrors, SingleInstructionPipeline};
-    use crate::handler::{BoxPipeline, Handler, HandlerResult, Pipeline};
+    use crate::{
+        filter_pipeline::FilterPipeline,
+        handler::{BoxPipeline, Handler, HandlerResult, Pipeline},
+    };
 
     static HANDLED: AtomicUsize = AtomicUsize::new(0);
 
@@ -396,6 +419,79 @@ mod tests {
             B_COUNT.load(Ordering::Relaxed),
             2,
             "parser B should see both instructions"
+        );
+    }
+
+    #[derive(Debug, Clone, Default)]
+    struct Count(std::sync::Arc<AtomicUsize>);
+
+    impl Handler<(), InstructionUpdate> for Count {
+        async fn handle(&self, _value: &(), _raw: &InstructionUpdate) -> HandlerResult<()> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    /// Handler calls of a bundled `FilterPipeline` and a plain member for one instruction.
+    async fn bundled_calls(user: shipstern_core::PrefilterBuilder) -> (usize, usize) {
+        let (fp, plain) = (Count::default(), Count::default());
+        let members: Vec<BoxPipeline<'static, InstructionUpdate>> = vec![
+            Box::new(FilterPipeline::new(OkParser, [fp.clone()], user)),
+            Box::new(Pipeline::new(OkParser, [plain.clone()])),
+        ];
+        let bundle = InstructionPipeline::new(members).expect("non-empty pipeline");
+        let mut txn = sample_transaction(vec![CompiledInstruction {
+            program_id_index: 0,
+            accounts: vec![1, 2],
+            data: vec![1],
+        }]);
+
+        if let Some(meta) = txn.transaction.as_mut().and_then(|t| t.meta.as_mut()) {
+            meta.loaded_readonly_addresses.push(vec![6; 32]);
+        }
+
+        bundle.handle(&txn).await.expect("handle should succeed");
+
+        (
+            fp.0.load(Ordering::Relaxed),
+            plain.0.load(Ordering::Relaxed),
+        )
+    }
+
+    #[tokio::test]
+    async fn bundled_filter_pipeline_skips_transactions_its_filter_rejects() {
+        let include = || Prefilter::builder().transaction_accounts_include([[9u8; 32]]);
+        let other_signature = shipstern_core::bs58::encode([2u8; 64]).into_string();
+
+        assert_eq!(bundled_calls(include()).await, (1, 1));
+        assert_eq!(
+            bundled_calls(Prefilter::builder().transaction_accounts_include([[6u8; 32]])).await,
+            (1, 1)
+        );
+        assert_eq!(
+            bundled_calls(Prefilter::builder().transaction_accounts([[5u8; 32]])).await,
+            (0, 1)
+        );
+        assert_eq!(
+            bundled_calls(Prefilter::builder().transaction_cuckoo_accounts_include([[5u8; 32]]))
+                .await,
+            (0, 1)
+        );
+        assert_eq!(
+            bundled_calls(Prefilter::builder().transaction_accounts_include([[5u8; 32]])).await,
+            (0, 1)
+        );
+        assert_eq!(
+            bundled_calls(include().transaction_accounts_exclude([[8u8; 32]])).await,
+            (0, 1)
+        );
+        assert_eq!(
+            bundled_calls(include().transaction_vote(true)).await,
+            (0, 1)
+        );
+        assert_eq!(
+            bundled_calls(include().transaction_signature(other_signature)).await,
+            (0, 1)
         );
     }
 
