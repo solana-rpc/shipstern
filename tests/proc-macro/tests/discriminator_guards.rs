@@ -24,10 +24,9 @@ fn well_formed_ix_const_is_matchable() {
 }
 
 ///
-/// Arms that can never match get no constant: `widthMismatchIx` (8-byte field,
-/// 4-byte default) and the `sizedOnly`, `emptyDiscriminator` and `widthMismatch`
-/// accounts. That is checked at compile time, so this only checks the accounts
-/// that can match still parse.
+/// `sizedOnly` and `emptyDiscriminator` get no constant. That is checked at
+/// compile time, so this only checks the accounts that can match still parse.
+/// Width mismatches are rejected at expansion, see `invalid_width_mismatch_*.json`.
 ///
 #[test]
 fn guarded_accounts_still_parse() {

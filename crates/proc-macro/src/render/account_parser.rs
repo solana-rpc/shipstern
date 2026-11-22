@@ -1,24 +1,40 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
 use codama_nodes::{
     CamelCaseString, DiscriminatorNode, NestedTypeNode, Number, TypeNode, ValueNode,
 };
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-fn decode_discriminator_bytes(bytes: &codama_nodes::BytesValueNode) -> Vec<u8> {
-    match bytes.encoding {
-        codama_nodes::BytesEncoding::Base16 => {
-            let padded = crate::utils::pad_hex(&bytes.data);
-            hex::decode(&padded).expect("decode base16 discriminator")
-        },
-        codama_nodes::BytesEncoding::Base58 => bs58::decode(&bytes.data)
-            .into_vec()
-            .expect("decode base58 discriminator"),
-        codama_nodes::BytesEncoding::Base64 => STANDARD
-            .decode(&bytes.data)
-            .expect("decode base64 discriminator"),
-        codama_nodes::BytesEncoding::Utf8 => bytes.data.as_bytes().to_vec(),
-    }
+/// A fixed-size byte field discriminator with a bytes default, at `offset`.
+pub(crate) struct FieldDiscriminator {
+    pub(crate) offset: usize,
+    pub(crate) size: usize,
+    pub(crate) bytes: Vec<u8>,
+}
+
+/// `None` when the account's field discriminator is not a fixed-size bytes field
+/// with a bytes default, which the parser skips.
+pub(crate) fn field_discriminator(
+    account: &codama_nodes::AccountNode,
+    node: &codama_nodes::FieldDiscriminatorNode,
+) -> Option<FieldDiscriminator> {
+    let NestedTypeNode::Value(struct_node) = &account.data else {
+        return None;
+    };
+
+    let field = struct_node.fields.iter().find(|f| f.name == node.name)?;
+    let TypeNode::FixedSize(fixed_size_node) = &*field.r#type else {
+        return None;
+    };
+
+    let ValueNode::Bytes(bytes) = (*field.default_value).as_ref()? else {
+        return None;
+    };
+
+    Some(FieldDiscriminator {
+        offset: crate::utils::as_index(node.offset),
+        size: fixed_size_node.size,
+        bytes: crate::utils::decode_discriminator_bytes(bytes),
+    })
 }
 
 ///
@@ -187,7 +203,7 @@ pub fn account_parser(
 
                     // Byte discriminators are a prefix and are not part of the account struct.
                     ValueNode::Bytes(bytes) => {
-                        let discriminator = decode_discriminator_bytes(bytes);
+                        let discriminator = crate::utils::decode_discriminator_bytes(bytes);
                         let end = crate::utils::unsuffixed((offset_at + discriminator.len()) as u64);
 
                         let arm = quote! {
@@ -214,45 +230,13 @@ pub fn account_parser(
 
             // Handle multi-byte discriminators (like Anchor's 8 byte discriminators)
             DiscriminatorNode::Field(node) => {
-                let offset_at = crate::utils::as_index(node.offset);
+                let FieldDiscriminator {
+                    offset: offset_at,
+                    size,
+                    bytes: discriminator,
+                } = field_discriminator(account, node)?;
+
                 let offset = crate::utils::unsuffixed(offset_at as u64);
-
-                // Skip if not a struct
-                let NestedTypeNode::Value(struct_node) = &account.data else {
-                    return None;
-                };
-
-                // Find the discriminator field by name
-                let field = match struct_node.fields.iter().find(|f| f.name == node.name) {
-                    Some(f) => f,
-                    None => {
-                        return None;
-                    }
-                };
-
-                // Skip if discriminator field isn't fixed-size bytes
-                let TypeNode::FixedSize(fixed_size_node) = &*field.r#type else {
-                    return None;
-                };
-
-                let size = fixed_size_node.size;
-
-                // Skip if no default value
-                let default_value = match field.default_value.as_ref() {
-                    Some(v) => v,
-                    None => {
-                        return None;
-                    }
-                };
-
-                // Skip if default value isn't bytes
-                let ValueNode::Bytes(bytes) = default_value else {
-                    return None;
-                };
-
-                // Decode expected discriminator bytes
-                let discriminator = decode_discriminator_bytes(bytes);
-
                 let end = crate::utils::unsuffixed((offset_at + size) as u64);
 
                 // Empty discriminator (size 0) matches any data — skip the
@@ -281,7 +265,7 @@ pub fn account_parser(
                 // The parser compares a `size`-wide slice against the decoded
                 // default bytes, so a length mismatch can never match. Expose no
                 // constant for a discriminator the parser cannot honor.
-                let disc_const = if discriminator.len() == size {
+                let disc_const = if !crate::utils::width_mismatch(size, &discriminator) {
                     discriminator_consts(&account_ident, &discriminator, &offset)
                 } else {
                     None

@@ -8,6 +8,34 @@ pub fn pad_hex(hex: &str) -> String {
     }
 }
 
+/// Decode without panicking, so a malformed discriminator can reach `compile_error!`.
+pub(crate) fn try_decode_bytes(bytes: &codama_nodes::BytesValueNode) -> Option<Vec<u8>> {
+    match bytes.encoding {
+        codama_nodes::BytesEncoding::Base16 => hex::decode(pad_hex(&bytes.data)).ok(),
+        codama_nodes::BytesEncoding::Base58 => bs58::decode(&bytes.data).into_vec().ok(),
+        codama_nodes::BytesEncoding::Base64 => {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD
+                .decode(&bytes.data)
+                .ok()
+        },
+        codama_nodes::BytesEncoding::Utf8 => Some(bytes.data.as_bytes().to_vec()),
+    }
+}
+
+pub(crate) fn decode_discriminator_bytes(bytes: &codama_nodes::BytesValueNode) -> Vec<u8> {
+    try_decode_bytes(bytes).unwrap_or_else(|| {
+        panic!(
+            "discriminator is not valid {:?} data: {}",
+            bytes.encoding, bytes.data
+        )
+    })
+}
+
+/// A fixed-size discriminator field whose declared width differs from its default
+/// bytes. The parser compares a `size`-wide slice to the bytes, so it never matches.
+pub(crate) fn width_mismatch(size: usize, bytes: &[u8]) -> bool { size != bytes.len() }
+
 pub fn decode_hex_text(value: &str) -> Result<Vec<u8>, hex::FromHexError> {
     let trimmed = value.trim();
     let without_prefix = trimmed

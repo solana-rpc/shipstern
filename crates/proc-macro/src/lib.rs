@@ -11,6 +11,7 @@ mod parse;
 mod render;
 mod shipstern;
 mod utils;
+mod validate;
 
 #[cfg(test)]
 mod anchor_parity_tests;
@@ -299,6 +300,14 @@ fn expand_parser_tokens(
         };
     }
 
+    if let Err(message) = validate::validate_idl(&idl) {
+        let error_msg = format!("Invalid IDL {:?}: {}", full_path, message);
+
+        return quote::quote! {
+            compile_error!(#error_msg);
+        };
+    }
+
     let parser = crate::render::shipstern_parser(&idl, &events, &config);
 
     quote::quote! {
@@ -421,6 +430,54 @@ mod expansion_tests {
             tokens.contains("not valid"),
             "decode message missing: {tokens}",
         );
+    }
+
+    #[test]
+    fn account_discriminator_width_mismatch_is_rejected() {
+        let tokens = expand("invalid_width_mismatch_account.json", false);
+
+        assert!(tokens.contains("compile_error"), "no compile_error emitted");
+        assert!(
+            tokens.contains("account `widthMismatch` declares a 8-byte")
+                && tokens.contains("4 bytes"),
+            "message must name the account and both widths: {tokens}",
+        );
+    }
+
+    #[test]
+    fn instruction_discriminator_width_mismatch_is_rejected() {
+        let tokens = expand("invalid_width_mismatch_instruction.json", false);
+
+        assert!(tokens.contains("compile_error"), "no compile_error emitted");
+        assert!(
+            tokens.contains("instruction `widthMismatchIx` declares a 8-byte")
+                && tokens.contains("4 bytes"),
+            "message must name the instruction and both widths: {tokens}",
+        );
+    }
+
+    /// Only the fixtures built to fail may emit a `compile_error!`.
+    #[test]
+    fn only_designed_invalid_fixtures_fail_expansion() {
+        let designed = [
+            "colliding_envelope.json",
+            "mismatched_payload_offsets.json",
+            "malformed_envelope_discriminator.json",
+        ];
+
+        for entry in std::fs::read_dir(fixture("")).expect("tests/idls is readable") {
+            let path = entry.expect("readable dir entry").path();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+
+            let fails = expand(&name, false).contains("compile_error");
+            let expected = name.starts_with("invalid_") || designed.contains(&name.as_str());
+
+            assert_eq!(fails, expected, "{name}: compile_error presence changed");
+        }
     }
 
     /// The deprecation fires only when an IDL envelope and macro args conflict.

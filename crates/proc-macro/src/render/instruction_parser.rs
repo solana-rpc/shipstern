@@ -1,4 +1,3 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
 use codama_nodes::{
     CamelCaseString, DiscriminatorNode, Endianness, Number, NumberFormat, TypeNode, ValueNode,
 };
@@ -85,7 +84,7 @@ fn prefix_discriminator(
 
                     number_discriminator_bytes(&cn.constant.r#type, value)
                 },
-                ValueNode::Bytes(bv) => decode_discriminator_field_bytes(bv),
+                ValueNode::Bytes(bv) => crate::utils::decode_discriminator_bytes(bv),
                 _ => return None,
             };
 
@@ -99,7 +98,8 @@ fn prefix_discriminator(
 
             // A default that does not fill its declared width can never match on the wire.
             match resolved.r#type {
-                TypeNode::FixedSize(fixed) if fixed.size == bytes.len() => {},
+                TypeNode::FixedSize(fixed) if !crate::utils::width_mismatch(fixed.size, &bytes) => {
+                },
                 TypeNode::Number(_) => {},
                 _ => return None,
             }
@@ -108,21 +108,6 @@ fn prefix_discriminator(
         },
 
         DiscriminatorNode::Size(_) => None,
-    }
-}
-
-/// Decode discriminator bytes from a codama [`BytesValueNode`](codama_nodes::BytesValueNode).
-fn decode_discriminator_field_bytes(bytes: &codama_nodes::BytesValueNode) -> Vec<u8> {
-    match bytes.encoding {
-        codama_nodes::BytesEncoding::Base16 => {
-            let padded = crate::utils::pad_hex(&bytes.data);
-            hex::decode(&padded).expect("decode base16")
-        },
-        codama_nodes::BytesEncoding::Base58 => {
-            bs58::decode(&bytes.data).into_vec().expect("decode base58")
-        },
-        codama_nodes::BytesEncoding::Base64 => STANDARD.decode(&bytes.data).expect("decode base64"),
-        codama_nodes::BytesEncoding::Utf8 => bytes.data.as_bytes().to_vec(),
     }
 }
 
@@ -139,7 +124,7 @@ fn resolve_ix_field(
 
     let bytes = match (*field.default_value).as_ref()? {
         codama_nodes::InstructionInputValueNode::BytesValue(b) => {
-            Some(decode_discriminator_field_bytes(b))
+            Some(crate::utils::decode_discriminator_bytes(b))
         },
         codama_nodes::InstructionInputValueNode::NumberValue(nn) => {
             let Number::UnsignedInteger(value) = nn.number else {
@@ -166,13 +151,33 @@ fn resolve_event_field(
     let field = struct_node.fields.iter().find(|f| &f.name == name)?;
 
     let bytes = match (*field.default_value).as_ref()? {
-        ValueNode::Bytes(b) => Some(decode_discriminator_field_bytes(b)),
+        ValueNode::Bytes(b) => Some(crate::utils::decode_discriminator_bytes(b)),
         _ => None,
     };
 
     Some(ResolvedFieldDiscriminator {
         r#type: (*field.r#type).clone(),
         bytes,
+    })
+}
+
+/// The declared width and default length of the first field discriminator whose
+/// parser arm can never match, for expansion-time rejection.
+pub(crate) fn dead_width_discriminator(
+    instruction: &codama_nodes::InstructionNode,
+) -> Option<(usize, usize)> {
+    instruction.discriminators.iter().find_map(|discriminator| {
+        let DiscriminatorNode::Field(node) = discriminator else {
+            return None;
+        };
+
+        let resolved = resolve_ix_field(instruction, &node.name)?;
+        let bytes = resolved.bytes?;
+        let TypeNode::FixedSize(fixed) = resolved.r#type else {
+            return None;
+        };
+
+        crate::utils::width_mismatch(fixed.size, &bytes).then_some((fixed.size, bytes.len()))
     })
 }
 

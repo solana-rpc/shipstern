@@ -73,7 +73,6 @@ fn drive(data: &[u8], accounts: &[shipstern_core::Pubkey], seen: &mut Outcomes) 
                 discriminator_guards::account::Account::EmptyDiscriminator(_) => {
                     "EmptyDiscriminator"
                 },
-                discriminator_guards::account::Account::WidthMismatch(_) => "WidthMismatch",
             });
         },
         Err(_) => seen.acct_err += 1,
