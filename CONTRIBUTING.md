@@ -15,7 +15,7 @@ Thank you for your interest in contributing to Shipstern! This guide will help y
 
 To contribute to this project, you'll need Rust installed on your machine. The toolchain is pinned in [`rust-toolchain.toml`](/rust-toolchain.toml), so `rustup` installs and selects the right version on the first `cargo` command inside the repo, so you do not pick one yourself. Formatting is the exception: it runs on a separate pinned nightly, described under [Making Changes](#making-changes).
 
-The repo is a cargo workspace. Three directories sit outside it and resolve their own lockfiles: `examples/multi-dex-stream`, `tests/idls`, and `tests/proc-macro-events` (excluded so its `program-events` feature does not unify into the rest of the workspace). `--workspace` does not reach them.
+The repo is a cargo workspace. `tests/proc-macro-events` sits outside it and resolves its own lockfile, so its `program-events` feature does not unify into the rest of the workspace. `--workspace` does not reach it. `tests/idls` is also excluded, because it holds only the IDL fixtures and is not a crate.
 
 ## Setting Up Your Environment
 
@@ -72,11 +72,12 @@ The repo is a cargo workspace. Three directories sit outside it and resolve thei
 
 ## Running Tests
 
-Before submitting your changes, make sure all tests pass. CI runs four suites, and a bare `cargo test` covers only the first, because the other three are feature-gated or live in the excluded workspace:
+Before submitting your changes, make sure all tests pass. CI runs five suites, and a bare `cargo test` covers only the first, because the others are feature-gated or live in the excluded workspace:
 
 ```sh
 cargo test --workspace --lib --tests
 cargo test -p shipstern-proto --lib --features parser,stream
+cargo test -p shipstern-proc-macro --lib --features program-events anchor_parity
 cargo test -p shipstern-kafka-sink --features experimental-account-parser --lib --tests
 cargo test --tests --manifest-path tests/proc-macro-events/Cargo.toml
 ```
