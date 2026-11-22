@@ -124,7 +124,7 @@ fn build_instruction_messages(ix: &InstructionNode, ir: &mut SchemaIr) {
         .iter()
         .enumerate()
         .map(|(i, acct)| FieldIr {
-            name: crate::utils::to_snake_case(&acct.name),
+            name: crate::utils::to_field_name(&acct.name),
             tag: (i + 1) as u32,
             label: if acct.is_optional.unwrap_or(false) {
                 LabelIr::Optional(OptionEncodingIr::default())

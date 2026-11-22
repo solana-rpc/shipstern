@@ -545,7 +545,7 @@ fn render_enum_oneof(oneof_ir: &OneofIr, tag: &EnumTagIr) -> TokenStream {
 /// and borsh helper paths get `super::` prefixed.
 ///
 pub fn render_field(f: &FieldIr, local_names: Option<&HashSet<&str>>) -> TokenStream {
-    let name = format_ident!("{}", f.name);
+    let name = crate::utils::field_ident(&f.name);
     let in_module = local_names.is_some();
     let path_prefix = if in_module { "super::" } else { "" };
 

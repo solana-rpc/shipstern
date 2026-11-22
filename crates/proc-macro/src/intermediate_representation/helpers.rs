@@ -77,7 +77,7 @@ pub fn build_fields_ir(
 
         // Handle duplicate field names by appending a suffix (e.g. `field`, `field_2`, `field_3`, etc.)
         let field_name = {
-            let base_name = crate::utils::to_snake_case(field.name());
+            let base_name = crate::utils::to_field_name(field.name());
 
             let count = seen_names.entry(base_name.clone()).or_insert(0);
 

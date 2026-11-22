@@ -1,0 +1,79 @@
+---
+source: tests/proc-macro/tests/keyword_names.rs
+expression: "keyword_names::PROTOBUF_SCHEMA"
+---
+syntax = "proto3";
+
+package keyword_names;
+
+message PublicKey {
+  bytes value = 1;
+}
+    
+message Holder {
+  uint64 type = 1;
+  uint64 match = 2;
+  uint64 ref = 3;
+  uint64 move = 4;
+  uint64 in = 5;
+  uint64 mod = 6;
+  uint64 fn = 7;
+  uint64 struct = 8;
+  uint64 async = 9;
+  uint64 self_ = 10;
+  uint64 super_ = 11;
+  uint64 crate_ = 12;
+  uint64 loop = 13;
+  uint64 impl = 14;
+}
+    
+message TouchAccounts {
+  PublicKey type = 1;
+  PublicKey match = 2;
+  PublicKey ref = 3;
+  PublicKey move = 4;
+  PublicKey in = 5;
+  PublicKey mod = 6;
+  PublicKey fn = 7;
+  PublicKey struct = 8;
+  PublicKey async = 9;
+  PublicKey self_ = 10;
+  PublicKey super_ = 11;
+  PublicKey crate_ = 12;
+  PublicKey loop = 13;
+  PublicKey impl = 14;
+  repeated PublicKey remaining_accounts = 15;
+}
+    
+message TouchArgs {
+  uint64 type = 1;
+  uint64 match = 2;
+  uint64 ref = 3;
+  uint64 move = 4;
+  uint64 in = 5;
+  uint64 mod = 6;
+  uint64 fn = 7;
+  uint64 struct = 8;
+  uint64 async = 9;
+  uint64 self_ = 10;
+  uint64 super_ = 11;
+  uint64 crate_ = 12;
+  uint64 loop = 13;
+  uint64 impl = 14;
+}
+    
+message Touch {
+  TouchAccounts accounts = 1;
+  TouchArgs args = 2;
+}
+    
+message KeywordNamesAccount {
+  oneof account {
+    Holder holder = 1;
+  }
+}
+message Instructions {
+  oneof instruction {
+    Touch touch = 1;
+  }
+}

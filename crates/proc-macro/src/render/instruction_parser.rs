@@ -464,7 +464,7 @@ fn single_instruction_helper_fn(
         .zip(&fixed_keys)
         .enumerate()
         .map(|(idx, (account, fixed))| {
-            let field_name = format_ident!("{}", crate::utils::to_snake_case(&account.name));
+            let field_name = crate::utils::field_ident(&crate::utils::to_field_name(&account.name));
             let at = crate::utils::unsuffixed(idx as u64);
 
             if account.is_optional.unwrap_or(false) {

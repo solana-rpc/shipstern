@@ -292,10 +292,11 @@ pub(super) fn manual_prost_struct_impl(
         );
     }
 
-    let debug_field_names: Vec<_> = t
+    let debug_field_names: Vec<_> = t.fields.iter().map(|f| f.name.as_str()).collect();
+    let debug_field_idents: Vec<_> = t
         .fields
         .iter()
-        .map(|f| format_ident!("{}", f.name))
+        .map(|f| crate::utils::field_ident(&f.name))
         .collect();
 
     quote! {
@@ -303,7 +304,7 @@ pub(super) fn manual_prost_struct_impl(
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 let mut s = f.debug_struct(stringify!(#ident));
 
-                #(s.field(stringify!(#debug_field_names), &self.#debug_field_names);)*
+                #(s.field(#debug_field_names, &self.#debug_field_idents);)*
 
                 s.finish()
             }
@@ -364,7 +365,7 @@ fn emit_prost_field_codegen(
     clear_stmts: &mut Vec<TokenStream>,
     default_stmts: &mut Vec<TokenStream>,
 ) {
-    let fname = format_ident!("{}", f.name);
+    let fname = crate::utils::field_ident(&f.name);
     let field_name_str = &f.name;
     let tag = f.tag;
     let is_message = matches!(&f.field_type, FieldTypeIr::Message(_));
