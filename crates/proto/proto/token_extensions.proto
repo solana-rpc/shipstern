@@ -195,7 +195,7 @@ message SetTransferFeeArgs {
 
 message HarvestWithheldTokensToMintAccounts {
   shipstern.parser.token.PublicKey mint = 1;
-  shipstern.parser.token.PublicKey mint_fee_acc_owner = 2;
+  repeated shipstern.parser.token.PublicKey source_accounts = 2;
 }
 
 message TransferFeeIx {
