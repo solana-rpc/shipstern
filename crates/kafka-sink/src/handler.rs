@@ -202,6 +202,7 @@ impl shipstern::Handler<AccountUpdate, AccountUpdate> for BufferingHandler {
             let write_version = info.write_version;
 
             let key = AccountRecordSortKey::new(write_version, pubkey);
+            let is_decoded = record.is_decoded;
 
             let send_result = self
                 .handle
@@ -212,6 +213,18 @@ impl shipstern::Handler<AccountUpdate, AccountUpdate> for BufferingHandler {
                 tracing::error!(slot, "Failed to send account parsed record");
 
                 self.cancelable_send(Err(e));
+            }
+
+            // Fallback account records are still filtered/error outcomes, counted like
+            // fallback instruction records so slot stats reflect decode quality.
+            if !is_decoded {
+                let kind = if had_error {
+                    ParseStatsKind::AccountError
+                } else {
+                    ParseStatsKind::AccountFiltered
+                };
+
+                self.cancelable_send(self.handle.send_parse_stats(slot, bank_id, kind).await);
             }
         } else {
             let kind = if had_error {
@@ -279,5 +292,112 @@ impl shipstern::Handler<AccountUpdate, AccountUpdate> for PassthroughAccountHand
             self.cancel.cancel();
         }
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "experimental-account-parser"))]
+mod tests {
+    use std::borrow::Cow;
+
+    use prost::Message;
+    use shipstern::Handler;
+    use shipstern_block_coordinator::CoordinatorMessage;
+    use shipstern_core::{
+        AccountUpdateInfo, ParseError, ParseResult, Parser, Prefilter, ProgramParser, Pubkey,
+    };
+    use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::sink::KafkaSinkBuilder;
+
+    const OWNER: [u8; 32] = [1; 32];
+
+    #[derive(Clone, PartialEq, Message)]
+    struct Empty {}
+
+    struct FailingAccountParser;
+
+    impl Parser for FailingAccountParser {
+        type Input = AccountUpdate;
+        type Output = Empty;
+
+        fn id(&self) -> Cow<'static, str> { "failing-account-parser".into() }
+
+        fn prefilter(&self) -> Prefilter { Prefilter::default() }
+
+        async fn parse(&self, _value: &Self::Input) -> ParseResult<Self::Output> {
+            Err(ParseError::from(std::io::Error::other("test parse error")))
+        }
+    }
+
+    impl ProgramParser for FailingAccountParser {
+        fn program_id(&self) -> Pubkey { OWNER.into() }
+    }
+
+    fn account_update() -> AccountUpdate {
+        AccountUpdate {
+            slot: 100,
+            bank_id: Some(7),
+            is_startup: false,
+            account: Some(AccountUpdateInfo {
+                txn_signature: None,
+                write_version: 11,
+                pubkey: vec![2_u8; 32],
+                data: vec![9_u8],
+                executable: false,
+                lamports: 1,
+                owner: OWNER.to_vec(),
+                rent_epoch: 0,
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn account_parse_error_routed_to_fallback_is_still_counted_as_error() {
+        let parsers = KafkaSinkBuilder::new()
+            .account_parser_with_fallback(
+                FailingAccountParser,
+                "test",
+                "test.accounts",
+                "failed.test.accounts",
+            )
+            .build();
+
+        let (tx, mut rx) = mpsc::channel(8);
+        let handler = BufferingHandler::new(
+            parsers,
+            CoordinatorHandle::new(tx),
+            CancellationToken::new(),
+        );
+
+        let update = account_update();
+
+        handler
+            .handle(&update, &update)
+            .await
+            .expect("handle account update");
+
+        drop(handler);
+
+        let mut fallback_records = 0;
+        let mut error_stats = 0;
+
+        while let Some(message) = rx.recv().await {
+            match message {
+                CoordinatorMessage::AccountParsed { record, .. } => {
+                    assert_eq!(record.topic, "failed.test.accounts");
+
+                    fallback_records += 1;
+                },
+                CoordinatorMessage::ParseStats {
+                    kind: ParseStatsKind::AccountError,
+                    ..
+                } => error_stats += 1,
+                _ => {},
+            }
+        }
+
+        assert_eq!(fallback_records, 1);
+        assert_eq!(error_stats, 1);
     }
 }
