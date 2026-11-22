@@ -14,7 +14,7 @@ use opentelemetry::trace::TracerProvider;
 use shipstern::{Handler, HandlerResult, Pipeline, Runtime};
 use shipstern_spl_token_parser::{AccountParser, InstructionParser};
 use shipstern_yellowstone_grpc_source::YellowstoneGrpcSource;
-use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Layer as _};
 
 #[derive(clap::Parser)]
 #[command(version, author, about)]
@@ -60,36 +60,42 @@ fn main() {
         .build();
 
     let tracer = tracer_provider.tracer("shipstern_tracer");
-    let _ = opentelemetry::global::set_tracer_provider(tracer_provider);
+    let _ = opentelemetry::global::set_tracer_provider(tracer_provider.clone());
 
     let traces_layer = tracing_opentelemetry::layer().with_tracer(tracer);
     let log_layer = opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&log_provider);
 
-    let value_filter = tracing_subscriber::filter::filter_fn(|metadata| {
-        let name_matches = matches!(
-            metadata.name(),
-            "incorrectly_parsed_account"
-                | "incorrectly_parsed_instruction"
-                | "correctly_parsed_instruction"
-                | "correctly_parsed_account"
-                | "non_zeroed_end_bytes"
-        );
-
-        metadata.is_event() && name_matches
-    });
+    // Export only Shipstern's own spans and events, so the exporters' own gRPC traffic is not
+    // traced back into them. `RUST_LOG` overrides the default.
+    let filter = || {
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("shipstern=debug"))
+    };
 
     let subscriber = tracing_subscriber::Registry::default()
-        .with(tracing_subscriber::filter::Filtered::new(traces_layer, value_filter.clone()))
-        .with(tracing_subscriber::filter::Filtered::new(log_layer, value_filter));
+        .with(traces_layer.with_filter(filter()))
+        .with(log_layer.with_filter(filter()));
     tracing::subscriber::set_global_default(subscriber).unwrap();
 
     let Opts { config } = Opts::parse();
     let config = std::fs::read_to_string(config).expect("Error reading config file");
     let config = toml::from_str(&config).expect("Error parsing config");
 
-    Runtime::builder()
+    let result = Runtime::builder()
         .account(Pipeline::new(AccountParser, [Logger]))
         .instruction(Pipeline::new(InstructionParser, [Logger]))
         .build::<YellowstoneGrpcSource>(config)
-        .run();
+        .try_run();
+
+    // The batch exporters hold unsent data until they are shut down.
+    if let Err(err) = tracer_provider.shutdown() {
+        eprintln!("Error shutting down the tracer provider: {err}");
+    }
+    if let Err(err) = log_provider.shutdown() {
+        eprintln!("Error shutting down the log provider: {err}");
+    }
+
+    if let Err(err) = result {
+        eprintln!("Runtime stopped: {err}");
+        std::process::exit(1);
+    }
 }
