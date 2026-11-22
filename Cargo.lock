@@ -6492,6 +6492,7 @@ dependencies = [
  "shipstern-proc-macro",
  "shipstern-proto",
  "shipstern-spl-token-parser",
+ "solana-instruction 3.5.1",
  "solana-program-error",
  "solana-program-pack",
  "solana-pubkey 4.4.0",
