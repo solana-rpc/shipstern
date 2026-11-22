@@ -27,8 +27,15 @@ impl DiscriminatorKey {
 /// On-wire bytes of a number discriminator at its type's full width. Panics on a
 /// value it cannot encode, so the build fails instead of dropping the dispatch arm.
 pub(crate) fn number_discriminator_bytes(ty: &TypeNode, value: u64) -> Vec<u8> {
+    try_number_discriminator_bytes(ty, value).unwrap_or_else(|reason| panic!("{reason}"))
+}
+
+/// [`number_discriminator_bytes`] for callers that report the reason themselves.
+pub(crate) fn try_number_discriminator_bytes(ty: &TypeNode, value: u64) -> Result<Vec<u8>, String> {
     let TypeNode::Number(number) = ty else {
-        panic!("number discriminator {value} has a non-number type");
+        return Err(format!(
+            "number discriminator {value} has a non-number type"
+        ));
     };
 
     let width = match number.format {
@@ -39,7 +46,11 @@ pub(crate) fn number_discriminator_bytes(ty: &TypeNode, value: u64) -> Vec<u8> {
         NumberFormat::U128 | NumberFormat::I128 => 16,
         // A compact-u16 below 0x80 is one byte.
         NumberFormat::ShortU16 if value < 0x80 => 1,
-        format => panic!("number discriminator {value} as {format:?} is not supported"),
+        format => {
+            return Err(format!(
+                "number discriminator {value} as {format:?} is not supported"
+            ));
+        },
     };
 
     let signed = matches!(
@@ -54,10 +65,10 @@ pub(crate) fn number_discriminator_bytes(ty: &TypeNode, value: u64) -> Vec<u8> {
     let value = u128::from(value);
 
     if bits < 128 && value >> bits != 0 {
-        panic!(
+        return Err(format!(
             "number discriminator {value} does not fit {:?}",
             number.format
-        );
+        ));
     }
 
     let mut bytes = value.to_le_bytes()[..width].to_vec();
@@ -66,7 +77,7 @@ pub(crate) fn number_discriminator_bytes(ty: &TypeNode, value: u64) -> Vec<u8> {
         bytes.reverse();
     }
 
-    bytes
+    Ok(bytes)
 }
 
 /// Offset and bytes of a discriminator that is a byte prefix; `None` for a size
