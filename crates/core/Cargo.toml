@@ -22,3 +22,6 @@ prost-types = { workspace = true, optional = true }
 
 [features]
 proto = ["dep:shipstern-proto", "dep:prost", "dep:prost-types"]
+
+[dev-dependencies]
+serde_json.workspace = true
