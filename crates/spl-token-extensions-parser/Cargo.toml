@@ -35,6 +35,7 @@ borsh = { workspace = true }
 [dev-dependencies]
 shipstern-mock = { workspace = true }
 tokio.workspace = true
+solana-instruction = { workspace = true }
 solana-pubkey = { workspace = true }
 
 [features]

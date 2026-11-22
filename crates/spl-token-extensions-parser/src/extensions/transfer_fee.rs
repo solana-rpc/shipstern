@@ -250,11 +250,11 @@ impl ExtensionInstructionParser for TransferFeeIx {
                             mint: crate::Pubkey::new(ix.accounts[0].0),
                             fee_recipient: crate::Pubkey::new(ix.accounts[1].0),
                             withdraw_withheld_authority: crate::Pubkey::new(ix.accounts[2].0),
-                            source_accounts: ix.accounts[3..(3 + n)]
+                            multisig_signers: ix.accounts[3..(accounts_len - n)]
                                 .iter()
                                 .map(|a| crate::Pubkey::new(a.0))
                                 .collect(),
-                            multisig_signers: ix.accounts[(3 + n)..]
+                            source_accounts: ix.accounts[(accounts_len - n)..]
                                 .iter()
                                 .map(|a| crate::Pubkey::new(a.0))
                                 .collect(),

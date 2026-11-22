@@ -448,4 +448,62 @@ mod tests {
 
         assert!(matches!(res, Err(ParseError::Filtered)), "{res:?}");
     }
+
+    fn key(n: u8) -> solana_pubkey::Pubkey { solana_pubkey::Pubkey::new_from_array([n; 32]) }
+
+    fn update_from(ix: &solana_instruction::Instruction) -> InstructionUpdate {
+        InstructionUpdate {
+            program: shipstern_core::Pubkey::new(ix.program_id.to_bytes()),
+            accounts: ix
+                .accounts
+                .iter()
+                .map(|m| shipstern_core::Pubkey::new(m.pubkey.to_bytes()))
+                .collect(),
+            data: ix.data.clone(),
+            shared: Default::default(),
+            inner: vec![],
+            path: Path::new_single(0),
+            log_range: 0..0,
+        }
+    }
+
+    fn pk(n: u8) -> shipstern_core::Pubkey { shipstern_core::Pubkey::new([n; 32]) }
+
+    fn transfer_fee_ix(
+        parsed: TokenExtensionProgram,
+    ) -> crate::extensions::transfer_fee_instruction::Instruction {
+        let Some(crate::instruction::Instruction::TransferFee(tf)) = parsed.instruction else {
+            panic!("expected TransferFee");
+        };
+
+        tf.instruction
+            .and_then(|i| i.instruction)
+            .expect("empty transfer fee ix")
+    }
+
+    #[tokio::test]
+    async fn withdraw_withheld_from_accounts_reads_signers_before_sources() {
+        use crate::extensions::transfer_fee_instruction::Instruction as Ix;
+
+        let ix = spl_token_2022::extension::transfer_fee::instruction::withdraw_withheld_tokens_from_accounts(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &key(3),
+            &[&key(4), &key(5)],
+            &[&key(6), &key(7), &key(8)],
+        )
+        .unwrap();
+
+        let parsed = InstructionParser.parse(&update_from(&ix)).await.unwrap();
+
+        let Ix::WithdrawWithheldTokensFromAccounts(w) = transfer_fee_ix(parsed) else {
+            panic!("expected WithdrawWithheldTokensFromAccounts");
+        };
+
+        assert_eq!(w.accounts.withdraw_withheld_authority, pk(3));
+        assert_eq!(w.accounts.multisig_signers, vec![pk(4), pk(5)]);
+        assert_eq!(w.accounts.source_accounts, vec![pk(6), pk(7), pk(8)]);
+        assert_eq!(w.args.num_token_accounts, 3);
+    }
 }
