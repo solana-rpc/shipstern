@@ -19,6 +19,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- **Breaking** for custom sources, `shipstern`: `SourceContext::filter_updates` is a new `FilterUpdates` type instead of a `watch::Receiver<Filters>`, so the runtime can tell whether a `FilterUpdateSource` reads its updates. It logs a warning when a set published through a `RuntimeHandle` stays unread for 10 seconds, which can also happen while a source reconnects. Before, a source that implemented the marker and ignored the slot dropped every update with `update_filters` still returning `Ok`. `FilterUpdates` derefs to the receiver, so `changed()`, `has_changed()` and `borrow_and_update()` need no change. A source that names the receiver type, or passes the field where a `watch::Receiver<Filters>` is expected, calls `.into_inner()`, which ends the tracking. A test that builds a receiver itself uses `FilterUpdates::from(rx)` ([#404](https://github.com/solana-rpc/shipstern/pull/404) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 

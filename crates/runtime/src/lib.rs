@@ -15,11 +15,10 @@
 use std::sync::Arc;
 
 use config::BufferConfig;
-use shipstern_core::Filters;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 use yellowstone_grpc_proto::tonic::Status;
 
-use crate::sources::{SourceContext, SourceExitStatus};
+use crate::sources::{FilterUpdates, SourceContext, SourceExitStatus};
 
 #[cfg(feature = "prometheus")]
 pub extern crate prometheus;
@@ -92,7 +91,7 @@ pub struct Runtime<S: SourceTrait = Box<dyn SourceTrait>> {
     buffer: BufferConfig,
     source: S,
     pipelines: handler::PipelineSets,
-    filter_updates_rx: watch::Receiver<Filters>,
+    filter_updates: FilterUpdates,
     filter_state: Arc<handle::FilterState>,
     #[cfg(feature = "prometheus")]
     metrics_registry: prometheus::Registry,
@@ -296,13 +295,32 @@ impl<S: SourceTrait> Runtime<S> {
         #[cfg(feature = "prometheus")]
         metrics::register_metrics(&self.metrics_registry);
 
-        let mut filter_updates = self.filter_updates_rx;
+        let mut filter_updates = self.filter_updates;
 
         // Subscribe with the latest set, so an update sent before running is in the
         // first request. Marking it seen stops the source resending it.
         let filters = filter_updates.borrow_and_update().clone();
 
         let source = self.source;
+
+        // Ends with the run, so a handle kept past it cannot trigger a warning about a
+        // source that is gone.
+        let mut watchers = tokio::task::JoinSet::new();
+        let reads = filter_updates.reads();
+
+        watchers.spawn(async move {
+            loop {
+                reads.stalled().await;
+
+                tracing::warn!(
+                    grace_secs = handle::UNREAD_UPDATE_GRACE.as_secs(),
+                    "A filter update has gone unread by the source. A source can be slow while it \
+                     reconnects, but if this repeats, check that the `FilterUpdateSource` reads \
+                     `ctx.filter_updates` in `connect`: one that ignores the slot drops every \
+                     update"
+                );
+            }
+        });
 
         // Release the runtime's own reference so the slot closes once every
         // handle is gone, and a source that waits on updates is not left

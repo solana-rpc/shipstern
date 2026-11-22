@@ -294,6 +294,10 @@ Implement `FilterUpdateSource` and read `ctx.filter_updates` in `connect`,
 applying each set published there to the live subscription, as the gRPC source
 does. That is what makes `Runtime::handle` available to callers. Sources that
 cannot change a subscription mid-stream ignore the slot and skip the trait.
+`ctx.filter_updates` is a `FilterUpdates`, which derefs to a
+`watch::Receiver<Filters>` and notes when you read the value. The runtime logs a
+warning when a published set stays unread for 10 seconds, so a source that
+implements the trait and never reads the slot does not drop updates silently.
 
 ### Picking a source at startup
 
