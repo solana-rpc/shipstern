@@ -15,6 +15,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- `shipstern-proc-macro`: a `shortU16` struct field (plain, optional, repeated or fixed-array) is read as the 1 to 3 byte compact-u16 it is on the wire, not as a 2-byte `u16`. Before, every field after it decoded from the wrong offset ([#437](https://github.com/solana-rpc/shipstern/pull/437) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 

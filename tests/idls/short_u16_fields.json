@@ -1,0 +1,186 @@
+{
+  "kind": "rootNode",
+  "standard": "codama",
+  "version": "1.6.0",
+  "program": {
+    "kind": "programNode",
+    "name": "shortU16Fields",
+    "publicKey": "11111111111111111111111111111111",
+    "version": "0.1.0",
+    "accounts": [],
+    "instructions": [],
+    "definedTypes": [
+      {
+        "kind": "definedTypeNode",
+        "name": "shortU16Plain",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "count",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "shortU16",
+                "endian": "le"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "tail",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "shortU16Optional",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "value",
+              "type": {
+                "kind": "optionTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "shortU16",
+                  "endian": "le"
+                },
+                "prefix": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "tail",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "shortU16ShortPrefixOptional",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "value",
+              "type": {
+                "kind": "optionTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "shortU16",
+                  "endian": "le"
+                },
+                "prefix": {
+                  "kind": "numberTypeNode",
+                  "format": "shortU16",
+                  "endian": "le"
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "tail",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "shortU16List",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "values",
+              "type": {
+                "kind": "arrayTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "shortU16",
+                  "endian": "le"
+                },
+                "count": {
+                  "kind": "prefixedCountNode",
+                  "prefix": {
+                    "kind": "numberTypeNode",
+                    "format": "u32",
+                    "endian": "le"
+                  }
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "tail",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "shortU16Fixed",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "values",
+              "type": {
+                "kind": "arrayTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "shortU16",
+                  "endian": "le"
+                },
+                "count": {
+                  "kind": "fixedCountNode",
+                  "value": 2
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "tail",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "errors": [],
+    "constants": []
+  }
+}
