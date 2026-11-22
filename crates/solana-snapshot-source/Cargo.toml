@@ -32,3 +32,4 @@ solana-runtime = { workspace = true, features = ["agave-unstable-api"] }
 
 [dev-dependencies]
 agave-fs = { workspace = true, features = ["agave-unstable-api"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
