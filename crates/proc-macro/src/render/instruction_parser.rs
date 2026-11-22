@@ -926,10 +926,6 @@ pub fn instruction_parser(
                         }
                     }
 
-                    if instruction.is_none() && program_events.is_empty() {
-                        return Err(ParseError::Filtered);
-                    }
-
                     Ok(#output_ident { instruction, program_events })
                 }
             }
