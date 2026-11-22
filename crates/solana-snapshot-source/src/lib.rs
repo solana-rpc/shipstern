@@ -248,6 +248,13 @@ impl SourceTrait for SolanaSnapshotSource {
     async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, ShipsternError> {
         let SourceContext { filters, tx, .. } = ctx;
 
+        let channel_size = self.config.channel_size;
+        if channel_size == 0 {
+            tracing::error!("Snapshot source channel size must be at least 1");
+
+            return Err(ShipsternError::ConfigError);
+        }
+
         let filter_owner_key_lookup = FilterOwnerKeyLookup::new(&filters);
         let solana_snapshot = SolanaSnapshot::load_ledger(self.config.ledger_path.clone())?;
         let snapshot_slot = solana_snapshot.slot;
@@ -272,7 +279,6 @@ impl SourceTrait for SolanaSnapshotSource {
         .await
         .map_err(|_| ShipsternError::ServerHangup)?;
 
-        let channel_size = self.config.channel_size;
         let (sync_tx, mut sync_rx) = mpsc::channel::<Event>(channel_size);
 
         let tx_sender = tx.clone();

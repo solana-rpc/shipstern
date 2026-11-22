@@ -1,11 +1,19 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::{atomic::AtomicBool, Arc, RwLock},
 };
 
 use agave_fs::io_setup::IoSetupState;
 use agave_snapshots::{snapshot_config::SnapshotConfig, SnapshotKind, SnapshotVersion};
-use shipstern_solana_snapshot_source::SolanaSnapshot;
+use shipstern::{
+    sources::{FromConfig, SourceContext, SourceTrait},
+    Error as ShipsternError,
+};
+use shipstern_core::{Filters, Prefilter};
+use shipstern_solana_snapshot_source::{
+    SolanaSnapshot, SolanaSnapshotConfig, SolanaSnapshotSource,
+};
 use solana_account::ReadableAccount;
 use solana_accounts_db::{
     accounts_db::AccountsDbConfig, utils::create_all_accounts_run_and_snapshot_dirs,
@@ -20,6 +28,7 @@ use solana_runtime::{
     snapshot_package::SnapshotPackage,
     snapshot_utils::serialize_snapshot,
 };
+use tokio::sync::mpsc;
 
 const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
@@ -204,4 +213,36 @@ fn prefers_a_local_bank_snapshot_at_or_above_the_archive() {
             "the load keeps the bank snapshot dir at {bank_snapshot_slot}"
         );
     }
+}
+
+fn source_for(ledger: &Path, channel_size: usize) -> SolanaSnapshotSource {
+    SolanaSnapshotSource::from_config(SolanaSnapshotConfig {
+        ledger_path: ledger.to_path_buf(),
+        channel_size,
+    })
+}
+
+/// Accounts owned by the system program, which the genesis and the transfer create.
+fn system_owned_accounts() -> Filters {
+    let prefilter = Prefilter::builder()
+        .account_owners([Pubkey::default()])
+        .build()
+        .expect("build the prefilter");
+
+    Filters::new(HashMap::from([("system".to_string(), prefilter)]))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_zero_channel_size_is_a_config_error() {
+    let source = source_for(Path::new("/nonexistent"), 0);
+    let (tx, _rx) = mpsc::channel(8);
+
+    let result = source
+        .connect(SourceContext::new(system_owned_accounts(), tx))
+        .await;
+
+    assert!(
+        matches!(result, Err(ShipsternError::ConfigError)),
+        "got {result:?}"
+    );
 }
