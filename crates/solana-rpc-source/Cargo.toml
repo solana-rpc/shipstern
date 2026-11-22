@@ -23,3 +23,6 @@ shipstern-core = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
 
 [features]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "net", "io-util", "time"] }
