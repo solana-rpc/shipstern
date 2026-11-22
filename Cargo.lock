@@ -4715,6 +4715,7 @@ dependencies = [
  "serde_json",
  "shipstern",
  "shipstern-block-meta-parser",
+ "shipstern-bpf-loader-parser",
  "shipstern-core",
  "shipstern-mock",
  "shipstern-parser",

@@ -91,3 +91,14 @@ fn log_path_matches_at_offset_zero() {
 
     assert_eq!(args.amount, AMOUNT);
 }
+
+/// The runtime merges instruction parsers into one server filter, so the program goes in `include`.
+#[test]
+fn instruction_parser_selects_its_program_with_include() {
+    let tx = shipstern_core::Parser::prefilter(&plain_envelope::InstructionParser)
+        .transaction
+        .expect("transaction prefilter");
+
+    assert_eq!(tx.accounts_include, [program_id()].into());
+    assert!(tx.accounts_required.is_empty());
+}
