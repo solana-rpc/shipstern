@@ -213,6 +213,42 @@ impl<R> SlotRecordBuffer<R> {
     /// True when both instruction and account drains are complete.
     pub fn is_fully_drained(&self) -> bool { self.instructions_drained && self.accounts_drained }
 
+    /// Forget what the handlers parsed, because the server replays it. The block data and the
+    /// instruction commitment stay: the block machine drops a replayed BlockMeta of a frozen
+    /// bank, and a commitment arrives once. Returns whether the account gate was open and
+    /// needs the replayed commitment to freeze again.
+    pub fn reset_for_replay(&mut self) -> bool {
+        self.instruction_records.clear();
+        self.account_records.clear();
+        self.parsed_tx_count = 0;
+        self.account_processed_count = 0;
+        self.filtered_instruction_count = 0;
+        self.failed_instruction_count = 0;
+        self.filtered_account_count = 0;
+        self.failed_account_count = 0;
+        self.transaction_status_failed_count = 0;
+        self.transaction_status_succeeded_count = 0;
+
+        let rearm = self.account_commitment_reached && !self.accounts_drained;
+        if rearm {
+            self.account_commitment_reached = false;
+            self.expected_account_count = None;
+        }
+        rearm
+    }
+
+    /// Nothing but the records and counts a replay refills.
+    pub fn is_blank(&self) -> bool {
+        self.metadata.is_none()
+            && !self.instruction_commitment_reached
+            && !self.account_commitment_reached
+            && self.expected_account_count.is_none()
+    }
+
+    pub fn blockhash(&self) -> Option<solana_hash::Hash> {
+        self.metadata.as_ref().map(|meta| meta.blockhash)
+    }
+
     pub fn parent_slot(&self) -> Option<Slot> {
         self.metadata.as_ref().map(|meta| meta.parent_slot)
     }

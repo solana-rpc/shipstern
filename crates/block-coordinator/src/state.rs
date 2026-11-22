@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use solana_clock::Slot;
+use solana_commitment_config::CommitmentLevel;
+use solana_hash::Hash;
 
 use crate::{
     buffer::SlotRecordBuffer,
@@ -91,6 +93,13 @@ pub struct CoordinatorState<R> {
     late_account_record_drops: u64,
     /// Post-freeze AccountEventSeen drops (observability).
     late_account_event_drops: u64,
+    /// The delivery of each bank that a reconnect cut off and replays. A bank with no entry is at
+    /// epoch 0. A handler message from an earlier epoch is stale.
+    bank_epochs: BTreeMap<BankKey, u16>,
+    /// Replayed banks whose account gate reopens when the replay commits them again.
+    awaiting_account_commit: BTreeSet<BankKey>,
+    /// Handler messages and account signals dropped for an earlier epoch (observability).
+    stale_epoch_drops: u64,
 }
 
 impl<R> CoordinatorState<R> {
@@ -111,6 +120,9 @@ impl<R> CoordinatorState<R> {
             account_commit_at,
             late_account_record_drops: 0,
             late_account_event_drops: 0,
+            bank_epochs: BTreeMap::new(),
+            awaiting_account_commit: BTreeSet::new(),
+            stale_epoch_drops: 0,
         }
     }
 
@@ -182,6 +194,70 @@ impl<R> CoordinatorState<R> {
     pub fn late_account_record_drops(&self) -> u64 { self.late_account_record_drops }
 
     pub fn late_account_event_drops(&self) -> u64 { self.late_account_event_drops }
+
+    pub fn stale_epoch_drops(&self) -> u64 { self.stale_epoch_drops }
+
+    /// The blockhash of a frozen bank.
+    pub(crate) fn bank_blockhash(&self, key: BankKey) -> Option<Hash> {
+        self.buffer.get(&key).and_then(SlotRecordBuffer::blockhash)
+    }
+
+    ///
+    /// Take a message about `key` from the handlers' delivery `epoch`. A message from an earlier
+    /// epoch is stale: its delivery was cut off, and the replay parses it again. A later epoch
+    /// starts the replay, because the message can beat the discard notice from the source.
+    ///
+    /// Starting a replay drops the bank's records and counts and keeps its block data. A bank
+    /// with no block data and no commitment leaves the buffer, so it cannot linger as pending.
+    ///
+    /// Returns whether to apply the message.
+    ///
+    pub(crate) fn accept_epoch(&mut self, key: BankKey, epoch: u16) -> bool {
+        let current = self.bank_epochs.get(&key).copied().unwrap_or(0);
+        if epoch < current {
+            self.stale_epoch_drops += 1;
+            tracing::debug!(
+                slot = key.slot,
+                bank_id = key.bank_id,
+                epoch,
+                current,
+                "Message from a discarded delivery of the bank; dropping it"
+            );
+            return false;
+        }
+        if epoch == current {
+            return true;
+        }
+
+        self.bank_epochs.insert(key, epoch);
+        self.account_event_counts.remove(&key);
+        if let Some(buf) = self.buffer.get_mut(&key) {
+            let record_count = buf.record_count();
+            if buf.reset_for_replay() {
+                self.awaiting_account_commit.insert(key);
+            }
+            if buf.is_blank() {
+                self.buffer.remove(&key);
+            }
+            tracing::debug!(
+                slot = key.slot,
+                bank_id = key.bank_id,
+                epoch,
+                record_count,
+                "Replay of a cut-off bank; dropped its records and counts"
+            );
+        }
+        true
+    }
+
+    /// The replay of `key` commits it at `level`. Returns whether that reopens its account gate.
+    pub(crate) fn take_account_rearm(&mut self, key: BankKey, level: CommitmentLevel) -> bool {
+        let gate_level = match self.account_commit_at {
+            AccountCommitAt::Confirmed => CommitmentLevel::Confirmed,
+            AccountCommitAt::Finalized => CommitmentLevel::Finalized,
+        };
+        level == gate_level && self.awaiting_account_commit.remove(&key)
+    }
 
     pub fn apply(&mut self, event: CoordinatorEvent<R>) -> Result<(), CoordinatorError> {
         match event {
@@ -821,6 +897,10 @@ impl<R> CoordinatorState<R> {
             self.discarded_slots = self.discarded_slots.split_off(&first_kept);
             self.discarded_banks = self.discarded_banks.split_off(&BankKey::first(first_kept));
             self.confirmed_banks = self.confirmed_banks.split_off(&first_kept);
+            self.bank_epochs = self.bank_epochs.split_off(&BankKey::first(first_kept));
+            self.awaiting_account_commit = self
+                .awaiting_account_commit
+                .split_off(&BankKey::first(first_kept));
         }
         if self.discarded_slots.len() > Self::MAX_DISCARDED_SLOTS {
             tracing::warn!(

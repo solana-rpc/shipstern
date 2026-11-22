@@ -15,8 +15,9 @@ use crate::{
     commitments::{Commitments, Forward},
     state::{CoordinatorEvent, CoordinatorState},
     types::{
-        AccountCommitAt, AccountSlot, BankKey, BlockMetadata, ColorSlot, CoordinatorError,
-        CoordinatorInput, CoordinatorMessage, DiscardReason, InstructionSlot,
+        untag_bank_id, AccountCommitAt, AccountSlot, BankKey, BlockMetadata, ColorSlot,
+        CoordinatorError, CoordinatorInput, CoordinatorMessage, DiscardReason, DiscardedBank,
+        InstructionSlot, SlotOutcome,
     },
 };
 
@@ -139,15 +140,23 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                         CoordinatorInput::GeyserUpdate(update) => {
                             self.convert_geyser_update(update.as_ref())?
                         }
-                        CoordinatorInput::AccountEventSeen { slot, bank_id } => {
-                            self.state.apply(CoordinatorEvent::AccountEventSeen { slot, bank_id })?;
+                        CoordinatorInput::AccountEventSeen { slot, bank_id: tagged } => {
+                            let (bank_id, epoch) = untag_bank_id(tagged);
+                            if self.state.accept_epoch(BankKey::new(slot, bank_id), epoch) {
+                                self.state.apply(CoordinatorEvent::AccountEventSeen { slot, bank_id })?;
+                            }
                             Vec::new()
+                        }
+                        CoordinatorInput::BanksDiscarded(banks) => {
+                            self.discard_replayed_banks(&banks)?
                         }
                     }
                 }
                 // The state drops a parsed message for a discarded bank on its own.
                 Some(msg) = self.parsed_rx.recv() => {
-                    self.state.apply(Self::convert_parsed_message(msg))?;
+                    if let Some(event) = self.accept_parsed_message(msg) {
+                        self.state.apply(event)?;
+                    }
                     Vec::new()
                 }
                 else => {
@@ -325,8 +334,23 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
             _ => None,
         };
         let is_block_meta = matches!(info, GeyserEventInfo::BlockMeta(_));
+        let mut reopened = None;
         if let Some((key, level, parent_slot)) = commitment {
             self.commitments.record(key, level, parent_slot)?;
+            // A replayed bank already had this commitment, so the block machine says nothing
+            // more. The account gate reopened with the replay, and it needs the event to freeze.
+            if self.state.take_account_rearm(key, level) {
+                reopened = Some(match level {
+                    CommitmentLevel::Finalized => CoordinatorEvent::SlotFinalized {
+                        slot: key.slot,
+                        bank_id: key.bank_id,
+                    },
+                    _ => CoordinatorEvent::SlotConfirmed {
+                        slot: key.slot,
+                        bank_id: key.bank_id,
+                    },
+                });
+            }
         } else {
             if let GeyserEventInfo::BlockMeta(meta) = &info {
                 self.commitments.note_identity(meta)?;
@@ -340,7 +364,9 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         if commitment.is_some() || is_block_meta {
             self.forward_commitments()?;
         }
-        self.drain_wrapper_outputs(dead_slot)
+        let mut events = self.drain_wrapper_outputs(dead_slot)?;
+        events.splice(0..0, reopened);
+        Ok(events)
     }
 
     /// Pass the verified commitments the block machine has not had yet.
@@ -672,13 +698,71 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         }])
     }
 
-    fn convert_parsed_message(msg: CoordinatorMessage<R>) -> CoordinatorEvent<R> {
+    ///
+    /// The server cut off some banks and replays them. Drop each bank's records and counts, keep
+    /// the block data of a frozen one, and reject what the handlers still parse from the earlier
+    /// delivery. A bank that finality shows off the chain is dropped for good. A bank that
+    /// finality does not name, or whose block it names, stays: the replay fills it in, or, on
+    /// another node, its replacement wins and it loses.
+    ///
+    /// The block machine keys a block by bank ID alone, so the ID of a cut-off bank must not come
+    /// back in another slot. `check_bank_slot` still stops the coordinator if another node's
+    /// bank has the same ID.
+    ///
+    fn discard_replayed_banks(
+        &mut self,
+        banks: &[DiscardedBank],
+    ) -> Result<Vec<CoordinatorEvent<R>>, CoordinatorError> {
+        let mut events = Vec::new();
+        for bank in banks {
+            let key = BankKey::new(bank.slot, bank.bank_id);
+            self.state.accept_epoch(key, bank.epoch);
+
+            if self.state.is_invalidated_bank(key) {
+                continue;
+            }
+            let off_chain = match bank.outcome {
+                SlotOutcome::Skipped => true,
+                SlotOutcome::Finalized(winner) => self
+                    .state
+                    .bank_blockhash(key)
+                    .is_some_and(|own| own != winner),
+            };
+            if !off_chain {
+                continue;
+            }
+            if self.commitments.contains(key) {
+                return Err(CoordinatorError::ConflictingBlockIdentity {
+                    slot: bank.slot,
+                    bank_id: bank.bank_id,
+                });
+            }
+            self.commitments.forget(key);
+            events.push(CoordinatorEvent::BankDiscarded {
+                slot: bank.slot,
+                bank_id: bank.bank_id,
+                reason: DiscardReason::Forked,
+            });
+        }
+        Ok(events)
+    }
+
+    /// Decode the bank ID the handler echoed, and drop a message from a discarded delivery.
+    fn accept_parsed_message(&mut self, msg: CoordinatorMessage<R>) -> Option<CoordinatorEvent<R>> {
+        let (bank_id, epoch) = untag_bank_id(msg.bank_id());
+        if !self
+            .state
+            .accept_epoch(BankKey::new(msg.slot(), bank_id), epoch)
+        {
+            return None;
+        }
+        Some(Self::convert_parsed_message(msg, bank_id))
+    }
+
+    fn convert_parsed_message(msg: CoordinatorMessage<R>, bank_id: u64) -> CoordinatorEvent<R> {
         match msg {
             CoordinatorMessage::InstructionParsed {
-                slot,
-                bank_id,
-                key,
-                record,
+                slot, key, record, ..
             } => CoordinatorEvent::InstructionRecordParsed {
                 slot,
                 bank_id,
@@ -686,24 +770,17 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
                 record,
             },
             CoordinatorMessage::AccountParsed {
-                slot,
-                bank_id,
-                key,
-                record,
+                slot, key, record, ..
             } => CoordinatorEvent::AccountRecordParsed {
                 slot,
                 bank_id,
                 key,
                 record,
             },
-            CoordinatorMessage::TransactionParsed { slot, bank_id } => {
+            CoordinatorMessage::TransactionParsed { slot, .. } => {
                 CoordinatorEvent::TransactionParsed { slot, bank_id }
             },
-            CoordinatorMessage::ParseStats {
-                slot,
-                bank_id,
-                kind,
-            } => CoordinatorEvent::ParseStats {
+            CoordinatorMessage::ParseStats { slot, kind, .. } => CoordinatorEvent::ParseStats {
                 slot,
                 bank_id,
                 kind,
@@ -758,17 +835,15 @@ mod tests {
     }
 
     fn record(coordinator: &mut BlockMachineCoordinator<String>, slot: Slot, bank_id: u64) {
-        coordinator
-            .state
-            .apply(BlockMachineCoordinator::convert_parsed_message(
-                CoordinatorMessage::InstructionParsed {
-                    slot,
-                    bank_id,
-                    key: InstructionRecordSortKey::new(0, vec![0]),
-                    record: format!("{slot}/{bank_id}"),
-                },
-            ))
-            .unwrap();
+        let msg = CoordinatorMessage::InstructionParsed {
+            slot,
+            bank_id,
+            key: InstructionRecordSortKey::new(0, vec![0]),
+            record: format!("{slot}/{bank_id}"),
+        };
+        if let Some(event) = coordinator.accept_parsed_message(msg) {
+            coordinator.state.apply(event).unwrap();
+        }
     }
 
     /// The real order: records of the abandoned bank, then the clear, before any replacement.
@@ -813,6 +888,214 @@ mod tests {
                 bank_id: 7
             })
         ));
+    }
+
+    const EPOCH_SHIFT: u32 = 48;
+
+    fn tagged(bank_id: u64, epoch: u16) -> u64 { bank_id | (u64::from(epoch) << EPOCH_SHIFT) }
+
+    fn freeze(coordinator: &mut BlockMachineCoordinator<String>, bank_id: u64, hash: Hash) {
+        coordinator
+            .state
+            .apply(CoordinatorEvent::BlockFrozen {
+                slot: 42,
+                bank_id,
+                metadata: BlockMetadata {
+                    parent_slot: 41,
+                    blockhash: hash,
+                    expected_tx_count: 2,
+                },
+            })
+            .unwrap();
+    }
+
+    /// One transaction of bank `bank_id` as a handler reports it: a record, then the signal.
+    fn parse_tx(
+        coordinator: &mut BlockMachineCoordinator<String>,
+        bank_id: u64,
+        tx_index: u64,
+        value: &str,
+    ) {
+        let messages = [
+            CoordinatorMessage::InstructionParsed {
+                slot: 42,
+                bank_id,
+                key: InstructionRecordSortKey::new(tx_index, vec![0]),
+                record: value.to_string(),
+            },
+            CoordinatorMessage::TransactionParsed { slot: 42, bank_id },
+        ];
+        for msg in messages {
+            if let Some(event) = coordinator.accept_parsed_message(msg) {
+                coordinator.state.apply(event).unwrap();
+            }
+        }
+    }
+
+    fn replay(bank_id: u64, epoch: u16, outcome: SlotOutcome) -> [DiscardedBank; 1] {
+        [DiscardedBank {
+            slot: 42,
+            bank_id,
+            epoch,
+            outcome,
+        }]
+    }
+
+    fn confirm(coordinator: &mut BlockMachineCoordinator<String>, bank_id: u64) {
+        coordinator
+            .state
+            .apply(CoordinatorEvent::SlotConfirmed { slot: 42, bank_id })
+            .unwrap();
+    }
+
+    fn flushed_records(coordinator: &mut BlockMachineCoordinator<String>) -> Vec<Vec<String>> {
+        coordinator
+            .state
+            .drain_instruction_flushable()
+            .unwrap()
+            .into_iter()
+            .map(|slot| slot.records)
+            .collect()
+    }
+
+    /// The replay parses every transaction again, so the old counts must not carry over: with
+    /// them the tx gate opens before the replay finished.
+    #[test]
+    fn replay_drops_records_and_counts_but_keeps_block_data() {
+        let mut coordinator = coordinator();
+        let hash = Hash::new_unique();
+        freeze(&mut coordinator, 7, hash);
+        parse_tx(&mut coordinator, 7, 0, "old0");
+        parse_tx(&mut coordinator, 7, 1, "old1");
+
+        let events = coordinator
+            .discard_replayed_banks(&replay(7, 1, SlotOutcome::Finalized(hash)))
+            .unwrap();
+        assert!(events.is_empty());
+        assert_eq!(
+            coordinator.state.bank_blockhash(BankKey::new(42, 7)),
+            Some(hash)
+        );
+        assert_eq!(coordinator.state.pending_bank_count(), 1);
+
+        confirm(&mut coordinator, 7);
+        assert!(flushed_records(&mut coordinator).is_empty());
+
+        parse_tx(&mut coordinator, tagged(7, 1), 0, "new0");
+        assert!(flushed_records(&mut coordinator).is_empty());
+        parse_tx(&mut coordinator, tagged(7, 1), 1, "new1");
+        assert_eq!(flushed_records(&mut coordinator), [vec![
+            "new0".to_string(),
+            "new1".to_string()
+        ]]);
+    }
+
+    /// Handlers send on their own channel, so a message of the cut-off delivery can come after
+    /// the discard. It must not count toward the replay.
+    #[test]
+    fn message_of_a_discarded_delivery_is_rejected() {
+        let mut coordinator = coordinator();
+        let hash = Hash::new_unique();
+        freeze(&mut coordinator, 7, hash);
+        coordinator
+            .discard_replayed_banks(&replay(7, 1, SlotOutcome::Finalized(hash)))
+            .unwrap();
+        confirm(&mut coordinator, 7);
+
+        parse_tx(&mut coordinator, 7, 0, "stale0");
+        parse_tx(&mut coordinator, 7, 1, "stale1");
+        assert_eq!(coordinator.state.stale_epoch_drops(), 4);
+        assert!(flushed_records(&mut coordinator).is_empty());
+
+        parse_tx(&mut coordinator, tagged(7, 1), 0, "new0");
+        parse_tx(&mut coordinator, tagged(7, 1), 1, "new1");
+        assert_eq!(flushed_records(&mut coordinator), [vec![
+            "new0".to_string(),
+            "new1".to_string()
+        ]]);
+    }
+
+    /// The replayed delivery can reach the coordinator before the source's notice. The notice
+    /// then must not wipe what the replay already delivered.
+    #[test]
+    fn replayed_message_before_the_discard_notice_keeps_its_record() {
+        let mut coordinator = coordinator();
+        let hash = Hash::new_unique();
+        freeze(&mut coordinator, 7, hash);
+        parse_tx(&mut coordinator, 7, 0, "old0");
+        parse_tx(&mut coordinator, tagged(7, 1), 0, "new0");
+
+        coordinator
+            .discard_replayed_banks(&replay(7, 1, SlotOutcome::Finalized(hash)))
+            .unwrap();
+        parse_tx(&mut coordinator, tagged(7, 1), 1, "new1");
+        confirm(&mut coordinator, 7);
+        assert_eq!(flushed_records(&mut coordinator), [vec![
+            "new0".to_string(),
+            "new1".to_string()
+        ]]);
+    }
+
+    /// A bank with no block data goes with its records, so it cannot wait as a pending bank.
+    #[test]
+    fn unfrozen_bank_leaves_no_pending_bank() {
+        let mut coordinator = coordinator();
+        parse_tx(&mut coordinator, 7, 0, "old0");
+        assert_eq!(coordinator.state.pending_bank_count(), 1);
+
+        coordinator
+            .discard_replayed_banks(&replay(7, 1, SlotOutcome::Finalized(Hash::new_unique())))
+            .unwrap();
+        assert_eq!(coordinator.state.pending_bank_count(), 0);
+    }
+
+    /// Another node replays under new bank IDs, so the old bank never confirms. Finality that
+    /// names another block or skips the slot ends it at once instead of leaving it pending.
+    #[test]
+    fn bank_off_the_finalized_chain_is_dropped() {
+        for outcome in [
+            SlotOutcome::Skipped,
+            SlotOutcome::Finalized(Hash::new_unique()),
+        ] {
+            let mut coordinator = coordinator();
+            freeze(&mut coordinator, 7, Hash::new_unique());
+            parse_tx(&mut coordinator, 7, 0, "old0");
+
+            let events = coordinator
+                .discard_replayed_banks(&replay(7, 1, outcome))
+                .unwrap();
+            for event in events {
+                coordinator.state.apply(event).unwrap();
+            }
+            assert_eq!(coordinator.state.pending_bank_count(), 0);
+            assert!(coordinator.state.is_invalidated_bank(BankKey::new(42, 7)));
+
+            parse_tx(&mut coordinator, tagged(7, 1), 0, "late");
+            assert_eq!(coordinator.state.pending_bank_count(), 0);
+        }
+    }
+
+    /// A bank confirmed before the cut-off stays confirmed, so the replay of its transactions
+    /// flushes it with no second confirm.
+    #[test]
+    fn replayed_confirmed_bank_flushes_after_the_replay() {
+        let mut coordinator = coordinator();
+        let hash = Hash::new_unique();
+        freeze(&mut coordinator, 7, hash);
+        confirm(&mut coordinator, 7);
+        parse_tx(&mut coordinator, 7, 0, "old0");
+
+        coordinator
+            .discard_replayed_banks(&replay(7, 1, SlotOutcome::Finalized(hash)))
+            .unwrap();
+        assert!(flushed_records(&mut coordinator).is_empty());
+
+        parse_tx(&mut coordinator, tagged(7, 1), 0, "new0");
+        parse_tx(&mut coordinator, tagged(7, 1), 1, "new1");
+        assert_eq!(flushed_records(&mut coordinator), [vec![
+            "new0".to_string(),
+            "new1".to_string()
+        ]]);
     }
 
     /// Finality goes to the block machine slot by slot, so it still prunes its fork graph.

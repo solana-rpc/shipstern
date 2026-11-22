@@ -25,6 +25,27 @@ impl BankKey {
     }
 }
 
+/// How many low bits of a bank ID the server may use. The bits above carry the replay epoch.
+const BANK_ID_BITS: u32 = 48;
+
+/// Put the replay `epoch` of a bank into the high bits of its ID, so a handler that echoes the
+/// ID tells the coordinator which delivery of the bank it parsed. Epoch 0 leaves the ID as the
+/// server sent it. Returns `None` when `bank_id` leaves no room for the epoch.
+pub(crate) const fn tag_bank_id(bank_id: u64, epoch: u16) -> Option<u64> {
+    if bank_id >> BANK_ID_BITS != 0 {
+        return None;
+    }
+    Some(bank_id | (epoch as u64) << BANK_ID_BITS)
+}
+
+/// The server's bank ID and the replay epoch of a tagged ID.
+pub(crate) const fn untag_bank_id(tagged: u64) -> (u64, u16) {
+    (
+        tagged & ((1 << BANK_ID_BITS) - 1),
+        (tagged >> BANK_ID_BITS) as u16,
+    )
+}
+
 /// Block metadata that always transitions together.
 #[derive(Debug, Clone)]
 pub struct BlockMetadata {
@@ -163,8 +184,10 @@ pub enum ParseStatsKind {
 ///
 /// Messages from handlers back to the coordinator.
 ///
-/// `bank_id` comes from the update the handler parsed. Records stay per bank until one
-/// bank of the slot is confirmed.
+/// `bank_id` comes from the update the handler parsed, unchanged. After a reconnect replays a
+/// bank, `CoordinatorSource` hands the handlers a bank ID that also names the delivery, so the
+/// coordinator can drop what a handler parsed from a delivery it discarded. Records stay per bank
+/// until one bank of the slot is confirmed.
 ///
 pub enum CoordinatorMessage<R> {
     /// A parsed instruction record ready to buffer (sorted by tx_index, ix_path).
@@ -193,6 +216,16 @@ pub enum CoordinatorMessage<R> {
 }
 
 impl<R> CoordinatorMessage<R> {
+    /// The bank ID the handler echoed.
+    pub(crate) fn bank_id(&self) -> u64 {
+        match self {
+            Self::InstructionParsed { bank_id, .. }
+            | Self::AccountParsed { bank_id, .. }
+            | Self::TransactionParsed { bank_id, .. }
+            | Self::ParseStats { bank_id, .. } => *bank_id,
+        }
+    }
+
     pub fn slot(&self) -> Slot {
         match self {
             Self::InstructionParsed { slot, .. }
@@ -242,14 +275,40 @@ impl AccountRecordSortKey {
     }
 }
 
+/// What finality showed about the slot of a discarded bank.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotOutcome {
+    /// The finalized chain skips the slot, so no bank of it is on the chain.
+    Skipped,
+    /// The finalized chain holds a block of this hash in the slot.
+    Finalized(Hash),
+}
+
+/// A bank whose delivery was cut off by a reconnect. The server replays it, under the same bank
+/// ID on the same node or under another ID on another node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiscardedBank {
+    pub slot: Slot,
+    pub bank_id: u64,
+    /// The delivery of this bank that replaces the one discarded, counted from 0. The handlers
+    /// echo it in bits 48 and up of the bank ID of the updates of that delivery.
+    pub epoch: u16,
+    pub outcome: SlotOutcome,
+}
+
 /// Input messages from the source to the coordinator.
 /// Wraps raw gRPC events plus synthetic messages injected by the source.
 pub enum CoordinatorInput {
     /// A raw geyser SubscribeUpdate (Entry, Slot, BlockMeta).
     GeyserUpdate(Box<SubscribeUpdate>),
     /// A raw Account event was seen on the geyser stream for this bank.
-    /// Lightweight signal: only the slot and bank, no protobuf payload.
+    /// Lightweight signal: only the slot and bank, no protobuf payload. `bank_id` is the ID the
+    /// handlers get, so it names the delivery too.
     AccountEventSeen { slot: Slot, bank_id: u64 },
+    /// A reconnect cut off these banks. The coordinator drops the records and counts it holds
+    /// for each, keeps the block data of a frozen one, and rejects what handlers still parse
+    /// from the earlier delivery.
+    BanksDiscarded(Vec<DiscardedBank>),
 }
 
 /// Wraps a slot number with a deterministic ANSI color for log readability.

@@ -4,27 +4,38 @@
 //! while also forwarding transaction events to the Shipstern Runtime.
 //!
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    collections::{BTreeSet, HashMap},
+    path::PathBuf,
+    time::Duration,
+};
 
 use async_trait::async_trait;
-use futures_util::StreamExt;
+use futures_util::{stream::BoxStream, StreamExt};
 use shipstern::{
     sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     Error as ShipsternError,
 };
 use shipstern_core::CommitmentLevel;
 use shipstern_yellowstone_grpc_source::YellowstoneGrpcConfig;
+use solana_clock::Slot;
+use solana_hash::Hash;
 use tokio::sync::mpsc::Sender;
-use yellowstone_grpc_client::GeyserGrpcClient;
+use yellowstone_grpc_client::{
+    BankRef, GeyserGrpcClient, ReconnectConfig, ReconnectEvent, SlotWinner,
+};
 use yellowstone_grpc_proto::{
     geyser::{
         subscribe_update::UpdateOneof, SlotStatus, SubscribeRequest,
         SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterEntry, SubscribeUpdate,
     },
-    tonic::transport::ClientTlsConfig,
+    tonic::{transport::ClientTlsConfig, Status},
 };
 
-use crate::{fixtures::FixtureWriter, types::CoordinatorInput};
+use crate::{
+    fixtures::FixtureWriter,
+    types::{tag_bank_id, BankKey, CoordinatorInput, DiscardedBank, SlotOutcome},
+};
 
 const DEFAULT_STREAM_IDLE_WARN_SECS: u64 = 0;
 
@@ -53,6 +64,150 @@ fn validate_bank_id(update: &SubscribeUpdate) -> Result<(), &'static str> {
         },
         _ => Ok(()),
     }
+}
+
+/// How many slots behind the newest update a bank's replay epoch is kept. A bank this far behind
+/// is long finalized, so the server sends nothing more for it.
+const EPOCH_RETENTION_SLOTS: Slot = 4096;
+
+/// An item of the update stream: an update, or the banks a reconnect cut off.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Keep updates inline to avoid an allocation per message"
+)]
+enum StreamItem {
+    Update(SubscribeUpdate),
+    Discard {
+        banks: Vec<BankRef>,
+        winners: Vec<SlotWinner>,
+    },
+}
+
+impl From<ReconnectEvent> for StreamItem {
+    fn from(event: ReconnectEvent) -> Self {
+        match event {
+            ReconnectEvent::Update { update, .. } => Self::Update(update),
+            ReconnectEvent::DiscardBanks { banks, winners, .. } => Self::Discard { banks, winners },
+        }
+    }
+}
+
+///
+/// The delivery of each bank that a reconnect cut off, counted from 0.
+///
+/// The handlers send parsed records on their own channel, so a record of a cut-off delivery can
+/// reach the coordinator after the replay began. The handlers echo the bank ID of the update they
+/// parsed, so the source puts the epoch in the high bits of that ID, and the coordinator reads it
+/// back. A bank never cut off keeps the ID the server sent.
+///
+#[derive(Default)]
+struct ReplayEpochs {
+    epochs: HashMap<BankKey, u16>,
+}
+
+impl ReplayEpochs {
+    /// The bank ID to give the handlers for a bank of `slot`.
+    fn tag(&self, slot: Slot, bank_id: u64) -> Result<u64, &'static str> {
+        let epoch = self
+            .epochs
+            .get(&BankKey::new(slot, bank_id))
+            .copied()
+            .unwrap_or(0);
+        tag_bank_id(bank_id, epoch).ok_or("Bank ID is too large to carry a replay epoch")
+    }
+
+    /// Start the next delivery of each cut-off bank. `tip` is the newest slot seen.
+    fn discard(
+        &mut self,
+        banks: &[BankRef],
+        winners: &[SlotWinner],
+        tip: Option<Slot>,
+    ) -> Result<Vec<DiscardedBank>, String> {
+        if let Some(tip) = tip {
+            self.epochs
+                .retain(|key, _| key.slot.saturating_add(EPOCH_RETENTION_SLOTS) >= tip);
+        }
+
+        // One bank can be cut off in more than one connection, and it is replayed once.
+        let keys: BTreeSet<BankKey> = banks
+            .iter()
+            .map(|bank| BankKey::new(bank.slot, bank.bank_id))
+            .collect();
+
+        let mut discarded = Vec::with_capacity(keys.len());
+        for key in keys {
+            let outcome = winners
+                .iter()
+                .find_map(|winner| match winner {
+                    SlotWinner::Unknown { slot } if *slot == key.slot => {
+                        Some(Ok(SlotOutcome::Skipped))
+                    },
+                    SlotWinner::Finalized { slot, blockhash } if *slot == key.slot => Some(
+                        blockhash
+                            .parse::<Hash>()
+                            .map(SlotOutcome::Finalized)
+                            .map_err(|_| {
+                                format!("Finalized block of slot {slot} has a malformed blockhash")
+                            }),
+                    ),
+                    _ => None,
+                })
+                .ok_or_else(|| format!("No outcome for cut-off slot {}", key.slot))??;
+
+            let epoch = self.epochs.get(&key).copied().unwrap_or(0);
+            let epoch = epoch.checked_add(1).ok_or_else(|| {
+                format!(
+                    "Bank {} of slot {} was cut off too often",
+                    key.bank_id, key.slot
+                )
+            })?;
+            self.epochs.insert(key, epoch);
+            discarded.push(DiscardedBank {
+                slot: key.slot,
+                bank_id: key.bank_id,
+                epoch,
+                outcome,
+            });
+        }
+        Ok(discarded)
+    }
+}
+
+/// Give the handlers the bank ID that names the delivery. Returns the slot and tagged bank ID of
+/// an account update, which the coordinator counts.
+fn tag_runtime_update(
+    update: &mut SubscribeUpdate,
+    epochs: &ReplayEpochs,
+) -> Result<Option<(Slot, u64)>, &'static str> {
+    match update.update_oneof.as_mut() {
+        Some(UpdateOneof::Account(account)) => {
+            let Some(bank_id) = account.bank_id else {
+                return Ok(None);
+            };
+            let tagged = epochs.tag(account.slot, bank_id)?;
+            account.bank_id = Some(tagged);
+            Ok(Some((account.slot, tagged)))
+        },
+        Some(UpdateOneof::Transaction(transaction)) => {
+            transaction.bank_id = epochs.tag(transaction.slot, transaction.bank_id)?;
+            Ok(None)
+        },
+        _ => Ok(None),
+    }
+}
+
+/// The retry budget of the client's bank replay, or `None` for a source that does not reconnect.
+fn bank_replay(config: &YellowstoneGrpcConfig, source_label: &str) -> Option<ReconnectConfig> {
+    let reconnect = config.reconnect_config()?;
+    // The client's replay refuses a from_slot, since it picks the replay boundary itself.
+    if config.from_slot.is_some() {
+        tracing::info!(
+            source_label,
+            "from_slot is set, so the coordinator source does not reconnect"
+        );
+        return None;
+    }
+    Some(reconnect)
 }
 
 /// Config for CoordinatorSource.
@@ -127,8 +282,14 @@ fn add_coordinator_subscriptions(request: &mut SubscribeRequest) {
 /// 1. Forward the raw event to the coordinator (clone for BlockSM-relevant events)
 /// 2. Forward Account/Transaction events to the Shipstern Runtime (move, no clone)
 ///
-/// The source does not reconnect, so a stream loss ends it. It also stops when the
-/// server sends no bank IDs.
+/// After a stream loss the source reconnects through the client's bank replay, within the
+/// `auto-reconnect` and `reconnect-max-retries` budget. It does not reconnect when `from_slot`
+/// is set. The client names the banks that were cut off and replays them, and the source tells
+/// the coordinator to drop what it holds for them. The source stops when the server sends no
+/// bank IDs.
+///
+/// The source rewrites `bank_id` in the account and transaction updates it gives the runtime, but
+/// only for a bank the server replays after a cut-off.
 ///
 #[derive(Debug)]
 pub struct CoordinatorSource {
@@ -168,7 +329,7 @@ impl SourceTrait for CoordinatorSource {
             .unwrap_or("CoordinatorSource");
         let timeout = Duration::from_secs(config.timeout);
 
-        let builder = GeyserGrpcClient::build_from_shared(config.endpoint.clone())?
+        let mut builder = GeyserGrpcClient::build_from_shared(config.endpoint.clone())?
             .x_token(config.x_token.clone())?
             .max_decoding_message_size(config.max_decoding_message_size.unwrap_or(usize::MAX))
             .accept_compressed(config.accept_compression.unwrap_or_default().into())
@@ -176,14 +337,9 @@ impl SourceTrait for CoordinatorSource {
             .timeout(timeout)
             .tls_config(ClientTlsConfig::new().with_native_roots())?;
 
-        // Neither reconnect mode fits. Slot resume needs confirmed or finalized, but the
-        // coordinator runs at processed where a slot can have several banks. The client's
-        // bank replay rejects a from_slot and re-sends banks the coordinator already froze.
-        if config.auto_reconnect {
-            tracing::info!(
-                source_label,
-                "Coordinator source does not reconnect; it stops on stream loss"
-            );
+        let replay = bank_replay(config, source_label);
+        if let Some(reconnect) = &replay {
+            builder = builder.set_reconnect_config(reconnect.clone());
         }
 
         let mut client = builder.connect().await?;
@@ -225,11 +381,20 @@ impl SourceTrait for CoordinatorSource {
             "subscribing to gRPC stream"
         );
 
-        let (_sub_tx, stream) = client
-            .subscribe_with_request(Some(subscribe_request))
-            .await?;
-
-        let mut stream = std::pin::pin!(stream);
+        let (_sub_tx, mut stream): (_, BoxStream<'_, Result<StreamItem, Status>>) =
+            if replay.is_some() {
+                let (sink, stream) = client
+                    .subscribe_with_reconnect(Some(subscribe_request))
+                    .await?;
+                let stream = stream.map(|event| event.map(StreamItem::from));
+                (sink, stream.boxed())
+            } else {
+                let (sink, stream) = client
+                    .subscribe_with_request(Some(subscribe_request))
+                    .await?;
+                let stream = stream.map(|update| update.map(StreamItem::Update));
+                (sink, stream.boxed())
+            };
 
         tracing::info!(source_label, "gRPC stream started");
 
@@ -237,9 +402,10 @@ impl SourceTrait for CoordinatorSource {
         let stream_idle_timeout = Duration::from_secs(idle_warn_secs);
         let mut last_seen_slot: Option<u64> = None;
         let mut idle_since: Option<std::time::Instant> = None;
+        let mut epochs = ReplayEpochs::default();
 
         let exit_status = 'stream: loop {
-            let update = if idle_warn_secs == 0 {
+            let item = if idle_warn_secs == 0 {
                 match stream.next().await {
                     Some(update) => update,
                     None => break SourceExitStatus::StreamEnded,
@@ -277,6 +443,33 @@ impl SourceTrait for CoordinatorSource {
                 }
             };
 
+            let mut update = match item {
+                Ok(StreamItem::Update(update)) => Ok(update),
+                Ok(StreamItem::Discard { banks, winners }) => {
+                    let discarded = match epochs.discard(&banks, &winners, last_seen_slot) {
+                        Ok(discarded) => discarded,
+                        Err(message) => break SourceExitStatus::Error(message),
+                    };
+                    tracing::warn!(
+                        source_label,
+                        bank_count = discarded.len(),
+                        "Reconnected; the server replays the banks that were cut off"
+                    );
+                    if coordinator_tx
+                        .send(CoordinatorInput::BanksDiscarded(discarded))
+                        .await
+                        .is_err()
+                    {
+                        tracing::error!("Coordinator input channel closed");
+                        break SourceExitStatus::Error(
+                            "Coordinator input channel closed".to_string(),
+                        );
+                    }
+                    continue;
+                },
+                Err(status) => Err(status),
+            };
+
             if let Ok(subscribe_update) = &update {
                 // The block machine reads a status it does not know as processed, so a
                 // status from a newer server would advance the wrong bank. Skip it.
@@ -310,16 +503,20 @@ impl SourceTrait for CoordinatorSource {
                 }
             }
 
+            let account_seen = match &mut update {
+                Ok(subscribe_update) => match tag_runtime_update(subscribe_update, &epochs) {
+                    Ok(seen) => seen,
+                    Err(message) => break SourceExitStatus::Error(message.to_string()),
+                },
+                Err(_) => None,
+            };
+
             match &update {
                 Ok(subscribe_update) => {
                     // Send lightweight AccountEventSeen for each Account event.
-                    if let Some(UpdateOneof::Account(acct)) = &subscribe_update.update_oneof
-                        && let Some(bank_id) = acct.bank_id
+                    if let Some((slot, bank_id)) = account_seen
                         && coordinator_tx
-                            .send(CoordinatorInput::AccountEventSeen {
-                                slot: acct.slot,
-                                bank_id,
-                            })
+                            .send(CoordinatorInput::AccountEventSeen { slot, bank_id })
                             .await
                             .is_err()
                     {
