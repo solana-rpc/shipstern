@@ -83,39 +83,29 @@ pub fn event_parser(
             logs: &[String],
         ) -> Vec<#wrapper_ident> {
             const PREFIX: &str = "Program data: ";
-            const PROGRAM_PREFIX: &str = "Program ";
 
-            fn invoked_program(line: &str) -> Option<&str> {
-                let line = line.strip_prefix(PROGRAM_PREFIX)?;
-                let (program, _) = line.split_once(" invoke [")?;
-                Some(program)
-            }
-
-            fn closes_invocation(line: &str) -> bool {
-                line.starts_with(PROGRAM_PREFIX)
-                    && (line.ends_with(" success") || line.contains(" failed:"))
-            }
-
-            let target_program = ::shipstern_core::Pubkey::new(PROGRAM_ID).to_string();
-            let mut invocation_stack = Vec::<String>::new();
+            let target_program = ::shipstern_core::Pubkey::new(PROGRAM_ID);
+            let mut invocation_stack = Vec::<Option<::shipstern_core::Pubkey>>::new();
             let mut events = Vec::new();
 
             for line in logs {
-                if let Some(program) = invoked_program(line) {
-                    invocation_stack.push(program.to_owned());
-                    continue;
-                }
-
-                if closes_invocation(line) {
-                    invocation_stack.pop();
-                    continue;
+                match ::shipstern_core::log_messages::classify_log_line(line) {
+                    ::shipstern_core::log_messages::LogLineKind::Invoke => {
+                        invocation_stack.push(::shipstern_core::log_messages::invoked_program(line));
+                        continue;
+                    }
+                    ::shipstern_core::log_messages::LogLineKind::Close => {
+                        invocation_stack.pop();
+                        continue;
+                    }
+                    ::shipstern_core::log_messages::LogLineKind::Other => {}
                 }
 
                 let Some(encoded) = line.strip_prefix(PREFIX) else {
                     continue;
                 };
 
-                if invocation_stack.last().map(String::as_str) != Some(target_program.as_str()) {
+                if invocation_stack.last() != Some(&Some(target_program)) {
                     continue;
                 }
 

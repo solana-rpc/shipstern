@@ -125,6 +125,22 @@ fn ignores_nested_goosefx_program_data_for_jupiter_swap_event() {
 }
 
 #[test]
+fn program_log_lines_do_not_close_the_invocation() {
+    let encoded = swap_event_log_payload();
+    let logs = vec![
+        format!("Program {JUPITER_PROGRAM_ID} invoke [1]"),
+        "Program log: Swap success".to_string(),
+        "Program log: Transfer failed: insufficient funds".to_string(),
+        "Program log: Program X invoke [2]".to_string(),
+        format!("Program data: {encoded}"),
+        format!("Program {JUPITER_PROGRAM_ID} success"),
+    ];
+
+    let events = jupiter_regression::resolve_events_from_logs(&logs);
+    assert_eq!(events.len(), 1, "log payloads must not pop or push the invocation stack");
+}
+
+#[test]
 fn parses_top_level_jupiter_program_data_for_swap_event() {
     let encoded = swap_event_log_payload();
     let logs = vec![
