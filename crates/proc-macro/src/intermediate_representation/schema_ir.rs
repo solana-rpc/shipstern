@@ -273,20 +273,16 @@ impl SchemaIr {
         type_node: &TypeNode,
         visiting_links: &mut HashSet<String>,
     ) -> Option<usize> {
-        use codama_nodes::{CountNode, DefaultValueStrategy, TypeNode as T};
+        use codama_nodes::{CountNode, TypeNode as T};
 
         match type_node {
             T::Boolean(_) => Some(1),
             T::PublicKey(_) => Some(32),
             T::Number(number) => number_wire_size(number.format),
             T::FixedSize(fixed) => Some(fixed.size),
-            T::Struct(struct_type) => struct_type
-                .fields
-                .iter()
-                .filter(|field| field.default_value_strategy != Some(DefaultValueStrategy::Omitted))
-                .try_fold(0usize, |size, field| {
-                    size.checked_add(self.fixed_size_of_type_inner(&field.r#type, visiting_links)?)
-                }),
+            T::Struct(struct_type) => struct_type.fields.iter().try_fold(0usize, |size, field| {
+                size.checked_add(self.fixed_size_of_type_inner(&field.r#type, visiting_links)?)
+            }),
             T::Tuple(tuple) => tuple.items.iter().try_fold(0usize, |size, item| {
                 size.checked_add(self.fixed_size_of_type_inner(item, visiting_links)?)
             }),

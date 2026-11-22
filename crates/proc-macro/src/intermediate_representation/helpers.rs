@@ -61,15 +61,22 @@ impl FieldLikeNode for codama_nodes::InstructionArgumentNode {
 pub fn build_fields_ir(
     parent_name: &str,
     fields: &[impl FieldLikeNode],
+    discriminators: &[codama_nodes::DiscriminatorNode],
     ir: &mut SchemaIr,
     tuple_msg_kind: TypeKindIr,
 ) -> Vec<FieldIr> {
     let mut out = Vec::new();
     let mut tag: u32 = 0;
     let mut seen_names: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let prefix_len = discriminator_prefix_len(fields, discriminators);
 
-    for field in fields {
-        if field.default_value_strategy() == Some(codama_nodes::DefaultValueStrategy::Omitted) {
+    for (index, field) in fields.iter().enumerate() {
+        let omitted =
+            field.default_value_strategy() == Some(codama_nodes::DefaultValueStrategy::Omitted);
+
+        // An omitted field is still on the wire. Only the discriminator prefix is dropped
+        // before the struct is decoded, so any other omitted field is decoded and kept.
+        if omitted && index < prefix_len {
             continue;
         }
 
@@ -106,6 +113,35 @@ pub fn build_fields_ir(
     }
 
     out
+}
+
+/// How many leading fields the parser strips as a discriminator prefix.
+///
+/// A field discriminator names a carrier field, and the parser drops every byte up to the end of
+/// it, so the fields up to the last carrier never reach the struct decoder. A constant or size
+/// discriminator names no field, so all omitted fields stay skipped as they always were. Without
+/// discriminators nothing is stripped.
+fn discriminator_prefix_len(
+    fields: &[impl FieldLikeNode],
+    discriminators: &[codama_nodes::DiscriminatorNode],
+) -> usize {
+    if discriminators.is_empty() {
+        return 0;
+    }
+
+    let mut carriers = Vec::new();
+
+    for discriminator in discriminators {
+        match discriminator {
+            codama_nodes::DiscriminatorNode::Field(node) => carriers.push(&node.name),
+            _ => return usize::MAX,
+        }
+    }
+
+    fields
+        .iter()
+        .rposition(|field| carriers.contains(&field.name()))
+        .map_or(usize::MAX, |index| index + 1)
 }
 
 /// Materialize a Codama type whenever its protobuf form needs a named message,
@@ -294,7 +330,13 @@ fn materialize_struct_message(
     ir: &mut SchemaIr,
     type_kind: TypeKindIr,
 ) -> String {
-    let fields = build_fields_ir(struct_msg_name, &struct_type.fields, ir, type_kind.clone());
+    let fields = build_fields_ir(
+        struct_msg_name,
+        &struct_type.fields,
+        &[],
+        ir,
+        type_kind.clone(),
+    );
 
     ir.push_unique_type(TypeIr {
         name: struct_msg_name.to_string(),

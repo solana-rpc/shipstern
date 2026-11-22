@@ -102,7 +102,7 @@ fn build_defined_type_struct(
     struct_type_node: &codama_nodes::StructTypeNode,
     ir: &mut SchemaIr,
 ) {
-    let fields = build_fields_ir(name, &struct_type_node.fields, ir, TypeKindIr::Helper);
+    let fields = build_fields_ir(name, &struct_type_node.fields, &[], ir, TypeKindIr::Helper);
 
     ir.types.push(TypeIr {
         name: name.to_string(),
@@ -284,8 +284,13 @@ fn build_enum_variant_payload(
 
             let payload_name = format!("{}{}", enum_name, variant_name);
 
-            let fields =
-                build_fields_ir(&payload_name, &struct_type.fields, ir, TypeKindIr::Helper);
+            let fields = build_fields_ir(
+                &payload_name,
+                &struct_type.fields,
+                &[],
+                ir,
+                TypeKindIr::Helper,
+            );
 
             (variant_name, fields)
         },

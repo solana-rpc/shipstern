@@ -51,7 +51,13 @@ pub fn build_accounts(accounts: &[AccountNode], ir: &mut SchemaIr) {
         // AccountNode.data is NestedTypeNode<StructTypeNode> in Codama.
         let struct_type_node = unwrap_nested_struct(&account.data);
 
-        let fields = build_fields_ir(&name, &struct_type_node.fields, ir, TypeKindIr::Helper);
+        let fields = build_fields_ir(
+            &name,
+            &struct_type_node.fields,
+            &account.discriminators,
+            ir,
+            TypeKindIr::Helper,
+        );
 
         ir.types.push(TypeIr {
             name,
