@@ -1,5 +1,8 @@
 use shipstern_bpf_loader_parser::{instruction, InstructionParser};
-use shipstern_core::{Parser, Pubkey};
+use shipstern_core::{
+    instruction::{InstructionUpdate, Path},
+    Parser, ProgramParser, Pubkey,
+};
 use shipstern_mock::tx_fixture;
 
 #[tokio::test]
@@ -21,7 +24,8 @@ async fn parse_initialize_buffer_ix() {
 
     let accounts = ib.accounts.as_ref().expect("missing accounts");
     assert_ne!(accounts.buffer, Pubkey::default());
-    assert_ne!(accounts.authority, Pubkey::default());
+    assert_ne!(accounts.authority, Some(Pubkey::default()));
+    assert!(accounts.authority.is_some());
 }
 
 #[tokio::test]
@@ -47,4 +51,49 @@ async fn parse_upgrade_ix() {
     assert_ne!(accounts.buffer, Pubkey::default());
     assert_ne!(accounts.spill, Pubkey::default());
     assert_ne!(accounts.authority, Pubkey::default());
+}
+
+fn initialize_buffer_ix(accounts: Vec<Pubkey>) -> InstructionUpdate {
+    InstructionUpdate {
+        program: InstructionParser.program_id(),
+        accounts,
+        data: vec![0, 0, 0, 0],
+        shared: Default::default(),
+        inner: vec![],
+        path: Path::new_single(0),
+        log_range: 0..0,
+    }
+}
+
+#[tokio::test]
+async fn initialize_buffer_without_authority_is_immutable_buffer() {
+    let buffer = Pubkey::new([7; 32]);
+    let ix = initialize_buffer_ix(vec![buffer]);
+
+    let parsed = InstructionParser
+        .parse(&ix)
+        .await
+        .expect("a single-account InitializeBuffer must parse");
+
+    let Some(instruction::Instruction::InitializeBuffer(ib)) = parsed.instruction else {
+        panic!("Invalid Instruction");
+    };
+    let accounts = ib.accounts.expect("missing accounts");
+
+    assert_eq!(accounts.buffer, buffer);
+    assert_eq!(accounts.authority, None);
+}
+
+#[tokio::test]
+async fn initialize_buffer_with_authority_keeps_it() {
+    let authority = Pubkey::new([9; 32]);
+    let ix = initialize_buffer_ix(vec![Pubkey::new([7; 32]), authority]);
+
+    let parsed = InstructionParser.parse(&ix).await.unwrap();
+
+    let Some(instruction::Instruction::InitializeBuffer(ib)) = parsed.instruction else {
+        panic!("Invalid Instruction");
+    };
+
+    assert_eq!(ib.accounts.unwrap().authority, Some(authority));
 }

@@ -50,13 +50,13 @@ impl InstructionParser {
 
         let ix_msg = match ix_type {
             UpgradeableLoaderInstruction::InitializeBuffer => {
-                check_min_accounts_req(accounts_len, 2)?;
+                check_min_accounts_req(accounts_len, 1)?;
 
                 crate::instruction::Instruction::InitializeBuffer(
                     crate::instruction::InitializeBuffer {
                         accounts: Some(crate::InitializeBufferAccounts {
                             buffer: Pubkey::new(ix.accounts[0].0),
-                            authority: Pubkey::new(ix.accounts[1].0),
+                            authority: ix.accounts.get(1).map(|k| Pubkey::new(k.0)),
                         }),
                     },
                 )

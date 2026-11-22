@@ -7,7 +7,7 @@ use shipstern_proc_macro::shipstern;
 #[derive(Clone, PartialEq)]
 pub struct InitializeBufferAccounts {
     pub buffer: Pubkey,
-    pub authority: Pubkey,
+    pub authority: Option<Pubkey>,
 }
 
 #[shipstern]

@@ -33,7 +33,7 @@ message BpfLoaderState {
 
 message InitializeBufferAccounts {
   PublicKey buffer = 1;
-  PublicKey authority = 2;
+  optional PublicKey authority = 2;
 }
 
 message WriteAccounts {
