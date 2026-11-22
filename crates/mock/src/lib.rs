@@ -16,7 +16,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 pub use futures;
@@ -564,26 +567,40 @@ fn write_fixture(
                 let writable = AccountInfo::try_from(account.clone())?;
                 let data = serde_json::to_string(&writable)?;
 
-                fs::write(&path, data)?;
+                write_atomically(&path, data.as_bytes())?;
             },
             FixtureData::Instructions(fixture) => {
                 let data = serde_json::to_string(&fixture)?;
-                fs::write(&path, data)?;
+                write_atomically(&path, data.as_bytes())?;
             },
         }
         Ok(data)
     }
 }
 
-fn maybe_create_fixture_dir() -> std::io::Result<()> {
-    let dir_exists = Path::new(FIXTURES_PATH).is_dir();
+/// Writes to a sibling temp file and renames it into place, so a concurrent reader sees either
+/// the old file or the whole new one.
+fn write_atomically(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
 
-    if dir_exists {
-        return Ok(());
-    }
+    let mut tmp_name = path.as_os_str().to_owned();
+    tmp_name.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        NEXT_TMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    let tmp = PathBuf::from(tmp_name);
 
-    std::fs::create_dir(FIXTURES_PATH)
+    fs::write(&tmp, data)?;
+
+    fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = fs::remove_file(&tmp);
+    })
 }
+
+fn maybe_create_fixture_dir() -> std::io::Result<()> { ensure_dir(Path::new(FIXTURES_PATH)) }
+
+fn ensure_dir(dir: &Path) -> std::io::Result<()> { fs::create_dir_all(dir) }
 
 #[derive(Debug, Clone, Copy)]
 pub enum FixtureType {
@@ -677,6 +694,66 @@ mod tests {
     use shipstern_core::{ParseError, ParseResult, Parser, Prefilter};
 
     use super::*;
+
+    #[test]
+    fn creating_the_fixture_dir_concurrently_succeeds() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("fixtures");
+
+        let start = std::sync::Barrier::new(16);
+
+        let results: Vec<_> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..16)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        ensure_dir(&dir)
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        assert!(dir.is_dir());
+    }
+
+    #[test]
+    fn write_atomically_never_exposes_a_partial_file() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("fixture.json");
+        let first = vec![b'a'; 1 << 20];
+        let second = vec![b'b'; 1 << 20];
+        write_atomically(&path, &first).unwrap();
+
+        let done = std::sync::atomic::AtomicBool::new(false);
+
+        std::thread::scope(|scope| {
+            let reader = scope.spawn(|| {
+                let mut reads = 0;
+                while !done.load(Ordering::Relaxed) {
+                    let seen = fs::read(&path).unwrap();
+                    assert!(
+                        seen == first || seen == second,
+                        "partial read of {} bytes",
+                        seen.len()
+                    );
+                    reads += 1;
+                }
+                reads
+            });
+
+            for i in 0..200 {
+                write_atomically(&path, if i % 2 == 0 { &second } else { &first }).unwrap();
+            }
+            done.store(true, Ordering::Relaxed);
+
+            assert!(reader.join().unwrap() > 0);
+        });
+
+        let leftovers = fs::read_dir(root.path()).unwrap().count();
+        assert_eq!(leftovers, 1, "temp files were left behind");
+    }
 
     const FRMIX: &str = "FRMiX94PWHbndvySq8xyRx185GvPeggUeKaLmZgVdd4";
 

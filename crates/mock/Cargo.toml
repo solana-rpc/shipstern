@@ -23,3 +23,6 @@ regex.workspace = true
 # solana-transaction-status 4.x hides its whole API behind this feature.
 solana-transaction-status = { workspace = true, features = ["agave-unstable-api"] }
 futures.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
