@@ -11,6 +11,7 @@ mod parse;
 mod render;
 mod shipstern;
 mod utils;
+mod validate;
 
 #[cfg(test)]
 mod anchor_parity_tests;
@@ -299,6 +300,14 @@ fn expand_parser_tokens(
         };
     }
 
+    if let Err(message) = validate::validate_idl(&idl, &events) {
+        let error_msg = format!("Invalid IDL {:?}: {}", full_path, message);
+
+        return quote::quote! {
+            compile_error!(#error_msg);
+        };
+    }
+
     let parser = crate::render::shipstern_parser(&idl, &events, &config);
 
     quote::quote! {
@@ -421,6 +430,66 @@ mod expansion_tests {
             tokens.contains("not valid"),
             "decode message missing: {tokens}",
         );
+    }
+
+    /// `ABC` and `Abc` keep distinct variants but share `parse_abc`.
+    #[test]
+    fn instruction_names_colliding_in_helpers_are_rejected() {
+        let tokens = expand("invalid_helper_name_collision.json", false);
+
+        assert!(tokens.contains("compile_error"), "no compile_error emitted");
+        assert!(
+            tokens.contains("`ABC` and `Abc`") && tokens.contains("parse_abc"),
+            "message must name both instructions and the identifier: {tokens}",
+        );
+    }
+
+    /// `_abc` and `abc` differ in snake case but fold to one pascal-case variant, so
+    /// a guard on the `parse_*` names alone would let them through.
+    #[test]
+    fn instruction_names_colliding_only_in_pascal_case_are_rejected() {
+        let tokens = expand("invalid_underscore_name_collision.json", false);
+
+        assert!(tokens.contains("compile_error"), "no compile_error emitted");
+        assert!(
+            tokens.contains("`_abc` and `abc`"),
+            "message must name both instructions: {tokens}",
+        );
+    }
+
+    /// Non-ASCII names do not fold together, so such an IDL keeps compiling.
+    #[test]
+    fn non_ascii_instruction_names_do_not_collide() {
+        let tokens = expand("unicode_collision.json", false);
+
+        assert!(
+            !tokens.contains("compile_error"),
+            "unexpected compile_error: {tokens}",
+        );
+    }
+
+    /// Only the fixtures built to fail may emit a `compile_error!`.
+    #[test]
+    fn only_designed_invalid_fixtures_fail_expansion() {
+        let designed = [
+            "colliding_envelope.json",
+            "mismatched_payload_offsets.json",
+            "malformed_envelope_discriminator.json",
+        ];
+
+        for entry in std::fs::read_dir(fixture("")).expect("tests/idls is readable") {
+            let path = entry.expect("readable dir entry").path();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+
+            let fails = expand(&name, false).contains("compile_error");
+            let expected = name.starts_with("invalid_") || designed.contains(&name.as_str());
+
+            assert_eq!(fails, expected, "{name}: compile_error presence changed");
+        }
     }
 
     /// The deprecation fires only when an IDL envelope and macro args conflict.
