@@ -36,6 +36,7 @@ reqwest = { workspace = true }
 
 [dev-dependencies]
 mockito = "1"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [features]
 experimental-account-parser = []
