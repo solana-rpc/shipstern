@@ -6051,7 +6051,6 @@ dependencies = [
  "async-trait",
  "clap",
  "crossbeam-channel",
- "futures-channel",
  "futures-util",
  "opentelemetry 0.24.0",
  "prometheus",
@@ -6549,7 +6548,6 @@ version = "0.13.0"
 dependencies = [
  "async-trait",
  "clap",
- "futures-channel",
  "futures-util",
  "pin-project-lite",
  "prometheus",

@@ -12,7 +12,6 @@ readme = "./../../README.md"
 async-trait = { workspace = true }
 clap = { workspace = true, features = ["env", "derive", "std"] }
 crossbeam-channel = { workspace = true }
-futures-channel = { workspace = true, features = ["sink"] }
 futures-util = { workspace = true, features = ["sink"] }
 opentelemetry = { workspace = true, features = ["metrics"], optional = true }
 prometheus = { workspace = true, features = ["push"], optional = true }
