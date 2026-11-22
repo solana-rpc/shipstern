@@ -19,6 +19,7 @@ use yellowstone_grpc_proto::{
 };
 
 use crate::{
+    builder::BuilderError,
     config::BufferConfig,
     instruction::InstructionPipeline,
     sources::{FilterUpdateSource, SourceContext, SourceExitStatus, SourceTrait},
@@ -830,6 +831,36 @@ impl Handler<BlockFooterUpdate, BlockFooterUpdate> for FooterHandler {
         FOOTERS_HANDLED.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SlotIdFooterParser;
+
+impl Parser for SlotIdFooterParser {
+    type Input = BlockFooterUpdate;
+    type Output = BlockFooterUpdate;
+
+    fn id(&self) -> Cow<'static, str> { TEST_SLOT_FILTER.into() }
+
+    fn prefilter(&self) -> Prefilter { Prefilter::builder().block_footers(false).build().unwrap() }
+
+    async fn parse(&self, value: &Self::Input) -> ParseResult<Self::Output> { Ok(value.clone()) }
+}
+
+#[test]
+fn test_parser_id_shared_across_pipeline_kinds_is_a_build_error() {
+    let err = Runtime::builder()
+        .slot(Pipeline::new(SlowSlotParser, [SlowSlotHandler(
+            &UNCOUNTED_SLOTS,
+        )]))
+        .block_footer(Pipeline::new(SlotIdFooterParser, [FooterHandler]))
+        .try_build_with(MockStreamEndSource, default_buffer_config())
+        .unwrap_err();
+
+    assert!(
+        matches!(&err, BuilderError::ParserIdCollision(id) if id == TEST_SLOT_FILTER),
+        "expected a collision on {TEST_SLOT_FILTER}, got {err:?}"
+    );
 }
 
 #[tokio::test]

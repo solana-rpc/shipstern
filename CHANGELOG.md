@@ -15,6 +15,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- `shipstern`: building a runtime with pipelines of different kinds that share a parser ID, a slot and a block footer for instance, no longer silently drops one of their prefilters. It fails with `BuilderError::ParserIdCollision`. **Breaking** for exhaustive `BuilderError` matches, which need a wildcard arm ([#429](https://github.com/solana-rpc/shipstern/pull/429) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 
