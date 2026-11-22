@@ -84,13 +84,13 @@ impl InstructionPipeline {
                     continue;
                 }
 
-                let res = pipe.handle(insn).await;
+                let res = pipe.handle_reporting_filtered(insn).await;
 
                 #[cfg(feature = "prometheus")]
                 metrics::increment_processed_updates(&res, metrics::UpdateType::Instruction);
 
                 match res {
-                    Ok(()) => (),
+                    Ok(_) => (),
                     Err(PipelineErrors::AlreadyHandled(h)) => h.as_unit(),
                     Err(e) => {
                         let handled = e.handle::<InstructionUpdate>(&pipe.id());
@@ -172,13 +172,13 @@ impl SingleInstructionPipeline {
         let pipe = &self.0;
 
         for insn in ixs.iter().flat_map(|i| i.visit_all()) {
-            let res = pipe.handle(insn).await;
+            let res = pipe.handle_reporting_filtered(insn).await;
 
             #[cfg(feature = "prometheus")]
             metrics::increment_processed_updates(&res, metrics::UpdateType::Instruction);
 
             match res {
-                Ok(()) => (),
+                Ok(_) => (),
                 Err(PipelineErrors::AlreadyHandled(h)) => h.as_unit(),
                 Err(e) => err = Some(e.handle::<InstructionUpdate>(&pipe.id())),
             }

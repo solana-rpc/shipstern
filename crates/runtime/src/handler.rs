@@ -156,6 +156,12 @@ where
     /// # Errors
     /// If any of the related handlers executions errors, returns those errors
     pub async fn handle(&self, value: &P::Input) -> Result<(), PipelineErrors> {
+        self.handle_reporting_filtered(value).await.map(|_| ())
+    }
+
+    /// [`Self::handle`], reporting whether the handlers ran. `false` means the
+    /// parser filtered the value out, so nothing was handled.
+    async fn handle_reporting_filtered(&self, value: &P::Input) -> Result<bool, PipelineErrors> {
         let parsed = match self
             .0
             .parse(value)
@@ -163,7 +169,7 @@ where
             .await
         {
             Ok(p) => p,
-            Err(ParseError::Filtered) => return Ok(()),
+            Err(ParseError::Filtered) => return Ok(false),
             Err(ParseError::DiscriminatorNotFound(msg)) => {
                 return Err(PipelineErrors::Parse(msg.into()));
             },
@@ -184,7 +190,7 @@ where
             .await;
 
         if errs.is_empty() {
-            Ok(())
+            Ok(true)
         } else {
             Err(PipelineErrors::Handlers(errs))
         }
@@ -203,6 +209,19 @@ pub trait DynPipeline<T>: std::fmt::Debug + ParserId + GetPrefilter {
     /// A transaction filter that a bundle checks in the client. Bundled parsers share one
     /// server filter, so other members can bring transactions that this filter rejects.
     fn client_filter(&self) -> Option<&TransactionPrefilter> { None }
+
+    /// [`Self::handle`], reporting `false` when the parser filtered the value
+    /// out and no handler ran. The runtime counts instruction metrics with it.
+    /// A pipeline that cannot tell reports `true`.
+    #[doc(hidden)]
+    fn handle_reporting_filtered<'h>(
+        &'h self,
+        value: &'h T,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, PipelineErrors>> + Send + 'h>> {
+        let handled = self.handle(value);
+
+        Box::pin(async move { handled.await.map(|()| true) })
+    }
 }
 
 impl<T> DynPipeline<T> for std::convert::Infallible {
@@ -210,6 +229,13 @@ impl<T> DynPipeline<T> for std::convert::Infallible {
         &'h self,
         _: &'h T,
     ) -> Pin<Box<dyn Future<Output = Result<(), PipelineErrors>> + Send + 'h>> {
+        match *self {}
+    }
+
+    fn handle_reporting_filtered<'h>(
+        &'h self,
+        _: &'h T,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, PipelineErrors>> + Send + 'h>> {
         match *self {}
     }
 }
@@ -227,6 +253,13 @@ where
         value: &'h P::Input,
     ) -> Pin<Box<dyn Future<Output = Result<(), PipelineErrors>> + Send + 'h>> {
         Box::pin(Pipeline::handle(self, value))
+    }
+
+    fn handle_reporting_filtered<'h>(
+        &'h self,
+        value: &'h P::Input,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, PipelineErrors>> + Send + 'h>> {
+        Box::pin(Pipeline::handle_reporting_filtered(self, value))
     }
 }
 
@@ -251,6 +284,14 @@ impl<T> DynPipeline<T> for BoxPipeline<'_, T> {
     #[inline]
     fn client_filter(&self) -> Option<&TransactionPrefilter> {
         <dyn DynPipeline<T>>::client_filter(&**self)
+    }
+
+    #[inline]
+    fn handle_reporting_filtered<'h>(
+        &'h self,
+        value: &'h T,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, PipelineErrors>> + Send + 'h>> {
+        <dyn DynPipeline<T>>::handle_reporting_filtered(&**self, value)
     }
 }
 
@@ -352,13 +393,13 @@ where I::Item: AsRef<str> + Send + 'm
     {
         let _span = span.entered();
         futures_util::future::join_all(self.get_pipelines().map(move |(f, h)| {
-            h.handle(value)
+            h.handle_reporting_filtered(value)
                 .map(move |r| {
                     #[cfg(feature = "prometheus")]
                     metrics::increment_processed_updates(&r, update_type);
 
                     match r {
-                        Ok(()) => (),
+                        Ok(_) => (),
                         Err(v) => v.handle::<T>(f.as_ref()).as_unit(),
                     }
                 })

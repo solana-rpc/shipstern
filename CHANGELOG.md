@@ -16,6 +16,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
 - `shipstern`: `shipstern_transactions_successful` no longer counts the instruction pipelines a second time for a transaction whose instructions all succeed. Instruction pipelines count only in the `shipstern_instructions_*` metrics, and a failure to build a transaction's instruction tree now counts in `shipstern_instructions_parsing_errors` instead of `shipstern_transactions_parsing_errors` ([#405](https://github.com/solana-rpc/shipstern/pull/405) by @Estereg).
+- `shipstern`: the `_successful` metrics no longer count an update a parser filtered out, so `shipstern_instructions_successful`, `shipstern_transactions_successful` and the other kinds count only updates a parser parsed and its handlers ran ([#428](https://github.com/solana-rpc/shipstern/pull/428) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 
