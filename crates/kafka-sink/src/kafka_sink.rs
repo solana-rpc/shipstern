@@ -85,20 +85,27 @@ where
     unreachable!("max_attempts >= 1")
 }
 
+/// Commits the open transaction, resuming the commit for as long as the error is retriable.
+///
+/// A retriable commit error means the commit is still running in the background. Giving up
+/// then would leave the producer mid-commit, and replaying the slot could either fail on
+/// `begin_transaction` or write the slot twice once the first commit lands. The commit
+/// ends in success, an abortable error, or a fatal one.
 async fn commit_transactional_op<F>(
     producer: &FutureProducer,
     timeout: Duration,
     backoff: Duration,
-    max_attempts: u32,
     context: &'static str,
     mut op: F,
 ) -> Result<(), TransactionCommitError>
 where
     F: FnMut(&FutureProducer, Duration) -> Result<(), KafkaError>,
 {
-    let max_attempts = max_attempts.max(1);
+    let mut attempt = 0_u32;
 
-    for attempt in 1..=max_attempts {
+    loop {
+        attempt = attempt.saturating_add(1);
+
         match op(producer, timeout) {
             Ok(()) => return Ok(()),
             Err(KafkaError::Transaction(txn)) if txn.txn_requires_abort() => {
@@ -109,15 +116,11 @@ where
                     transaction_error_context(&err),
                 )));
             },
-            Err(KafkaError::Transaction(txn)) if txn.is_retriable() && attempt < max_attempts => {
+            Err(KafkaError::Transaction(txn)) if txn.is_retriable() => {
                 tracing::warn!(
                     attempt,
-                    max_attempts,
                     code = ?txn.code(),
-                    retriable = txn.is_retriable(),
-                    abort_required = txn.txn_requires_abort(),
-                    fatal = txn.is_fatal(),
-                    "Kafka transactional commit failed, retrying"
+                    "Kafka transactional commit still in flight, resuming"
                 );
 
                 sleep(backoff).await;
@@ -130,8 +133,6 @@ where
             },
         }
     }
-
-    unreachable!("max_attempts >= 1")
 }
 
 async fn with_retry<F, Fut, R>(
@@ -494,7 +495,6 @@ impl SlotWriteExecutor {
             self.producer(),
             timeout,
             self.transaction_retry_policy.backoff,
-            self.transaction_retry_policy.max_attempts,
             "Failed to commit Kafka transaction",
             |producer, timeout| producer.commit_transaction(timeout),
         )
@@ -951,12 +951,101 @@ impl From<AccountCommitAt> for CommitScope {
 
 #[cfg(test)]
 mod tests {
+    use rdkafka::{
+        consumer::{BaseConsumer, Consumer},
+        mocking::MockCluster,
+        producer::DefaultProducerContext,
+        ClientConfig, Message,
+    };
     #[cfg(feature = "experimental-account-parser")]
     use shipstern_block_coordinator::AccountSlot;
     use shipstern_block_coordinator::InstructionSlot;
 
     use super::*;
-    use crate::events::{AccountSlotCommitEvent, MarkerType};
+    use crate::{
+        create_producer,
+        events::{AccountSlotCommitEvent, MarkerType},
+    };
+
+    fn ordered_records(topic: &str, count: usize) -> Vec<PreparedRecord> {
+        (0..count)
+            .map(|i| PreparedRecord {
+                key: format!("{i:04}"),
+                ..record(topic, RecordKind::Instruction, true)
+            })
+            .collect()
+    }
+
+    fn consume_keys(brokers: &str, topic: &str, count: usize) -> Vec<String> {
+        let consumer: BaseConsumer = ClientConfig::new()
+            .set("bootstrap.servers", brokers)
+            .set("group.id", "kafka-sink-test")
+            .set("auto.offset.reset", "earliest")
+            .set("enable.auto.commit", "false")
+            .create()
+            .expect("create test consumer");
+
+        consumer.subscribe(&[topic]).expect("subscribe");
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let mut keys = Vec::new();
+
+        while keys.len() < count && std::time::Instant::now() < deadline {
+            if let Some(Ok(message)) = consumer.poll(Duration::from_millis(100)) {
+                keys.push(String::from_utf8(message.key().expect("key").to_vec()).expect("utf8"));
+            }
+        }
+
+        keys
+    }
+
+    #[tokio::test]
+    async fn commit_that_times_out_is_resumed_instead_of_abandoned() {
+        let cluster = MockCluster::<DefaultProducerContext>::new(1).expect("mock cluster");
+        cluster
+            .create_topic("committed", 1, 1)
+            .expect("create topic");
+
+        let config = KafkaSinkConfig {
+            brokers: cluster.bootstrap_servers(),
+            transactional_id: Some("commit-timeout-test".to_string()),
+            ..Default::default()
+        };
+
+        let producer = create_producer(&config);
+        let records = ordered_records("committed", 3);
+
+        producer
+            .init_transactions(Duration::from_secs(10))
+            .expect("init transactions");
+        producer.begin_transaction().expect("begin transaction");
+
+        batch_publish_records(&producer, 1, &records, Duration::from_secs(10), "test")
+            .await
+            .expect("publish records");
+
+        cluster
+            .broker_round_trip_time(1, Duration::from_millis(1_500))
+            .expect("slow broker");
+
+        commit_transactional_op(
+            &producer,
+            Duration::from_millis(300),
+            Duration::from_millis(10),
+            "commit",
+            |producer, timeout| producer.commit_transaction(timeout),
+        )
+        .await
+        .expect("a commit that is still in flight must be resumed, not abandoned");
+
+        cluster
+            .broker_round_trip_time(1, Duration::ZERO)
+            .expect("fast broker");
+
+        let expected: Vec<_> = records.iter().map(|r| r.key.clone()).collect();
+
+        assert_eq!(consume_keys(&config.brokers, "committed", 3), expected);
+    }
 
     fn record(topic: &str, kind: RecordKind, is_decoded: bool) -> PreparedRecord {
         PreparedRecord {

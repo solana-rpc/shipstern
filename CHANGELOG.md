@@ -15,6 +15,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- `shipstern-kafka-sink`: a transactional commit that times out is now resumed with another `commit_transaction` call while Kafka reports the error as retriable, with no attempt cap. Before, after `kafka_transaction_op_max_attempts` timeouts the slot write failed with the commit still in flight, so the slot retries either failed on `begin_transaction` or wrote the slot twice. Abortable errors still abort, and fatal ones still end the sink ([#423](https://github.com/solana-rpc/shipstern/pull/423) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 
