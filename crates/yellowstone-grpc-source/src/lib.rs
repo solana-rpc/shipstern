@@ -1,6 +1,6 @@
 mod resume;
 
-use std::{future::Future, time::Duration};
+use std::{future::Future, pin::pin, time::Duration};
 
 use async_trait::async_trait;
 use clap::ValueEnum;
@@ -284,6 +284,18 @@ async fn idle_expired(deadline: Option<Instant>) {
     }
 }
 
+/// Run `fut` unless the receiver goes away first. `None` means the receiver is gone.
+async fn unless_closed<T>(
+    closed: &mut (impl Future<Output = ()> + Unpin),
+    fut: impl Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        biased;
+        () = closed => None,
+        out = fut => Some(out),
+    }
+}
+
 /// A ping or a pong. The server can send one before it reads the request.
 fn is_ping(update: &SubscribeUpdate) -> bool {
     matches!(
@@ -534,6 +546,10 @@ where
     let mut attempts: u32 = 0;
     let mut filter_updates_sent: u64 = 0;
 
+    // A send notices a dropped receiver only when one happens. A backoff, a connect and a quiet
+    // stream send nothing, so watch the receiver too.
+    let mut closed = pin!(tx.closed());
+
     let exit_status = loop {
         // The request that replays takes a set published while the stream was down. A
         // closed slot can still hold one set that nobody read.
@@ -549,13 +565,26 @@ where
         let mut hold_filter_updates =
             mode == ReconnectMode::SlotResume && request.from_slot.is_some();
 
-        let (mut sink, mut stream) = match open(request).await {
+        let Some(opened) = unless_closed(&mut closed, open(request)).await else {
+            tracing::info!("Receiver dropped, stopping source");
+            break SourceExitStatus::ReceiverDropped;
+        };
+        let (mut sink, mut stream) = match opened {
             Ok(opened) => opened,
             Err(err) => {
                 // A failed reopen counts like a loss. A failed first connect is the caller's.
                 let retry = match &backoff {
                     Some(backoff) if attempts > 0 => {
-                        wait_before_retry(backoff, &mut attempts, from_slot).await
+                        let Some(retry) = unless_closed(
+                            &mut closed,
+                            wait_before_retry(backoff, &mut attempts, from_slot),
+                        )
+                        .await
+                        else {
+                            tracing::info!("Receiver dropped, stopping source");
+                            break SourceExitStatus::ReceiverDropped;
+                        };
+                        retry
                     },
                     _ => false,
                 };
@@ -575,9 +604,14 @@ where
 
         let stop = loop {
             tokio::select! {
-                // Biased, so waiting data wins over an expired deadline. The rare filter
-                // update goes first and cannot starve the stream.
+                // Biased: the receiver drop wins, then the rare filter update, then
+                // waiting data, then an expired deadline.
                 biased;
+
+                () = &mut closed => {
+                    tracing::info!("Receiver dropped, stopping source");
+                    break StreamStop::Exit(SourceExitStatus::ReceiverDropped);
+                },
 
                 filter_update = next_filter_update(&mut filter_updates_rx),
                     if !hold_filter_updates => {
@@ -684,7 +718,18 @@ where
         };
         from_slot = resume.resubscribe_slot(config.from_slot);
         let retry = match (&backoff, from_slot) {
-            (Some(backoff), Some(_)) => wait_before_retry(backoff, &mut attempts, from_slot).await,
+            (Some(backoff), Some(_)) => {
+                let Some(retry) = unless_closed(
+                    &mut closed,
+                    wait_before_retry(backoff, &mut attempts, from_slot),
+                )
+                .await
+                else {
+                    tracing::info!("Receiver dropped, stopping source");
+                    break SourceExitStatus::ReceiverDropped;
+                };
+                retry
+            },
             // A resubscribe from the tip would skip updates with no error.
             (Some(_), None) => {
                 tracing::error!(
@@ -1298,6 +1343,85 @@ mod tests {
         assert!(!is_recoverable(&Status::internal(
             "from_slot is not supported"
         )));
+    }
+
+    /// Drive `run_stream` with an `open` that returns `opened`, drop the receiver after 20 ms,
+    /// and give the run 2 s to notice. A backoff would otherwise last up to 10 s.
+    async fn exit_after_receiver_drop(
+        mut opened: impl FnMut(u32) -> Option<Vec<Result<SubscribeUpdate, Status>>>,
+        backoff: Duration,
+    ) -> Option<Result<SourceExitStatus, ShipsternError>> {
+        let config = config_from(
+            "endpoint = \"https://example.rpcpool.com\"\ntimeout = 60\ncommitment-level = \
+             \"confirmed\"",
+        );
+        let (tx, rx) = mpsc::channel(64);
+        let (_filters_tx, filters_rx) = watch::channel(filters_owned_by(1));
+        let mut opens = 0;
+        let open = |_request: SubscribeRequest| {
+            opens += 1;
+            let result = match opened(opens) {
+                Some(items) => {
+                    let sink = Box::pin(futures_util::sink::unfold((), |(), _request| {
+                        std::future::ready(Ok::<_, Rejected>(()))
+                    }));
+                    let stream = futures_util::stream::iter(items)
+                        .chain(futures_util::stream::pending())
+                        .boxed();
+                    Ok((sink, stream))
+                },
+                None => Err(ShipsternError::Other("the open failed".into())),
+            };
+            std::future::ready(result)
+        };
+
+        let run = run_stream(
+            &config,
+            ReconnectMode::SlotResume,
+            Some(Backoff::new(backoff, 1.0, 5)),
+            filters_owned_by(1),
+            tx,
+            Some(filters_rx),
+            open,
+        );
+        let dropper = async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            drop(rx);
+            std::future::pending::<()>().await;
+        };
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::select! {
+                out = run => out,
+                () = dropper => unreachable!(),
+            }
+        })
+        .await
+        .ok()
+    }
+
+    fn is_receiver_dropped(exit: &Option<Result<SourceExitStatus, ShipsternError>>) -> bool {
+        matches!(exit, Some(Ok(SourceExitStatus::ReceiverDropped)))
+    }
+
+    /// A stream with nothing to send never fails a send, so only watching the receiver ends it.
+    #[tokio::test]
+    async fn quiet_stream_stops_when_the_receiver_drops() {
+        let exit = exit_after_receiver_drop(|_| Some(Vec::new()), Duration::ZERO).await;
+
+        assert!(is_receiver_dropped(&exit), "{exit:?}");
+    }
+
+    /// The wait before a reconnect sends nothing either.
+    #[tokio::test]
+    async fn backoff_stops_when_the_receiver_drops() {
+        let exit = exit_after_receiver_drop(
+            |n| (n == 1).then(|| vec![Ok(transaction(100, 1)), Err(Status::unavailable("cut"))]),
+            Duration::from_secs(60),
+        )
+        .await;
+
+        assert!(is_receiver_dropped(&exit), "{exit:?}");
     }
 
     fn ping() -> SubscribeUpdate {

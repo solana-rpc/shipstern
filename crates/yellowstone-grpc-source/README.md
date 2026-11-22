@@ -175,6 +175,8 @@ it. A `from_slot` and a `RuntimeHandle` are both fine here.
   or a dropped repeat.
 - A stream that the server closes with no error status is also a loss, and the
   source resumes.
+- The source stops at once when the runtime has stopped, also during a connect or a
+  reconnect wait.
 - A yellowstone-grpc server with `replay_stored_slots` set to 0 answers the
   resume with `from_slot is not supported`. Then the run ends at once, with no
   retry.
