@@ -352,6 +352,7 @@ fn scalar_to_proto(s: &ScalarIr) -> &'static str {
         | ScalarIr::FixedBytes(_)
         | ScalarIr::U128
         | ScalarIr::I128 => "bytes",
+        ScalarIr::BigEndian(_) => scalar_to_proto(&s.native()),
         ScalarIr::PublicKey => "PublicKey",
     }
 }

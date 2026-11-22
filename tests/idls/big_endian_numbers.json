@@ -1,0 +1,339 @@
+{
+  "kind": "rootNode",
+  "standard": "codama",
+  "version": "1.6.0",
+  "program": {
+    "kind": "programNode",
+    "name": "bigEndianNumbers",
+    "publicKey": "11111111111111111111111111111111",
+    "version": "0.1.0",
+    "accounts": [],
+    "instructions": [],
+    "definedTypes": [
+      {
+        "kind": "definedTypeNode",
+        "name": "bigEndianNumbers",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "aU8",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "be"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "aU16",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u16",
+                "endian": "be"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "aU32",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u32",
+                "endian": "be"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "aU64",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u64",
+                "endian": "be"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "aU128",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u128",
+                "endian": "be"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "aI16",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "i16",
+                "endian": "be"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "aI32",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "i32",
+                "endian": "be"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "aI64",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "i64",
+                "endian": "be"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "aI128",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "i128",
+                "endian": "be"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "aF32",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "f32",
+                "endian": "be"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "aF64",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "f64",
+                "endian": "be"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "tail",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "bigEndianOptional",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "value",
+              "type": {
+                "kind": "optionTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u32",
+                  "endian": "be"
+                },
+                "prefix": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "tail",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "bigEndianBigPrefixOptional",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "value",
+              "type": {
+                "kind": "optionTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u16",
+                  "endian": "be"
+                },
+                "prefix": {
+                  "kind": "numberTypeNode",
+                  "format": "u16",
+                  "endian": "be"
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "tail",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "bigEndianFixedOptional",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "value",
+              "type": {
+                "kind": "optionTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u32",
+                  "endian": "be"
+                },
+                "prefix": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                },
+                "fixed": true
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "tail",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "bigEndianList",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "values",
+              "type": {
+                "kind": "arrayTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u32",
+                  "endian": "be"
+                },
+                "count": {
+                  "kind": "prefixedCountNode",
+                  "prefix": {
+                    "kind": "numberTypeNode",
+                    "format": "u32",
+                    "endian": "le"
+                  }
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "tail",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "bigEndianFixed",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "values",
+              "type": {
+                "kind": "arrayTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u16",
+                  "endian": "be"
+                },
+                "count": {
+                  "kind": "fixedCountNode",
+                  "value": 2
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "tail",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "littleEndianControl",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "a",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u32",
+                "endian": "le"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "tail",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "errors": [],
+    "constants": []
+  }
+}

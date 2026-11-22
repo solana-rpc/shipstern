@@ -150,6 +150,9 @@ pub enum ScalarIr {
 
     Float,
     Double,
+    /// A multi-byte number written big-endian on chain. Its Rust and proto types match the
+    /// little-endian scalar for the same format, see [`ScalarIr::native`].
+    BigEndian(codama_nodes::NumberFormat),
     String,
     Bytes,
     /// Bytes with an explicit Codama length prefix; still Vec<u8> / protobuf bytes.
@@ -172,6 +175,47 @@ pub enum ScalarIr {
     /// `PublicKey` message wrapper (`message PublicKey { bytes value = 1; }`)
     /// instead of raw bytes.
     PublicKey,
+}
+
+impl ScalarIr {
+    /// The scalar for a Codama number. Endianness only changes the wire bytes of a format wider
+    /// than one byte, and `shortU16` has none.
+    pub fn number(format: NumberFormat, endian: codama_nodes::Endianness) -> Self {
+        let little_endian = match format {
+            NumberFormat::U8 => Self::U8,
+            NumberFormat::U16 => Self::U16,
+            NumberFormat::ShortU16 => Self::ShortU16,
+            NumberFormat::U32 => Self::Uint32,
+            NumberFormat::U64 => Self::Uint64,
+            NumberFormat::I8 => Self::I8,
+            NumberFormat::I16 => Self::I16,
+            NumberFormat::I32 => Self::Int32,
+            NumberFormat::I64 => Self::Int64,
+            NumberFormat::F32 => Self::Float,
+            NumberFormat::F64 => Self::Double,
+            NumberFormat::U128 => Self::U128,
+            NumberFormat::I128 => Self::I128,
+        };
+
+        let single_byte = matches!(
+            format,
+            NumberFormat::U8 | NumberFormat::I8 | NumberFormat::ShortU16
+        );
+
+        if endian == codama_nodes::Endianness::Be && !single_byte {
+            Self::BigEndian(format)
+        } else {
+            little_endian
+        }
+    }
+
+    /// The little-endian scalar with the same Rust and proto types.
+    pub fn native(&self) -> Self {
+        match self {
+            Self::BigEndian(format) => Self::number(*format, codama_nodes::Endianness::Le),
+            other => other.clone(),
+        }
+    }
 }
 
 // Enum we need to know what kind of oneof this is for rendering purposes

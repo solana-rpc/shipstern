@@ -924,7 +924,7 @@ fn fixed_array_default_borsh_attrs(label: &LabelIr, path_prefix: &str) -> TokenS
 /// Does NOT widen u8→u32 etc. — manual prost impl handles the casting.
 pub(super) fn map_ir_type_to_native(field_type: &FieldTypeIr, in_module: bool) -> TokenStream {
     match field_type {
-        FieldTypeIr::Scalar(s) => match s {
+        FieldTypeIr::Scalar(s) => match s.native() {
             ScalarIr::Bool => quote!(bool),
             ScalarIr::U8 => quote!(u8),
             ScalarIr::U16 | ScalarIr::ShortU16 => quote!(u16),
@@ -949,6 +949,7 @@ pub(super) fn map_ir_type_to_native(field_type: &FieldTypeIr, in_module: bool) -
                     quote!(Pubkey)
                 }
             },
+            ScalarIr::BigEndian(_) => unreachable!("`native` never returns BigEndian"),
         },
         FieldTypeIr::Message(name) => {
             let ident = format_ident!("{}", name);

@@ -1,6 +1,7 @@
 //! Borsh field codecs for numbers whose Codama wire format is not what borsh writes
 //! natively. Only the wire codec changes: fields point `deserialize_with` and
 //! `serialize_with` at helpers emitted once per program module by [`helpers`].
+use codama_nodes::NumberFormat;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::LitStr;
@@ -9,15 +10,39 @@ use crate::intermediate_representation::{
     FieldIr, FieldTypeIr, LabelIr, OptionPrefixIr, ScalarIr, SchemaIr,
 };
 
-/// Whether borsh's own `u16` codec would misread this scalar's wire format.
+/// Whether borsh's own little-endian codec would misread this scalar's wire format.
 pub fn has_codec(field_type: &FieldTypeIr) -> bool {
-    matches!(field_type, FieldTypeIr::Scalar(ScalarIr::ShortU16))
+    matches!(
+        field_type,
+        FieldTypeIr::Scalar(ScalarIr::ShortU16 | ScalarIr::BigEndian(_))
+    )
+}
+
+/// The Rust type a big-endian number is held in.
+fn big_endian_type(format: NumberFormat) -> &'static str {
+    match format {
+        NumberFormat::U16 => "u16",
+        NumberFormat::U32 => "u32",
+        NumberFormat::U64 => "u64",
+        NumberFormat::U128 => "u128",
+        NumberFormat::I16 => "i16",
+        NumberFormat::I32 => "i32",
+        NumberFormat::I64 => "i64",
+        NumberFormat::I128 => "i128",
+        NumberFormat::F32 => "f32",
+        NumberFormat::F64 => "f64",
+        other => unreachable!("{other:?} has no big-endian form"),
+    }
 }
 
 /// The marker type implementing `ShipsternNumberCodec` for this scalar.
 fn codec_type(scalar: &ScalarIr, path_prefix: &str) -> String {
     match scalar {
         ScalarIr::ShortU16 => format!("{path_prefix}ShipsternShortU16Codec"),
+        ScalarIr::BigEndian(format) => format!(
+            "{path_prefix}ShipsternBigEndianCodec<{}>",
+            big_endian_type(*format)
+        ),
         other => unreachable!("no number codec for {other:?}"),
     }
 }
@@ -124,6 +149,14 @@ pub fn helpers(schema_ir: &SchemaIr) -> TokenStream {
         uses(&|field| matches!(field.field_type, FieldTypeIr::Scalar(ScalarIr::ShortU16)))
             .then(short_u16_codec);
 
+    let big_endian = uses(&|field| {
+        matches!(
+            field.field_type,
+            FieldTypeIr::Scalar(ScalarIr::BigEndian(_))
+        )
+    })
+    .then(big_endian_codec);
+
     let optional = uses(&|field| {
         matches!(&field.label, LabelIr::Optional(encoding)
             if matches!(encoding.prefix, OptionPrefixIr::FixedWidth { .. }))
@@ -146,6 +179,7 @@ pub fn helpers(schema_ir: &SchemaIr) -> TokenStream {
     quote! {
         #singular
         #short_u16
+        #big_endian
         #optional
         #short_u16_optional
         #repeated
@@ -239,6 +273,45 @@ fn short_u16_codec() -> TokenStream {
                 ::core::result::Result::Ok(())
             }
         }
+    }
+}
+
+/// Big-endian numbers, floats included: a float round-trips through its bits, so NaN and
+/// infinity decode instead of being rejected.
+fn big_endian_codec() -> TokenStream {
+    let impls = [
+        "u16", "u32", "u64", "u128", "i16", "i32", "i64", "i128", "f32", "f64",
+    ]
+    .map(|name| {
+        let ty = quote::format_ident!("{name}");
+
+        quote! {
+            impl ShipsternNumberCodec for ShipsternBigEndianCodec<#ty> {
+                type Value = #ty;
+
+                fn read<R: ::borsh::io::Read>(
+                    reader: &mut R,
+                ) -> ::core::result::Result<#ty, ::borsh::io::Error> {
+                    let mut bytes = [0u8; ::core::mem::size_of::<#ty>()];
+                    reader.read_exact(&mut bytes)?;
+
+                    ::core::result::Result::Ok(#ty::from_be_bytes(bytes))
+                }
+
+                fn write<W: ::borsh::io::Write>(
+                    value: &#ty,
+                    writer: &mut W,
+                ) -> ::core::result::Result<(), ::borsh::io::Error> {
+                    writer.write_all(&value.to_be_bytes())
+                }
+            }
+        }
+    });
+
+    quote! {
+        struct ShipsternBigEndianCodec<T>(::core::marker::PhantomData<T>);
+
+        #(#impls)*
     }
 }
 

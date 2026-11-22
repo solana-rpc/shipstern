@@ -243,6 +243,7 @@ fn prost_encoding_mod(scalar: &ScalarIr) -> TokenStream {
         | ScalarIr::I128 => {
             quote!(::prost::encoding::bytes)
         },
+        ScalarIr::BigEndian(_) => prost_encoding_mod(&scalar.native()),
         ScalarIr::PublicKey => quote!(::prost::encoding::message),
     }
 }
@@ -280,8 +281,15 @@ pub(super) fn manual_prost_struct_impl(
     let mut default_stmts = Vec::new();
 
     for f in &t.fields {
+        // Proto carries the value, so the wire endianness is irrelevant here.
+        let mut f = f.clone();
+
+        if let FieldTypeIr::Scalar(scalar) = &f.field_type {
+            f.field_type = FieldTypeIr::Scalar(scalar.native());
+        }
+
         emit_prost_field_codegen(
-            f,
+            &f,
             in_module,
             &resolve_msg,
             &mut encode_stmts,
