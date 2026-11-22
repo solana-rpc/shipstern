@@ -47,21 +47,34 @@ fn transaction_error_context(err: &KafkaError) -> String {
     }
 }
 
-async fn run_transactional_op<F>(
-    producer: &FutureProducer,
+type TransactionalOp = fn(&FutureProducer, Duration) -> Result<(), KafkaError>;
+
+/// Runs a librdkafka transaction call off the async workers, since it blocks for up to
+/// its timeout.
+async fn run_blocking(
+    producer: &Arc<FutureProducer>,
+    timeout: Duration,
+    op: TransactionalOp,
+) -> Result<(), KafkaError> {
+    let producer = Arc::clone(producer);
+
+    tokio::task::spawn_blocking(move || op(&producer, timeout))
+        .await
+        .unwrap_or(Err(KafkaError::Canceled))
+}
+
+async fn run_transactional_op(
+    producer: &Arc<FutureProducer>,
     timeout: Duration,
     backoff: Duration,
     max_attempts: u32,
     context: &'static str,
-    mut op: F,
-) -> Result<(), SinkError>
-where
-    F: FnMut(&FutureProducer, Duration) -> Result<(), KafkaError>,
-{
+    op: TransactionalOp,
+) -> Result<(), SinkError> {
     let max_attempts = max_attempts.max(1);
 
     for attempt in 1..=max_attempts {
-        match op(producer, timeout) {
+        match run_blocking(producer, timeout, op).await {
             Ok(()) => return Ok(()),
             Err(KafkaError::Transaction(txn)) if txn.is_retriable() && attempt < max_attempts => {
                 tracing::warn!(
@@ -85,21 +98,18 @@ where
     unreachable!("max_attempts >= 1")
 }
 
-async fn commit_transactional_op<F>(
-    producer: &FutureProducer,
+async fn commit_transactional_op(
+    producer: &Arc<FutureProducer>,
     timeout: Duration,
     backoff: Duration,
     max_attempts: u32,
     context: &'static str,
-    mut op: F,
-) -> Result<(), TransactionCommitError>
-where
-    F: FnMut(&FutureProducer, Duration) -> Result<(), KafkaError>,
-{
+    op: TransactionalOp,
+) -> Result<(), TransactionCommitError> {
     let max_attempts = max_attempts.max(1);
 
     for attempt in 1..=max_attempts {
-        match op(producer, timeout) {
+        match run_blocking(producer, timeout, op).await {
             Ok(()) => return Ok(()),
             Err(KafkaError::Transaction(txn)) if txn.txn_requires_abort() => {
                 let err = KafkaError::Transaction(txn);
@@ -426,7 +436,7 @@ impl SlotWriteExecutor {
         );
 
         run_transactional_op(
-            self.producer(),
+            &self.producer,
             *timeout,
             self.transaction_retry_policy.backoff,
             self.transaction_retry_policy.max_attempts,
@@ -466,7 +476,7 @@ impl SlotWriteExecutor {
         // state, and the slot-level retry replays the whole write after an abort, so
         // visibility stays atomic per slot.
         run_transactional_op(
-            self.producer(),
+            &self.producer,
             timeout,
             self.transaction_retry_policy.backoff,
             self.transaction_retry_policy.max_attempts,
@@ -491,7 +501,7 @@ impl SlotWriteExecutor {
         }
 
         match commit_transactional_op(
-            self.producer(),
+            &self.producer,
             timeout,
             self.transaction_retry_policy.backoff,
             self.transaction_retry_policy.max_attempts,
@@ -522,7 +532,7 @@ impl SlotWriteExecutor {
         timeout: Duration,
     ) -> Result<(), SinkError> {
         run_transactional_op(
-            self.producer(),
+            &self.producer,
             timeout,
             self.transaction_retry_policy.backoff,
             self.transaction_retry_policy.max_attempts,
@@ -951,12 +961,93 @@ impl From<AccountCommitAt> for CommitScope {
 
 #[cfg(test)]
 mod tests {
+    use rdkafka::{mocking::MockCluster, producer::DefaultProducerContext};
     #[cfg(feature = "experimental-account-parser")]
     use shipstern_block_coordinator::AccountSlot;
     use shipstern_block_coordinator::InstructionSlot;
 
     use super::*;
-    use crate::events::{AccountSlotCommitEvent, MarkerType};
+    use crate::{
+        create_producer,
+        events::{AccountSlotCommitEvent, MarkerType},
+    };
+
+    fn ordered_records(topic: &str, count: usize) -> Vec<PreparedRecord> {
+        (0..count)
+            .map(|i| PreparedRecord {
+                key: format!("{i:04}"),
+                ..record(topic, RecordKind::Instruction, true)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn blocking_commit_does_not_stall_other_tasks_on_the_runtime() {
+        let cluster = MockCluster::<DefaultProducerContext>::new(1).expect("mock cluster");
+        cluster.create_topic("busy", 1, 1).expect("create topic");
+
+        let config = KafkaSinkConfig {
+            brokers: cluster.bootstrap_servers(),
+            transactional_id: Some("blocking-commit-test".to_string()),
+            ..Default::default()
+        };
+
+        let producer = Arc::new(create_producer(&config));
+
+        producer
+            .init_transactions(Duration::from_secs(10))
+            .expect("init transactions");
+        producer.begin_transaction().expect("begin transaction");
+
+        batch_publish_records(
+            &producer,
+            1,
+            &ordered_records("busy", 1),
+            Duration::from_secs(10),
+            "test",
+        )
+        .await
+        .expect("publish records");
+
+        cluster
+            .broker_round_trip_time(1, Duration::from_millis(1_000))
+            .expect("slow broker");
+
+        let ticks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let ticker = tokio::spawn({
+            let ticks = Arc::clone(&ticks);
+
+            async move {
+                loop {
+                    sleep(Duration::from_millis(20)).await;
+
+                    ticks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        });
+
+        // Let the ticker start before the commit blocks.
+        sleep(Duration::from_millis(50)).await;
+        ticks.store(0, std::sync::atomic::Ordering::Relaxed);
+
+        commit_transactional_op(
+            &producer,
+            Duration::from_secs(10),
+            Duration::from_millis(10),
+            3,
+            "commit",
+            |producer, timeout| producer.commit_transaction(timeout),
+        )
+        .await
+        .expect("commit");
+
+        ticker.abort();
+
+        assert!(
+            ticks.load(std::sync::atomic::Ordering::Relaxed) >= 10,
+            "the runtime made no progress while the commit blocked"
+        );
+    }
 
     fn record(topic: &str, kind: RecordKind, is_decoded: bool) -> PreparedRecord {
         PreparedRecord {
