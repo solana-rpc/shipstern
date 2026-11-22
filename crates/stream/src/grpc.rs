@@ -27,6 +27,8 @@ pub enum Error {
     Transport(#[from] transport::Error),
     #[error("Server task panicked")]
     Panic(#[from] JoinError),
+    #[error("gRPC reflection service error")]
+    Reflection(#[from] tonic_reflection::server::Error),
 }
 
 #[derive(Debug)]
@@ -198,7 +200,7 @@ impl Future for Server {
 }
 
 impl Server {
-    pub fn run(config: GrpcConfig, desc_sets: &[&[u8]], channels: Channels) -> Self {
+    pub fn run(config: GrpcConfig, desc_sets: &[&[u8]], channels: Channels) -> Result<Self, Error> {
         let GrpcConfig { address } = config;
 
         let mut reflection = tonic_reflection::server::Builder::configure()
@@ -208,10 +210,10 @@ impl Server {
             reflection = reflection.register_encoded_file_descriptor_set(desc);
         }
 
-        let reflection = reflection.build_v1alpha().unwrap();
+        let reflection = reflection.build_v1alpha()?;
 
         let (stop, rx) = stop::channel();
-        Self(
+        Ok(Self(
             stop,
             tokio::task::spawn(async move {
                 transport::Server::builder()
@@ -220,11 +222,31 @@ impl Server {
                     .serve_with_shutdown(address, rx.as_unit())
                     .await
             }),
-        )
+        ))
     }
 
     pub async fn stop(self) -> Result<(), Error> {
         self.0.maybe_send();
         flatten_error(self.1.await)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn bind_failure_is_reported_promptly() {
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = taken.local_addr().unwrap();
+
+        let server = Server::run(GrpcConfig { address }, &[], Channels::new()).unwrap();
+
+        let res = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("server should fail to bind quickly");
+        assert!(matches!(res, Err(Error::Transport(_))));
     }
 }
