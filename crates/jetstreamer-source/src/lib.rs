@@ -1,6 +1,9 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use async_trait::async_trait;
@@ -168,6 +171,10 @@ struct ShipsternStreamHandler {
     // Upstream sends a slot's entries on one thread before its block, so the
     // slot alone is a sufficient key.
     entry_buffer: Mutex<HashMap<u64, Vec<EntryData>>>,
+    // The firehose retries a failed callback with no limit, so a closed `tx`
+    // has to stop it through its shutdown signal.
+    receiver_closed: AtomicBool,
+    shutdown: broadcast::Sender<()>,
 }
 
 impl ShipsternStreamHandler {
@@ -204,6 +211,8 @@ impl ShipsternStreamHandler {
             transaction_matches,
             wants_entries,
             entry_buffer: Mutex::new(HashMap::new()),
+            receiver_closed: AtomicBool::new(false),
+            shutdown: broadcast::channel(1).0,
         }
     }
 
@@ -249,7 +258,8 @@ impl ShipsternStreamHandler {
     }
 
     /// Wrap `update_oneof` in a [`SubscribeUpdate`] addressed to `filters` and
-    /// hand it to the runtime, mapping a closed channel to [`Error::ChannelSend`].
+    /// hand it to the runtime. A closed channel returns [`Error::ChannelSend`] and
+    /// signals the firehose to stop.
     async fn send(
         &self,
         filters: Vec<String>,
@@ -264,6 +274,9 @@ impl ShipsternStreamHandler {
         };
 
         self.tx.send(Ok(update)).await.map_err(|e| {
+            self.receiver_closed.store(true, Ordering::SeqCst);
+            let _ = self.shutdown.send(());
+
             let error_msg = format!("Failed to send update: {}", e);
             error!("{}", error_msg);
             Box::new(Error::ChannelSend(error_msg)) as SharedError
@@ -696,12 +709,13 @@ impl SourceTrait for JetstreamSource {
             );
         }
 
-        if let Err(e) = Self::stream_loop(config, filters, tx).await {
-            error!(error = %e, "Jetstream streaming failed");
-            return Err(e.into());
+        match Self::stream_loop(config, filters, tx).await {
+            Ok(status) => Ok(status),
+            Err(e) => {
+                error!(error = %e, "Jetstream streaming failed");
+                Err(e.into())
+            },
         }
-
-        Ok(SourceExitStatus::Completed)
     }
 }
 
@@ -747,7 +761,7 @@ impl JetstreamSource {
         config: JetstreamSourceConfig,
         filters: Filters,
         tx: Sender<Result<SubscribeUpdate, yellowstone_grpc_proto::tonic::Status>>,
-    ) -> Result<(), Error> {
+    ) -> Result<SourceExitStatus, Error> {
         let (start_slot, end_slot) = config.range.to_slot_range().map_err(|e| {
             Error::SlotRangeResolution(format!(
                 "Failed to resolve slot range from config {:?}: {}",
@@ -793,9 +807,21 @@ impl JetstreamSource {
             None
         };
 
-        // A signal broadcast before this subscribe is lost, so a shutdown sent
-        // while the source is still starting up does not stop the replay.
-        let shutdown_signal = config.shutdown_signal_tx.as_ref().map(|tx| tx.subscribe());
+        // The firehose gets the handler's channel, which the caller's signal is
+        // forwarded into. A signal broadcast before this subscribe is lost, so a
+        // shutdown sent while the source is still starting up does not stop the
+        // replay.
+        let shutdown_signal = handler.shutdown.subscribe();
+        let forwarder = config.shutdown_signal_tx.as_ref().map(|tx| {
+            let mut caller_signal = tx.subscribe();
+            let shutdown = handler.shutdown.clone();
+
+            tokio::spawn(async move {
+                // A dropped caller sender also stops the firehose, as it does upstream.
+                let _ = caller_signal.recv().await;
+                let _ = shutdown.send(());
+            })
+        });
 
         // `stats_interval_slots == 0` disables stats, which also avoids upstream's
         // unguarded `slot % interval`.
@@ -834,9 +860,19 @@ impl JetstreamSource {
             None::<jetstreamer_firehose::firehose::OnRewardFn>,
             None::<OnErrorFn>,
             stats_tracking,
-            shutdown_signal,
+            Some(shutdown_signal),
         )
         .await;
+
+        if let Some(forwarder) = forwarder {
+            forwarder.abort();
+        }
+
+        if handler.receiver_closed.load(Ordering::SeqCst) {
+            info!("Runtime stopped reading updates; Jetstream replay stopped");
+
+            return Ok(SourceExitStatus::ReceiverDropped);
+        }
 
         if let Err((error, slot)) = result {
             let error_msg = format!("{:?}", error);
@@ -862,7 +898,7 @@ impl JetstreamSource {
             start_slot,
             end_slot, "Jetstream historical replay completed successfully"
         );
-        Ok(())
+        Ok(SourceExitStatus::Completed)
     }
 }
 
@@ -1204,6 +1240,29 @@ slot-end = 2000
 
         shutdown_tx.send(()).expect("at least one receiver");
         rx.recv().await.expect("broadcast delivered");
+    }
+
+    #[tokio::test]
+    async fn a_closed_receiver_stops_the_firehose_and_marks_the_handler() {
+        use shipstern_core::{BlockMetaPrefilter, Prefilter};
+
+        let filters = filters_with("wants-block-meta", Prefilter {
+            block_meta: Some(BlockMetaPrefilter {}),
+            ..Prefilter::default()
+        });
+        let (updates_tx, updates_rx) = mpsc::channel(4);
+        let handler = ShipsternStreamHandler::new(updates_tx, None, filters);
+        let mut shutdown = handler.shutdown.subscribe();
+        drop(updates_rx);
+
+        let result = handler.process_block(sample_block()).await;
+
+        assert!(result.is_err(), "the closed channel fails the callback");
+        assert!(handler.receiver_closed.load(Ordering::SeqCst));
+        assert!(
+            shutdown.try_recv().is_ok(),
+            "the firehose is told to stop, or it retries the callback with no limit"
+        );
     }
 
     #[tokio::test]
