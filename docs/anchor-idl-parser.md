@@ -131,7 +131,7 @@ like any other IDL. Four things to check first:
   An IDL marked as Shank or Steel in `metadata.origin`, or with an instruction
   `discriminant`, is refused. Convert it with `codama convert`, which keeps the
   instruction discriminators but gives accounts none and drops events. Add each
-  account's `discriminators` to that output by hand. `codama-nodes` 0.13.2 cannot load
+  account's `discriminators` to that output by hand. `codama-nodes` 0.13.3 cannot load
   the `steel` origin that a Steel IDL gets, so remove `program.origin` from it.
 - **Instruction names like `buy_2`.** Anchor 0.29 wrote that name as `buy2`, so the
   upgrade hashes the wrong name and the parser never matches that instruction. Fix it

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- `shipstern-proc-macro` and `shipstern-codama-from-anchor`: moved the exact `codama-nodes` pin from `=0.13.2` to `=0.13.3`, so a crate that also depends on `codama` 0.13.3 resolves. The generated parsers are unchanged: every IDL under `tests/idls` expands to the same code with both versions ([#396](https://github.com/solana-rpc/shipstern/pull/396) closing [#381](https://github.com/solana-rpc/shipstern/issues/381) by @Estereg).
+
 ## [0.13.0] - 2026-11-12
 
 ### Added

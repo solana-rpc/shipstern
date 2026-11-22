@@ -129,7 +129,7 @@ JS reads a legacy IDL with separate v00 functions. This crate runs Anchor's own 
 
 | Input | JS 1.5.6 | This crate |
 |---|---|---|
-| `metadata.origin` other than `anchor`, such as Shank or Steel, or an instruction, account or event with its own `discriminant` or `discriminator` | Uses an instruction's `discriminant`, or the instruction index for Shank; ignores a `discriminator` and hashes the name | `NotAnchor`; convert it with `codama convert`, and for Steel remove `program.origin` from the result, which `codama-nodes` 0.13.2 cannot load |
+| `metadata.origin` other than `anchor`, such as Shank or Steel, or an instruction, account or event with its own `discriminant` or `discriminator` | Uses an instruction's `discriminant`, or the instruction index for Shank; ignores a `discriminator` and hashes the name | `NotAnchor`; convert it with `codama convert`, and for Steel remove `program.origin` from the result, which `codama-nodes` 0.13.3 cannot load |
 | No `metadata.address` | Writes an empty `publicKey`; the macro then fails with `Invalid pubkey length` | `MissingAddress` |
 | A `state` section (Anchor before 0.26) | Drops it | `LegacyUnsupported` |
 | A generic type or account | Fails: `generic` is not a v00 type | `LegacyUnsupported`, at that type or account |

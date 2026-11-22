@@ -1025,9 +1025,9 @@ dependencies = [
 
 [[package]]
 name = "codama-nodes"
-version = "0.13.2"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23b0d12fde4b749f4e28ef83a9b83e4aa00697a7847dfb0aa6d6e633a3f6421e"
+checksum = "cf8c9d40601d9dc4ce84c6748e89b69f746f20899807ad5bc302b0e67d03fc1c"
 dependencies = [
  "codama-errors",
  "codama-nodes-derive",

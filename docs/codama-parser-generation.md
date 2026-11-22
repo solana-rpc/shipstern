@@ -33,7 +33,7 @@ directory, with no Node project to set up. Append `@<version>` to either package
 it.
 
 That output loads as it is. Codama's JavaScript omits empty and default-valued
-collections when it serializes, and `codama-nodes` (pinned to `=0.13.2`) defaults
+collections when it serializes, and `codama-nodes` (pinned to `=0.13.3`) defaults
 them on the way back in, so there is nothing to add by hand.
 
 Codama JSON skips the checks the Anchor path runs, such as ambiguous discriminators and
