@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use rdkafka::{
     consumer::{BaseConsumer, Consumer},
+    error::KafkaError,
     ClientConfig, Message, TopicPartitionList,
 };
 
@@ -50,6 +51,7 @@ fn read_last_slot_from_topic(
         .set("bootstrap.servers", &config.brokers)
         .set("group.id", "shipstern-startup-reader")
         .set("enable.auto.commit", "false")
+        .set("enable.partition.eof", "true")
         .set("isolation.level", "read_committed"); // read only committed kafka transactions
 
     config.apply_sasl_if_configured(&mut client_config);
@@ -187,6 +189,16 @@ fn read_tail_candidate_in_range(
 
         let message = match consumer.poll(remaining.min(Duration::from_millis(50))) {
             Some(Ok(message)) => message,
+            Some(Err(KafkaError::PartitionEOF(eof_partition))) => {
+                // The high watermark is the next offset to be written, and a transaction
+                // ends in a control record the consumer never delivers, so no message
+                // ever reaches `scan_high`. The end-of-partition event is the end signal.
+                if eof_partition == partition_id {
+                    return Ok(latest);
+                }
+
+                continue;
+            },
             Some(Err(error)) => {
                 tracing::debug!(
                     topic,
@@ -203,10 +215,6 @@ fn read_tail_candidate_in_range(
 
         if message.partition() != partition_id || message.offset() < scan_low {
             continue;
-        }
-
-        if message.offset() >= scan_high {
-            return Ok(latest);
         }
 
         let Some(payload) = message.payload() else {
@@ -243,6 +251,11 @@ fn parse_last_committed_candidate(
 
 #[cfg(test)]
 mod tests {
+    use rdkafka::{
+        mocking::MockCluster,
+        producer::{BaseProducer, BaseRecord, DefaultProducerContext, Producer},
+    };
+
     use super::*;
 
     #[test]
@@ -286,5 +299,94 @@ mod tests {
     #[test]
     fn startup_scan_low_offset_keeps_low_watermark_when_range_is_small() {
         assert_eq!(startup_scan_low_offset(100, 150), 100);
+    }
+
+    fn config_for(cluster: &MockCluster<'static, DefaultProducerContext>) -> KafkaSinkConfig {
+        KafkaSinkConfig {
+            brokers: cluster.bootstrap_servers(),
+            transactional_id: Some("startup-scan-test".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn assert_scan_finds_slot_quickly(config: &KafkaSinkConfig, slot: u64) {
+        let started = Instant::now();
+
+        let last = read_last_committed_transaction_block(config)
+            .expect("startup scan")
+            .expect("a committed slot");
+
+        assert_eq!(last.slot, slot);
+        assert!(
+            started.elapsed() < STARTUP_CHECKPOINT_SCAN_DEADLINE / 2,
+            "scan waited for its deadline instead of stopping at the end of the partition: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn startup_scan_stops_at_partition_end() {
+        let cluster = MockCluster::<DefaultProducerContext>::new(1).expect("mock cluster");
+        let config = config_for(&cluster);
+
+        cluster
+            .create_topic(&config.transaction_slots_topic, 1, 1)
+            .expect("create topic");
+
+        let producer: BaseProducer = ClientConfig::new()
+            .set("bootstrap.servers", &config.brokers)
+            .create()
+            .expect("producer");
+
+        for slot in [41_u64, 42] {
+            let payload = format!(r#"{{"slot":{slot}}}"#);
+
+            producer
+                .send(
+                    BaseRecord::to(&config.transaction_slots_topic)
+                        .key("k")
+                        .payload(&payload),
+                )
+                .expect("enqueue");
+        }
+
+        producer.flush(Duration::from_secs(10)).expect("flush");
+
+        assert_scan_finds_slot_quickly(&config, 42);
+    }
+
+    #[test]
+    fn startup_scan_stops_after_transaction_control_marker() {
+        let cluster = MockCluster::<DefaultProducerContext>::new(1).expect("mock cluster");
+        let config = config_for(&cluster);
+
+        cluster
+            .create_topic(&config.transaction_slots_topic, 1, 1)
+            .expect("create topic");
+
+        let producer: BaseProducer = ClientConfig::new()
+            .set("bootstrap.servers", &config.brokers)
+            .set("transactional.id", "startup-scan-writer")
+            .create()
+            .expect("producer");
+
+        producer
+            .init_transactions(Duration::from_secs(10))
+            .expect("init transactions");
+        producer.begin_transaction().expect("begin transaction");
+
+        producer
+            .send(
+                BaseRecord::to(&config.transaction_slots_topic)
+                    .key("k")
+                    .payload(r#"{"slot":42}"#),
+            )
+            .expect("enqueue");
+
+        producer
+            .commit_transaction(Duration::from_secs(10))
+            .expect("commit transaction");
+
+        assert_scan_finds_slot_quickly(&config, 42);
     }
 }
