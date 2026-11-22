@@ -3,7 +3,7 @@ use shipstern_spl_token_parser::{SetAuthorityAccounts, TokenProgram as BaseToken
 use spl_token_2022::{extension::ExtensionType, instruction::AuthorityType as SplAuthorityType};
 
 use super::{
-    CommonExtensionInstructions, ConfidentialTransferFeeIx, ConfidentialTransferIx,
+    CommonExtensionInstructions, ConfidentialTransferFeeIx, ConfidentialTransferIx, PausableIx,
     ScaledUiAmountIx, TokenGroupIx, TokenMetadataIx, TransferFeeIx,
 };
 use crate::Pubkey;
@@ -132,7 +132,7 @@ pub struct SetAuthorityArgs {
 pub struct TokenExtensionProgram {
     #[hint(
         oneof = "instruction::Instruction",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23"
     )]
     pub instruction: Option<instruction::Instruction>,
 }
@@ -140,7 +140,7 @@ pub struct TokenExtensionProgram {
 pub mod instruction {
     use super::{
         shipstern, BaseTokenProgram, CommonExtensionInstructions, ConfidentialTransferFeeIx,
-        ConfidentialTransferIx, ScaledUiAmountIx, SetAuthorityAccounts, TokenGroupIx,
+        ConfidentialTransferIx, PausableIx, ScaledUiAmountIx, SetAuthorityAccounts, TokenGroupIx,
         TokenMetadataIx, TransferFeeIx,
     };
 
@@ -280,6 +280,12 @@ pub mod instruction {
         pub instruction: Option<ScaledUiAmountIx>,
     }
 
+    #[shipstern]
+    #[derive(Clone, PartialEq)]
+    pub struct Pausable {
+        pub instruction: Option<PausableIx>,
+    }
+
     #[shipstern(oneof)]
     #[derive(Clone, PartialEq)]
     pub enum Instruction {
@@ -305,6 +311,7 @@ pub mod instruction {
         TokenMetadata(TokenMetadata),
         TokenGroup(TokenGroup),
         ScaledUiAmount(ScaledUiAmount),
+        Pausable(Pausable),
     }
 }
 

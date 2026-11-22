@@ -12,8 +12,8 @@ use spl_token_metadata_interface::instruction::TokenMetadataInstruction as SplTo
 use crate::{
     extensions::{
         CommonExtensionInstructions, ConfidentialTransferFeeIx, ConfidentialTransferIx,
-        ExtensionWithCommonInstruction, ScaledUiAmountIx, TokenGroupIx, TokenMetadataIx,
-        TransferFeeIx,
+        ExtensionWithCommonInstruction, PausableIx, ScaledUiAmountIx, TokenGroupIx,
+        TokenMetadataIx, TransferFeeIx,
     },
     instructions::{
         CreateNativeMintAccounts, InitializeMintCloseAuthorityAccounts,
@@ -217,6 +217,16 @@ impl InstructionParser {
 
                     Ok(envelope!(crate::instruction::Instruction::ScaledUiAmount(
                         crate::instruction::ScaledUiAmount {
+                            instruction: Some(parsed),
+                        },
+                    )))
+                },
+
+                SplTokenInstruction::PausableExtension => {
+                    let parsed = PausableIx::try_parse(ix)?;
+
+                    Ok(envelope!(crate::instruction::Instruction::Pausable(
+                        crate::instruction::Pausable {
                             instruction: Some(parsed),
                         },
                     )))
@@ -534,5 +544,58 @@ mod tests {
         assert_eq!(update.accounts.multisig_signers, vec![pk(3)]);
         assert_eq!(update.args.multiplier, 2.5);
         assert_eq!(update.args.effective_timestamp, 1_700_000_000);
+    }
+
+    #[tokio::test]
+    async fn pausable_instructions_parse() {
+        use crate::extensions::pausable_instruction::Instruction as Ix;
+
+        let init = spl_token_2022::extension::pausable::instruction::initialize(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+        )
+        .unwrap();
+        let pause = spl_token_2022::extension::pausable::instruction::pause(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &[&key(3)],
+        )
+        .unwrap();
+        let resume = spl_token_2022::extension::pausable::instruction::resume(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &[],
+        )
+        .unwrap();
+
+        let mut parsed = vec![];
+        for ix in [&init, &pause, &resume] {
+            let Some(crate::instruction::Instruction::Pausable(p)) = InstructionParser
+                .parse(&update_from(ix))
+                .await
+                .unwrap()
+                .instruction
+            else {
+                panic!("expected Pausable");
+            };
+            parsed.push(
+                p.instruction
+                    .and_then(|i| i.instruction)
+                    .expect("empty pausable ix"),
+            );
+        }
+
+        let [Ix::Initialize(init), Ix::Pause(pause), Ix::Resume(resume)] = &parsed[..] else {
+            panic!("unexpected variants");
+        };
+
+        assert_eq!(init.accounts.mint, pk(1));
+        assert_eq!(init.args.authority, pk(2));
+        assert_eq!(pause.accounts.authority, pk(2));
+        assert_eq!(pause.accounts.multisig_signers, vec![pk(3)]);
+        assert!(resume.accounts.multisig_signers.is_empty());
     }
 }
