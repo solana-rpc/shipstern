@@ -2,9 +2,55 @@ use shipstern_core::instruction::InstructionUpdate;
 use shipstern_parser::{check_min_accounts_req, Result};
 use shipstern_proc_macro::shipstern;
 use shipstern_spl_token_parser::InitializeMintAccounts;
-use spl_token_2022::extension::confidential_transfer::instruction::ConfidentialTransferInstruction as SplConfidentialTransferInstruction;
+use spl_token_2022::extension::confidential_transfer::instruction::{
+    ConfidentialTransferInstruction as SplConfidentialTransferInstruction, WithdrawInstructionData,
+};
 
-use crate::{decode_extension_ix_type, ExtensionInstructionParser, Pubkey};
+use crate::{
+    decode_extension_ix_data, decode_extension_ix_type, ExtensionInstructionParser, Pubkey,
+};
+
+/// The accounts that sit between the fixed accounts and the owner of a proof-carrying instruction.
+struct ProofAccounts<const N: usize> {
+    sysvar: Option<Pubkey>,
+    /// One slot per proof, in the order of the offsets. `Some` when the offset is `0`.
+    contexts: [Option<Pubkey>; N],
+    owner_index: usize,
+}
+
+/// Token-2022 reads the instructions sysvar if any proof offset is not `0`, then one context
+/// state account per proof whose offset is `0`, then the owner.
+fn read_proof_accounts<const N: usize>(
+    ix: &InstructionUpdate,
+    first: usize,
+    offsets: [i8; N],
+) -> Result<ProofAccounts<N>> {
+    let has_sysvar = offsets.iter().any(|offset| *offset != 0);
+    let context_count = offsets.iter().filter(|offset| **offset == 0).count();
+    let owner_index = first + usize::from(has_sysvar) + context_count;
+
+    check_min_accounts_req(ix.accounts.len(), owner_index + 1)?;
+
+    let sysvar = has_sysvar.then(|| Pubkey::new(ix.accounts[first].0));
+
+    let mut next = first + usize::from(has_sysvar);
+    let contexts = offsets.map(|offset| {
+        if offset != 0 {
+            return None;
+        }
+
+        let context = Pubkey::new(ix.accounts[next].0);
+        next += 1;
+
+        Some(context)
+    });
+
+    Ok(ProofAccounts {
+        sysvar,
+        contexts,
+        owner_index,
+    })
+}
 
 #[shipstern]
 #[derive(Clone, PartialEq)]
@@ -54,7 +100,9 @@ pub struct DepositAccounts {
 pub struct WithdrawAccounts {
     pub source_account: Pubkey,
     pub mint: Pubkey,
-    pub destination: Pubkey,
+    pub instructions_sysvar: Option<Pubkey>,
+    pub equality_context: Option<Pubkey>,
+    pub range_context: Option<Pubkey>,
     pub owner: Pubkey,
     pub multisig_signers: Vec<Pubkey>,
 }
@@ -318,15 +366,24 @@ impl ExtensionInstructionParser for ConfidentialTransferIx {
             },
 
             SplConfidentialTransferInstruction::Withdraw => {
-                check_min_accounts_req(accounts_len, 4)?;
+                check_min_accounts_req(accounts_len, 3)?;
+
+                let data = decode_extension_ix_data::<WithdrawInstructionData>(&ix.data)?;
+                let proofs = read_proof_accounts(ix, 2, [
+                    data.equality_proof_instruction_offset,
+                    data.range_proof_instruction_offset,
+                ])?;
+                let [equality_context, range_context] = proofs.contexts;
 
                 oneof::Instruction::Withdraw(oneof::Withdraw {
                     accounts: WithdrawAccounts {
                         source_account: crate::Pubkey::new(ix.accounts[0].0),
                         mint: crate::Pubkey::new(ix.accounts[1].0),
-                        destination: crate::Pubkey::new(ix.accounts[2].0),
-                        owner: crate::Pubkey::new(ix.accounts[3].0),
-                        multisig_signers: ix.accounts[4..]
+                        instructions_sysvar: proofs.sysvar,
+                        equality_context,
+                        range_context,
+                        owner: crate::Pubkey::new(ix.accounts[proofs.owner_index].0),
+                        multisig_signers: ix.accounts[(proofs.owner_index + 1)..]
                             .iter()
                             .map(|a| crate::Pubkey::new(a.0))
                             .collect(),
@@ -461,5 +518,116 @@ impl ExtensionInstructionParser for ConfidentialTransferIx {
         Ok(crate::ConfidentialTransferIx {
             instruction: Some(ix_msg),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytemuck::Zeroable;
+    use shipstern_core::instruction::Path;
+    use spl_token_2022::{
+        extension::confidential_transfer::instruction::ConfidentialTransferInstruction,
+        instruction::TokenInstruction,
+    };
+
+    use super::{confidential_transfer_instruction as oneof, *};
+
+    fn pk(n: u8) -> Pubkey { Pubkey::new([n; 32]) }
+
+    fn update(data: Vec<u8>, accounts: &[u8]) -> InstructionUpdate {
+        InstructionUpdate {
+            program: Pubkey::new(spl_token_2022::ID.to_bytes()),
+            accounts: accounts.iter().map(|n| pk(*n)).collect(),
+            data,
+            shared: Default::default(),
+            inner: vec![],
+            path: Path::new_single(0),
+            log_range: 0..0,
+        }
+    }
+
+    fn encode<D: bytemuck::Pod>(ix_type: ConfidentialTransferInstruction, data: &D) -> Vec<u8> {
+        let mut bytes = TokenInstruction::ConfidentialTransferExtension.pack();
+        bytes.push(ix_type.into());
+        bytes.extend_from_slice(bytemuck::bytes_of(data));
+
+        bytes
+    }
+
+    fn parse_withdraw(equality: i8, range: i8, accounts: &[u8]) -> Result<WithdrawAccounts> {
+        let mut data = WithdrawInstructionData::zeroed();
+        data.equality_proof_instruction_offset = equality;
+        data.range_proof_instruction_offset = range;
+
+        let ix = update(
+            encode(ConfidentialTransferInstruction::Withdraw, &data),
+            accounts,
+        );
+
+        let Some(oneof::Instruction::Withdraw(w)) =
+            ConfidentialTransferIx::try_parse(&ix)?.instruction
+        else {
+            panic!("expected Withdraw");
+        };
+
+        Ok(w.accounts)
+    }
+
+    #[test]
+    fn withdraw_with_both_proofs_in_instructions_reads_the_sysvar() {
+        // [token account, mint, instructions sysvar, owner]
+        let a = parse_withdraw(1, 2, &[1, 2, 3, 4]).unwrap();
+
+        assert_eq!(a.source_account, pk(1));
+        assert_eq!(a.mint, pk(2));
+        assert_eq!(a.instructions_sysvar, Some(pk(3)));
+        assert_eq!(a.equality_context, None);
+        assert_eq!(a.range_context, None);
+        assert_eq!(a.owner, pk(4));
+        assert!(a.multisig_signers.is_empty());
+    }
+
+    #[test]
+    fn withdraw_with_both_proofs_in_context_accounts_has_no_sysvar() {
+        // [token account, mint, equality context, range context, owner]
+        let a = parse_withdraw(0, 0, &[1, 2, 3, 4, 5]).unwrap();
+
+        assert_eq!(a.instructions_sysvar, None);
+        assert_eq!(a.equality_context, Some(pk(3)));
+        assert_eq!(a.range_context, Some(pk(4)));
+        assert_eq!(a.owner, pk(5));
+    }
+
+    #[test]
+    fn withdraw_with_mixed_proofs_reads_the_sysvar_and_one_context() {
+        // Equality in the transaction, range pre-verified.
+        let a = parse_withdraw(1, 0, &[1, 2, 3, 4, 5]).unwrap();
+
+        assert_eq!(a.instructions_sysvar, Some(pk(3)));
+        assert_eq!(a.equality_context, None);
+        assert_eq!(a.range_context, Some(pk(4)));
+        assert_eq!(a.owner, pk(5));
+
+        // Equality pre-verified, range in the transaction.
+        let a = parse_withdraw(0, -1, &[1, 2, 3, 4, 5]).unwrap();
+
+        assert_eq!(a.instructions_sysvar, Some(pk(3)));
+        assert_eq!(a.equality_context, Some(pk(4)));
+        assert_eq!(a.range_context, None);
+        assert_eq!(a.owner, pk(5));
+    }
+
+    #[test]
+    fn withdraw_with_multisig_owner_lists_the_signers() {
+        let a = parse_withdraw(1, 2, &[1, 2, 3, 4, 5, 6]).unwrap();
+
+        assert_eq!(a.owner, pk(4));
+        assert_eq!(a.multisig_signers, vec![pk(5), pk(6)]);
+    }
+
+    #[test]
+    fn withdraw_without_the_owner_account_is_rejected() {
+        assert!(parse_withdraw(1, 2, &[1, 2, 3]).is_err());
+        assert!(parse_withdraw(0, 0, &[1, 2, 3, 4]).is_err());
     }
 }
