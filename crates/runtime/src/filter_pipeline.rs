@@ -36,11 +36,10 @@ impl<P: Parser, H> GetPrefilter for FilterPipeline<P, H> {
     #[inline]
     fn prefilter(&self) -> Prefilter {
         let mut prefilter = self.parser.prefilter();
-        let user = self.additional_filters.clone();
         let mut own_narrowing = None;
 
         if let Some(own) = prefilter.transaction.as_mut()
-            && let Some(user_tx) = user.transaction.as_ref()
+            && let Some(user_tx) = self.additional_filters.transaction.as_ref()
         {
             if !user_tx.accounts_include.is_empty() {
                 // A union with the program key would match every transaction of the program again.
@@ -60,11 +59,11 @@ impl<P: Parser, H> GetPrefilter for FilterPipeline<P, H> {
             ));
         }
 
-        prefilter.merge(user.clone());
+        prefilter.merge(self.additional_filters.clone());
 
         // `merge` widens these fields, so apply them again. A user vote or signature wins.
         if let Some(tx) = prefilter.transaction.as_mut()
-            && let Some(user_tx) = user.transaction.as_ref()
+            && let Some(user_tx) = self.additional_filters.transaction.as_ref()
         {
             let (own_exclude, own_vote, own_signature, own_token) =
                 own_narrowing.unwrap_or_default();
