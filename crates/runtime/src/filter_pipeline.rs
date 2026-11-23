@@ -36,12 +36,10 @@ impl<P: Parser, H> GetPrefilter for FilterPipeline<P, H> {
     #[inline]
     fn prefilter(&self) -> Prefilter {
         let mut prefilter = self.parser.prefilter();
-        let user = self.additional_filters.clone();
-        let user_tx = user.transaction.clone();
         let mut own_narrowing = None;
 
         if let Some(own) = prefilter.transaction.as_mut()
-            && let Some(user_tx) = user_tx.as_ref()
+            && let Some(user_tx) = self.additional_filters.transaction.as_ref()
         {
             if !user_tx.accounts_include.is_empty() {
                 // A union with the program key would match every transaction of the program again.
@@ -61,11 +59,11 @@ impl<P: Parser, H> GetPrefilter for FilterPipeline<P, H> {
             ));
         }
 
-        prefilter.merge(user);
+        prefilter.merge(self.additional_filters.clone());
 
         // `merge` widens these fields, so apply them again. A user vote or signature wins.
         if let Some(tx) = prefilter.transaction.as_mut()
-            && let Some(user_tx) = user_tx
+            && let Some(user_tx) = self.additional_filters.transaction.as_ref()
         {
             let (own_exclude, own_vote, own_signature, own_token) =
                 own_narrowing.unwrap_or_default();
@@ -73,15 +71,16 @@ impl<P: Parser, H> GetPrefilter for FilterPipeline<P, H> {
             // applies again only in the mode it was made for.
             let own_exclude = (own_token == tx.token_accounts).then_some(own_exclude);
             let user_exclude =
-                (user_tx.token_accounts == tx.token_accounts).then_some(user_tx.accounts_exclude);
+                (user_tx.token_accounts == tx.token_accounts).then_some(&user_tx.accounts_exclude);
 
             tx.accounts_exclude = own_exclude
-                .into_iter()
+                .iter()
                 .chain(user_exclude)
                 .flatten()
+                .copied()
                 .collect();
             tx.vote = user_tx.vote.or(own_vote);
-            tx.signature = user_tx.signature.or(own_signature);
+            tx.signature = user_tx.signature.clone().or(own_signature);
         }
 
         prefilter
