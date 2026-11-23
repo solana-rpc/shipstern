@@ -58,7 +58,7 @@ subscriber-name = "my_consumer_group" # required
 # Optional:
 # commitment-level = "processed"      # or "confirmed" / "finalized"
 # max-decoding-message-size = 33554432 # bytes (default: usize::MAX)
-# accept-compression = "zstd"          # "zstd" (default) or "gzip"
+# accept-compression = "zstd"          # "zstd" or "gzip" (default: no compression)
 
 # Optional runtime buffer tuning:
 # [buffer]
@@ -69,7 +69,7 @@ subscriber-name = "my_consumer_group" # required
 2. Run:
 
 ```bash
-cargo run -p shipstern-example-fumarole -- --config ./Shipstern.toml
+cargo run -p shipstern-example-fumarole -- --config examples/fumarole/config.toml
 ```
 
 ## What the example does
@@ -97,20 +97,12 @@ All keys are `kebab-case`.
 | `subscriber-name`           | `string`                 | Yes      | Persistent subscriber identity (consumer group name). Use a stable value for resuming.              |
 | `commitment-level`          | `string`                 | No       | Overrides the `SubscribeRequest` commitment. Possible: `"processed"`, `"confirmed"`, `"finalized"`. |
 | `max-decoding-message-size` | `int`                    | No       | Max decoded message size in bytes (default: `usize::MAX`).                                          |
-| `accept-compression`        | `"zstd"` &#124; `"gzip"` | No       | Request/response compression.                                                                       |
+| `accept-compression`        | `"zstd"` &#124; `"gzip"` | No       | Request and response compression. Unset sends and accepts uncompressed messages.                    |
 
 With no `commitment-level`, Fumarole uses processed. On Alpenglow, confirmed and
 finalized arrive together, so the real choice is processed or finalized.
 
-### Prometheus-related fields
-
-`FumaroleConfig` also defines (behind the crate feature `prometheus`) these keys:
-
-- `metrics-endpoint`
-- `metrics-job-name`
-- `metrics-interval`
-
-In the current `YellowstoneFumaroleSource` implementation, these are **declared
-but not wired** (the source does not start a push loop itself). If you want
-metrics, use Shipstern runtime metrics (see `examples/prometheus`) and push them
-from your app.
+The source registers no metrics. For pipeline metrics, use the Shipstern runtime
+metrics (see `examples/prometheus`). The Fumarole client keeps its own counters;
+to export them, pass your registry to
+`yellowstone_fumarole_client::metrics::register_metrics`.
