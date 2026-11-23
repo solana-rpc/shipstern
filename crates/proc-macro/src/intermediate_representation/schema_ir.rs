@@ -318,6 +318,87 @@ impl SchemaIr {
         }
     }
 
+    /// A lower bound on the bytes that a generated reader consumes for a Codama type.
+    /// A counted list of items that can read 0 bytes would loop on the untrusted count.
+    pub fn min_wire_size(&self, type_node: &TypeNode) -> usize {
+        self.min_wire_size_inner(type_node, &mut HashSet::new())
+    }
+
+    fn min_wire_size_inner(
+        &self,
+        type_node: &TypeNode,
+        visiting_links: &mut HashSet<String>,
+    ) -> usize {
+        use codama_nodes::{DefaultValueStrategy, NestedTypeNodeTrait, TypeNode as T};
+
+        match type_node {
+            T::Boolean(_) => 1,
+            T::PublicKey(_) => 32,
+            T::Number(number) => number_min_wire_size(number.format),
+            T::FixedSize(fixed) => fixed.size,
+
+            // Generated parsers read a u32 LE length for a string or bytes with no size node.
+            T::String(_) | T::Bytes(_) => 4,
+            T::SizePrefix(sized) => {
+                number_min_wire_size(sized.prefix.get_nested_type_node().format)
+            },
+            T::Option(option) => number_min_wire_size(option.prefix.get_nested_type_node().format),
+            T::Enum(enum_type) => {
+                number_min_wire_size(enum_type.size.get_nested_type_node().format)
+            },
+
+            T::Struct(struct_type) => struct_type
+                .fields
+                .iter()
+                .filter(|field| field.default_value_strategy != Some(DefaultValueStrategy::Omitted))
+                .fold(0, |size, field| {
+                    size.saturating_add(self.min_wire_size_inner(&field.r#type, visiting_links))
+                }),
+            T::Tuple(tuple) => tuple.items.iter().fold(0, |size, item| {
+                size.saturating_add(self.min_wire_size_inner(item, visiting_links))
+            }),
+
+            T::Array(array) => min_wire_size_of_count(&array.count, || {
+                self.min_wire_size_inner(&array.item, visiting_links)
+            }),
+            T::Set(set) => min_wire_size_of_count(&set.count, || {
+                self.min_wire_size_inner(&set.item, visiting_links)
+            }),
+            T::Map(map) => min_wire_size_of_count(&map.count, || {
+                self.min_wire_size_inner(&map.key, visiting_links)
+                    .saturating_add(self.min_wire_size_inner(&map.value, visiting_links))
+            }),
+
+            T::Link(link) => {
+                let name = crate::utils::to_pascal_case(&link.name);
+
+                // A type that holds itself reads its prefix first, so the inner use adds 0.
+                if !visiting_links.insert(name.clone()) {
+                    return 0;
+                }
+
+                let result = self
+                    .defined_type_nodes
+                    .get(&name)
+                    .map_or(0, |node| self.min_wire_size_inner(node, visiting_links));
+                visiting_links.remove(&name);
+                result
+            },
+
+            // Generated parsers do not read these types. 0 keeps the list check strict.
+            T::Amount(_)
+            | T::DateTime(_)
+            | T::HiddenPrefix(_)
+            | T::HiddenSuffix(_)
+            | T::PostOffset(_)
+            | T::PreOffset(_)
+            | T::RemainderOption(_)
+            | T::Sentinel(_)
+            | T::SolAmount(_)
+            | T::ZeroableOption(_) => 0,
+        }
+    }
+
     /// Whether the generated Rust type is zero-sized: a struct or tuple with no fields, or
     /// with only zero-sized fields. Borsh's `Vec<T>` rejects a zero-sized `T` at run time.
     pub fn is_zero_sized_rust_type(&self, type_node: &TypeNode) -> bool {
@@ -453,6 +534,22 @@ fn number_wire_size(format: NumberFormat) -> Option<usize> {
         NumberFormat::U64 | NumberFormat::I64 | NumberFormat::F64 => Some(8),
         NumberFormat::U128 | NumberFormat::I128 => Some(16),
         NumberFormat::ShortU16 => None,
+    }
+}
+
+/// A short_u16 reads 1 to 3 bytes. Every other format has an exact size.
+fn number_min_wire_size(format: NumberFormat) -> usize { number_wire_size(format).unwrap_or(1) }
+
+/// A fixed count reads that many items. A prefixed count reads its prefix before any item.
+fn min_wire_size_of_count(count: &codama_nodes::CountNode, item: impl FnOnce() -> usize) -> usize {
+    use codama_nodes::{CountNode, NestedTypeNodeTrait};
+
+    match count {
+        CountNode::Fixed(fixed) => item().saturating_mul(crate::utils::as_index(fixed.value)),
+        CountNode::Prefixed(prefixed) => {
+            number_min_wire_size(prefixed.prefix.get_nested_type_node().format)
+        },
+        CountNode::Remainder(_) => 0,
     }
 }
 
