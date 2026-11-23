@@ -300,7 +300,7 @@ fn expand_parser_tokens(
         };
     }
 
-    if let Err(message) = validate::validate_idl(&idl) {
+    if let Err(message) = validate::validate_idl(&idl, envelope.as_ref()) {
         let error_msg = format!("Invalid IDL {:?}: {}", full_path, message);
 
         return quote::quote! {
@@ -454,6 +454,44 @@ mod expansion_tests {
                 && tokens.contains("4 bytes"),
             "message must name the instruction and both widths: {tokens}",
         );
+    }
+
+    #[test]
+    fn event_discriminator_width_mismatch_is_rejected() {
+        let tokens = expand("invalid_width_mismatch_event.json", false);
+
+        assert!(tokens.contains("compile_error"), "no compile_error emitted");
+        assert!(
+            tokens.contains("event `widthMismatchEv` declares a 8-byte")
+                && tokens.contains("4 bytes"),
+            "message must name the event and both widths: {tokens}",
+        );
+    }
+
+    /// An empty default holds no bytes to compare, so a non-zero width has nothing to match.
+    #[test]
+    fn empty_default_on_a_sized_discriminator_is_rejected() {
+        for (fixture, entry) in [
+            (
+                "invalid_empty_default_account.json",
+                "account `emptyDefault`",
+            ),
+            (
+                "invalid_empty_default_instruction.json",
+                "instruction `emptyDefaultIx`",
+            ),
+        ] {
+            let tokens = expand(fixture, false);
+
+            assert!(
+                tokens.contains("compile_error"),
+                "{fixture}: no compile_error emitted"
+            );
+            assert!(
+                tokens.contains(entry) && tokens.contains("4-byte") && tokens.contains("0 bytes"),
+                "{fixture}: message must name the entry and both widths: {tokens}",
+            );
+        }
     }
 
     /// Only the fixtures built to fail may emit a `compile_error!`.

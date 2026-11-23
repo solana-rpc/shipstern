@@ -163,21 +163,45 @@ fn resolve_event_field(
 
 /// The declared width and default length of the first field discriminator whose
 /// parser arm can never match, for expansion-time rejection.
-pub(crate) fn dead_width_discriminator(
-    instruction: &codama_nodes::InstructionNode,
+fn dead_width(
+    discriminators: &[DiscriminatorNode],
+    resolve_field: impl Fn(&CamelCaseString) -> Option<ResolvedFieldDiscriminator>,
 ) -> Option<(usize, usize)> {
-    instruction.discriminators.iter().find_map(|discriminator| {
+    discriminators.iter().find_map(|discriminator| {
         let DiscriminatorNode::Field(node) = discriminator else {
             return None;
         };
 
-        let resolved = resolve_ix_field(instruction, &node.name)?;
+        let resolved = resolve_field(&node.name)?;
         let bytes = resolved.bytes?;
         let TypeNode::FixedSize(fixed) = resolved.r#type else {
             return None;
         };
 
         crate::utils::width_mismatch(fixed.size, &bytes).then_some((fixed.size, bytes.len()))
+    })
+}
+
+pub(crate) fn dead_width_discriminator(
+    instruction: &codama_nodes::InstructionNode,
+) -> Option<(usize, usize)> {
+    dead_width(&instruction.discriminators, |name| {
+        resolve_ix_field(instruction, name)
+    })
+}
+
+/// An enveloped event matches on its rebased constants only, so its field
+/// discriminators are never read and cannot be dead.
+pub(crate) fn dead_width_event_discriminator(
+    event: &codama_nodes::EventNode,
+    envelope: Option<&crate::parse::CpiEventEnvelope>,
+) -> Option<(usize, usize)> {
+    if envelope.is_some() {
+        return None;
+    }
+
+    dead_width(&event.discriminators, |name| {
+        resolve_event_field(event, name)
     })
 }
 

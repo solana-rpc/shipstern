@@ -8,9 +8,17 @@
 
 use codama_nodes::{DiscriminatorNode, RootNode};
 
-pub(crate) fn validate_idl(idl: &RootNode) -> Result<(), String> { check_discriminator_widths(idl) }
+pub(crate) fn validate_idl(
+    idl: &RootNode,
+    envelope: Option<&crate::parse::ProgramEnvelope>,
+) -> Result<(), String> {
+    check_discriminator_widths(idl, envelope)
+}
 
-fn check_discriminator_widths(idl: &RootNode) -> Result<(), String> {
+fn check_discriminator_widths(
+    idl: &RootNode,
+    envelope: Option<&crate::parse::ProgramEnvelope>,
+) -> Result<(), String> {
     for ix in &idl.program.instructions {
         let Some((size, len)) = crate::render::instruction_parser::dead_width_discriminator(ix)
         else {
@@ -31,8 +39,7 @@ fn check_discriminator_widths(idl: &RootNode) -> Result<(), String> {
                 continue;
             };
 
-            // An empty default matches any data of the declared width, so its arm is live.
-            if field.bytes.is_empty() || !crate::utils::width_mismatch(field.size, &field.bytes) {
+            if !crate::utils::width_mismatch(field.size, &field.bytes) {
                 continue;
             }
 
@@ -43,6 +50,23 @@ fn check_discriminator_widths(idl: &RootNode) -> Result<(), String> {
                 field.bytes.len(),
             ));
         }
+    }
+
+    let events = &idl.program.events;
+
+    let event_envelopes = envelope.map_or_else(
+        || vec![None; events.len()],
+        |program| program.resolve(events),
+    );
+
+    for (event, envelope) in events.iter().zip(event_envelopes) {
+        let Some((size, len)) =
+            crate::render::instruction_parser::dead_width_event_discriminator(event, envelope)
+        else {
+            continue;
+        };
+
+        return Err(width_message("event", &event.name, size, len));
     }
 
     Ok(())
