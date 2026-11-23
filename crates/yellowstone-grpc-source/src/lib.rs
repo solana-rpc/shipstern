@@ -296,6 +296,11 @@ async fn unless_closed<T>(
     }
 }
 
+fn receiver_dropped() -> SourceExitStatus {
+    tracing::info!("Receiver dropped, stopping source");
+    SourceExitStatus::ReceiverDropped
+}
+
 /// A ping or a pong. The server can send one before it reads the request.
 fn is_ping(update: &SubscribeUpdate) -> bool {
     matches!(
@@ -566,8 +571,7 @@ where
             mode == ReconnectMode::SlotResume && request.from_slot.is_some();
 
         let Some(opened) = unless_closed(&mut closed, open(request)).await else {
-            tracing::info!("Receiver dropped, stopping source");
-            break SourceExitStatus::ReceiverDropped;
+            break receiver_dropped();
         };
         let (mut sink, mut stream) = match opened {
             Ok(opened) => opened,
@@ -581,8 +585,7 @@ where
                         )
                         .await
                         else {
-                            tracing::info!("Receiver dropped, stopping source");
-                            break SourceExitStatus::ReceiverDropped;
+                            break receiver_dropped();
                         };
                         retry
                     },
@@ -609,8 +612,7 @@ where
                 biased;
 
                 () = &mut closed => {
-                    tracing::info!("Receiver dropped, stopping source");
-                    break StreamStop::Exit(SourceExitStatus::ReceiverDropped);
+                    break StreamStop::Exit(receiver_dropped());
                 },
 
                 filter_update = next_filter_update(&mut filter_updates_rx),
@@ -660,8 +662,7 @@ where
 
                         let sending = Instant::now();
                         if tx.send(Ok(update)).await.is_err() {
-                            tracing::info!("Receiver dropped, stopping source");
-                            break StreamStop::Exit(SourceExitStatus::ReceiverDropped);
+                            break StreamStop::Exit(receiver_dropped());
                         }
 
                         // Time on a full channel is our delay, not the server's silence.
@@ -725,8 +726,7 @@ where
                 )
                 .await
                 else {
-                    tracing::info!("Receiver dropped, stopping source");
-                    break SourceExitStatus::ReceiverDropped;
+                    break receiver_dropped();
                 };
                 retry
             },
