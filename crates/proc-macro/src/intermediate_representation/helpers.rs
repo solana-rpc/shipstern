@@ -225,7 +225,7 @@ pub fn materialize_type(
             }
         },
 
-        other => ir.resolve_field(LabelIr::Singular, map_type(other)),
+        other => ir.resolve_field(LabelIr::Singular, map_type(base_name, other)),
     }
 }
 
@@ -360,15 +360,15 @@ fn materialize_tuple_message(
 /// Map a single Codama type node to its IR scalar/message type.
 ///
 /// Wrappers like Option/Array and Tuple are handled by `materialize_type`.
-fn map_type(t: &codama_nodes::TypeNode) -> FieldTypeIr {
+fn map_type(base_name: &str, t: &codama_nodes::TypeNode) -> FieldTypeIr {
     use codama_nodes::{Endianness, NestedTypeNodeTrait, NumberFormat as NF, TypeNode as T};
 
     match t {
         // A bare string or bytes node has no length on the wire (Codama reads it to the end of
         // the buffer), so decoding it as a u32-prefixed value would silently misread it.
         T::String(_) => panic!(
-            "stringTypeNode must be wrapped in sizePrefixTypeNode or fixedSizeTypeNode; a bare \
-             string has no length prefix and is not supported"
+            "`{base_name}`: stringTypeNode must be wrapped in sizePrefixTypeNode or \
+             fixedSizeTypeNode; a bare string has no length prefix and is not supported"
         ),
         T::SizePrefix(sp) => {
             let prefix = sp.prefix.get_nested_type_node();
@@ -378,8 +378,8 @@ fn map_type(t: &codama_nodes::TypeNode) -> FieldTypeIr {
 
             match (sp.r#type.as_ref(), native) {
                 (inner, _) if !matches!(inner, T::Bytes(_) | T::String(_)) => panic!(
-                    "sizePrefixTypeNode over {inner:?} is not supported; only string and bytes \
-                     can be size-prefixed"
+                    "`{base_name}`: sizePrefixTypeNode over {inner:?} is not supported; only \
+                     string and bytes can be size-prefixed"
                 ),
                 (T::Bytes(_), true) => FieldTypeIr::Scalar(ScalarIr::Bytes),
                 (T::Bytes(_), false) => FieldTypeIr::Scalar(ScalarIr::SizePrefixedBytes {
@@ -394,8 +394,8 @@ fn map_type(t: &codama_nodes::TypeNode) -> FieldTypeIr {
             }
         },
         T::Bytes(_) => panic!(
-            "bytesTypeNode must be wrapped in sizePrefixTypeNode or fixedSizeTypeNode; bare bytes \
-             have no length prefix and are not supported"
+            "`{base_name}`: bytesTypeNode must be wrapped in sizePrefixTypeNode or \
+             fixedSizeTypeNode; bare bytes have no length prefix and are not supported"
         ),
         T::PublicKey(_) => FieldTypeIr::Scalar(ScalarIr::PublicKey),
         T::Boolean(b) => {
@@ -403,7 +403,8 @@ fn map_type(t: &codama_nodes::TypeNode) -> FieldTypeIr {
 
             if size.format != NF::U8 {
                 panic!(
-                    "booleanTypeNode with a {:?} size is not supported; only u8 booleans are",
+                    "`{base_name}`: booleanTypeNode with a {:?} size is not supported; only u8 \
+                     booleans are",
                     size.format
                 );
             }
@@ -441,8 +442,8 @@ fn map_type(t: &codama_nodes::TypeNode) -> FieldTypeIr {
             panic!("map_type() called with Tuple; handle tuple via materialize_tuple_message")
         },
 
-        T::Option(o) => map_type(&o.item),
-        T::Array(a) => map_type(&a.item),
+        T::Option(o) => map_type(base_name, &o.item),
+        T::Array(a) => map_type(base_name, &a.item),
 
         other => panic!("map_type not implemented for {:?}", other),
     }
@@ -505,29 +506,34 @@ mod tests {
     fn u32_prefix() -> NumberTypeNode { NumberTypeNode::le(NumberFormat::U32) }
 
     #[test]
-    #[should_panic(expected = "stringTypeNode must be wrapped")]
-    fn bare_string_is_rejected() { map_type(&StringTypeNode::utf8().into()); }
+    #[should_panic(expected = "`TouchArgsName`: stringTypeNode must be wrapped")]
+    fn bare_string_is_rejected() { map_type("TouchArgsName", &StringTypeNode::utf8().into()); }
 
     #[test]
-    #[should_panic(expected = "bytesTypeNode must be wrapped")]
-    fn bare_bytes_are_rejected() { map_type(&BytesTypeNode::new().into()); }
+    #[should_panic(expected = "`TouchArgsData`: bytesTypeNode must be wrapped")]
+    fn bare_bytes_are_rejected() { map_type("TouchArgsData", &BytesTypeNode::new().into()); }
 
     #[test]
-    #[should_panic(expected = "sizePrefixTypeNode over")]
+    #[should_panic(expected = "`TouchArgsInner`: sizePrefixTypeNode over")]
     fn size_prefix_over_a_struct_is_rejected() {
         let node = SizePrefixTypeNode::<TypeNode>::new(StructTypeNode::new(vec![]), u32_prefix());
 
-        map_type(&node.into());
+        map_type("TouchArgsInner", &node.into());
     }
 
     #[test]
-    #[should_panic(expected = "booleanTypeNode with a U32 size")]
-    fn wide_boolean_is_rejected() { map_type(&BooleanTypeNode::new(u32_prefix()).into()); }
+    #[should_panic(expected = "`TouchArgsFlag`: booleanTypeNode with a U32 size")]
+    fn wide_boolean_is_rejected() {
+        map_type("TouchArgsFlag", &BooleanTypeNode::new(u32_prefix()).into());
+    }
 
     #[test]
     fn supported_scalars_still_map() {
         let prefixed = |inner: TypeNode| {
-            map_type(&SizePrefixTypeNode::<TypeNode>::new(inner, u32_prefix()).into())
+            map_type(
+                "Field",
+                &SizePrefixTypeNode::<TypeNode>::new(inner, u32_prefix()).into(),
+            )
         };
 
         assert!(matches!(
@@ -539,7 +545,7 @@ mod tests {
             FieldTypeIr::Scalar(ScalarIr::Bytes)
         ));
         assert!(matches!(
-            map_type(&BooleanTypeNode::default().into()),
+            map_type("Field", &BooleanTypeNode::default().into()),
             FieldTypeIr::Scalar(ScalarIr::Bool)
         ));
     }
