@@ -55,7 +55,7 @@ pub enum BuilderError {
 }
 
 /// A builder used by both the [`Runtime`] and
-/// [`stream::Server`](crate::stream::Server) types.
+/// `shipstern_stream::Server` types.
 #[derive(Debug)]
 #[must_use = "Consider calling .build() on this builder"]
 pub struct Builder<K: BuilderKind> {

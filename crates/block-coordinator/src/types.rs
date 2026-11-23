@@ -205,7 +205,7 @@ impl<R> CoordinatorMessage<R> {
 
 /// Sort key for records within a slot.
 /// Ordered by transaction index, then instruction path (depth-first CPI order).
-/// SmallVec sorts lexicographically: [0] < [0,0] < [0,1] < [1] which matches
+/// SmallVec sorts lexicographically: `[0] < [0,0] < [0,1] < [1]` which matches
 /// depth-first execution order. Inline storage for up to 4 elements avoids
 /// heap allocation (Solana CPI depth is capped at 4).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

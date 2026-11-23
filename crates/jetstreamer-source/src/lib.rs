@@ -33,7 +33,7 @@ pub struct PossibleLeaderSkippedEvent {
 ///
 /// Because `std::env::set_var` is unsound once other threads exist,
 /// callers must apply these **before** the async runtime starts.
-/// [`connect`] then validates that the process env still matches.
+/// [`JetstreamSource::connect`](SourceTrait::connect) then validates that the process env still matches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessEnvConfig {
     pub network: String,
