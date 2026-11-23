@@ -6475,6 +6475,7 @@ name = "shipstern-stream"
 version = "0.13.0"
 dependencies = [
  "clap",
+ "futures-channel",
  "futures-util",
  "pin-project-lite",
  "prometheus",
