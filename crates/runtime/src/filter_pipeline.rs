@@ -77,10 +77,10 @@ impl<P: Parser, H> GetPrefilter for FilterPipeline<P, H> {
                 .iter()
                 .chain(user_exclude)
                 .flatten()
-                .cloned()
+                .copied()
                 .collect();
             tx.vote = user_tx.vote.or(own_vote);
-            tx.signature = user_tx.signature.as_ref().or(own_signature.as_ref()).cloned();
+            tx.signature = user_tx.signature.clone().or(own_signature);
         }
 
         prefilter
