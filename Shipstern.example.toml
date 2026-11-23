@@ -69,7 +69,8 @@ timeout = 60
 #sources-channel-size = 100
 
 # Metrics are not configured from this file. The runtime takes a
-# `prometheus::Registry` through the builder instead:
+# `prometheus::Registry` through the builder instead, with the `prometheus`
+# feature of `shipstern` enabled:
 #
 #     Runtime::builder()
 #         .metrics(prometheus::Registry::new())
