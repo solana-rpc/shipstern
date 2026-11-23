@@ -117,8 +117,12 @@ impl<R> SlotRecordBuffer<R> {
         match kind {
             ParseStatsKind::InstructionFiltered => self.filtered_instruction_count += 1,
             ParseStatsKind::InstructionError => self.failed_instruction_count += 1,
-            ParseStatsKind::AccountFiltered => self.filtered_account_count += 1,
-            ParseStatsKind::AccountError => self.failed_account_count += 1,
+            ParseStatsKind::AccountFiltered | ParseStatsKind::AccountFilteredFallback => {
+                self.filtered_account_count += 1
+            },
+            ParseStatsKind::AccountError | ParseStatsKind::AccountErrorFallback => {
+                self.failed_account_count += 1
+            },
             ParseStatsKind::TransactionStatusFailed => self.transaction_status_failed_count += 1,
             ParseStatsKind::TransactionStatusSucceeded => {
                 self.transaction_status_succeeded_count += 1

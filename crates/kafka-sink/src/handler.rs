@@ -219,9 +219,9 @@ impl shipstern::Handler<AccountUpdate, AccountUpdate> for BufferingHandler {
             // fallback instruction records so slot stats reflect decode quality.
             if !is_decoded {
                 let kind = if had_error {
-                    ParseStatsKind::AccountError
+                    ParseStatsKind::AccountErrorFallback
                 } else {
-                    ParseStatsKind::AccountFiltered
+                    ParseStatsKind::AccountFilteredFallback
                 };
 
                 self.cancelable_send(self.handle.send_parse_stats(slot, bank_id, kind).await);
@@ -390,7 +390,7 @@ mod tests {
                     fallback_records += 1;
                 },
                 CoordinatorMessage::ParseStats {
-                    kind: ParseStatsKind::AccountError,
+                    kind: ParseStatsKind::AccountErrorFallback,
                     ..
                 } => error_stats += 1,
                 _ => {},
