@@ -200,15 +200,13 @@ struct Layout {
     tail: u64,
 }
 
-/// The IDL's types, each nested type's shape computed once: recomputing it per
-/// use is exponential in the nesting.
-/// Anchor omits `fields` on an empty struct, and the type mapping reads that as
-/// empty; the layout walker must agree, or a marker struct hides the whole account.
+/// Anchor tags every body with a `kind` and omits only `fields`, on an empty struct, which the
+/// type mapping reads as empty; the layout walker must agree, or a marker struct hides the whole
+/// account. Any other kind, an enum or an alias, has no field layout.
 fn struct_fields(ty: &TypeDef) -> Option<&[Value]> {
     let body = ty.ty.as_ref()?.as_object()?;
 
-    // An enum body has no `fields` either, and `repr(C)` enums carry a repr too.
-    if body.get("kind").and_then(Value::as_str) == Some("enum") {
+    if body.get("kind").and_then(Value::as_str) != Some("struct") {
         return None;
     }
 
@@ -218,6 +216,8 @@ fn struct_fields(ty: &TypeDef) -> Option<&[Value]> {
     }
 }
 
+/// The IDL's types, each nested type's shape computed once: recomputing it per
+/// use is exponential in the nesting.
 struct Layouts<'a> {
     defs: HashMap<&'a str, &'a TypeDef>,
     known: RefCell<HashMap<&'a str, Option<Shape>>>,
