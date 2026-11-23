@@ -364,7 +364,12 @@ fn map_type(t: &codama_nodes::TypeNode) -> FieldTypeIr {
     use codama_nodes::{Endianness, NestedTypeNodeTrait, NumberFormat as NF, TypeNode as T};
 
     match t {
-        T::String(_) => FieldTypeIr::Scalar(ScalarIr::String),
+        // A bare string or bytes node has no length on the wire (Codama reads it to the end of
+        // the buffer), so decoding it as a u32-prefixed value would silently misread it.
+        T::String(_) => panic!(
+            "stringTypeNode must be wrapped in sizePrefixTypeNode or fixedSizeTypeNode; a bare \
+             string has no length prefix and is not supported"
+        ),
         T::SizePrefix(sp) => {
             let prefix = sp.prefix.get_nested_type_node();
 
@@ -372,6 +377,10 @@ fn map_type(t: &codama_nodes::TypeNode) -> FieldTypeIr {
             let native = prefix.format == NF::U32 && prefix.endian == Endianness::Le;
 
             match (sp.r#type.as_ref(), native) {
+                (inner, _) if !matches!(inner, T::Bytes(_) | T::String(_)) => panic!(
+                    "sizePrefixTypeNode over {inner:?} is not supported; only string and bytes \
+                     can be size-prefixed"
+                ),
                 (T::Bytes(_), true) => FieldTypeIr::Scalar(ScalarIr::Bytes),
                 (T::Bytes(_), false) => FieldTypeIr::Scalar(ScalarIr::SizePrefixedBytes {
                     format: prefix.format,
@@ -384,9 +393,23 @@ fn map_type(t: &codama_nodes::TypeNode) -> FieldTypeIr {
                 }),
             }
         },
-        T::Bytes(_) => FieldTypeIr::Scalar(ScalarIr::Bytes),
+        T::Bytes(_) => panic!(
+            "bytesTypeNode must be wrapped in sizePrefixTypeNode or fixedSizeTypeNode; bare bytes \
+             have no length prefix and are not supported"
+        ),
         T::PublicKey(_) => FieldTypeIr::Scalar(ScalarIr::PublicKey),
-        T::Boolean(_) => FieldTypeIr::Scalar(ScalarIr::Bool),
+        T::Boolean(b) => {
+            let size = b.size.get_nested_type_node();
+
+            if size.format != NF::U8 {
+                panic!(
+                    "booleanTypeNode with a {:?} size is not supported; only u8 booleans are",
+                    size.format
+                );
+            }
+
+            FieldTypeIr::Scalar(ScalarIr::Bool)
+        },
 
         T::Number(n) => match n.format {
             NF::U8 => FieldTypeIr::Scalar(ScalarIr::U8),
@@ -467,5 +490,57 @@ pub fn event_struct(
         T::FixedSize(w) => event_struct(&w.r#type),
         T::SizePrefix(w) => event_struct(&w.r#type),
         other => Err(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use codama_nodes::{
+        BooleanTypeNode, BytesTypeNode, NumberFormat, NumberTypeNode, SizePrefixTypeNode,
+        StringTypeNode, StructTypeNode, TypeNode,
+    };
+
+    use super::*;
+
+    fn u32_prefix() -> NumberTypeNode { NumberTypeNode::le(NumberFormat::U32) }
+
+    #[test]
+    #[should_panic(expected = "stringTypeNode must be wrapped")]
+    fn bare_string_is_rejected() { map_type(&StringTypeNode::utf8().into()); }
+
+    #[test]
+    #[should_panic(expected = "bytesTypeNode must be wrapped")]
+    fn bare_bytes_are_rejected() { map_type(&BytesTypeNode::new().into()); }
+
+    #[test]
+    #[should_panic(expected = "sizePrefixTypeNode over")]
+    fn size_prefix_over_a_struct_is_rejected() {
+        let node = SizePrefixTypeNode::<TypeNode>::new(StructTypeNode::new(vec![]), u32_prefix());
+
+        map_type(&node.into());
+    }
+
+    #[test]
+    #[should_panic(expected = "booleanTypeNode with a U32 size")]
+    fn wide_boolean_is_rejected() { map_type(&BooleanTypeNode::new(u32_prefix()).into()); }
+
+    #[test]
+    fn supported_scalars_still_map() {
+        let prefixed = |inner: TypeNode| {
+            map_type(&SizePrefixTypeNode::<TypeNode>::new(inner, u32_prefix()).into())
+        };
+
+        assert!(matches!(
+            prefixed(StringTypeNode::utf8().into()),
+            FieldTypeIr::Scalar(ScalarIr::String)
+        ));
+        assert!(matches!(
+            prefixed(BytesTypeNode::new().into()),
+            FieldTypeIr::Scalar(ScalarIr::Bytes)
+        ));
+        assert!(matches!(
+            map_type(&BooleanTypeNode::default().into()),
+            FieldTypeIr::Scalar(ScalarIr::Bool)
+        ));
     }
 }
