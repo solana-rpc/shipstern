@@ -11,6 +11,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 - **Breaking** `shipstern-proc-macro` and the instruction parser crates: instruction parsers select their program with `transaction_accounts_include`, not `transaction_accounts`. The runtime merges all instruction parsers into one filter, so it received only transactions that touched every program. Include keys merged into `InstructionPipeline::ID` now widen it ([#395](https://github.com/solana-rpc/shipstern/pull/395), from #340 by @hack-wrench and @senzenn).
 - `shipstern`: a bundled `FilterPipeline` also checks its transaction filter in the client and skips a transaction that the filter rejects, on every source. The check drops a false cuckoo match, and a filter update through `RuntimeHandle` does not change it. `DynPipeline::client_filter` is new and returns `None` by default ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- **Breaking** for feature lists: `shipstern-parser` no longer has the implicit `solana-program-option` feature, which enabled no code, and its `proto` feature no longer turns on `shipstern-proto/parser`. Delete the feature from your `features = [...]` ([#449](https://github.com/solana-rpc/shipstern/pull/449) by @Estereg).
 
 ### Fixed
 
