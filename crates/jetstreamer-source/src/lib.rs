@@ -639,8 +639,15 @@ impl SlotRangeConfig {
             },
             (None, None, Some(epoch)) => {
                 const SLOTS_PER_EPOCH: u64 = 432_000;
-                let start = epoch * SLOTS_PER_EPOCH;
-                let end = (epoch + 1) * SLOTS_PER_EPOCH;
+                let Some(end) = epoch
+                    .checked_add(1)
+                    .and_then(|next| next.checked_mul(SLOTS_PER_EPOCH))
+                else {
+                    return Err(Error::InvalidConfig(format!(
+                        "epoch {epoch} is past the last slot"
+                    )));
+                };
+                let start = end - SLOTS_PER_EPOCH;
                 info!(
                     epoch,
                     start_slot = start,
@@ -918,9 +925,11 @@ mod tests {
     #[test]
     fn invalid_slot_ranges_are_rejected() {
         for (start, end, epoch) in [
-            (Some(100), Some(50), None),       // end before start
-            (Some(100), Some(100), None),      // empty range
-            (Some(100), Some(200), Some(800)), // both slots and epoch
+            (Some(100), Some(50), None),            // end before start
+            (Some(100), Some(100), None),           // empty range
+            (Some(100), Some(200), Some(800)),      // both slots and epoch
+            (None, None, Some(u64::MAX / 432_000)), // end slot overflows
+            (None, None, Some(u64::MAX)),           // start slot overflows
         ] {
             let config = SlotRangeConfig {
                 slot_start: start,
