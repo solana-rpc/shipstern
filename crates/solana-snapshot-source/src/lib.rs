@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     path::PathBuf,
     sync::{atomic::AtomicBool, Arc},
 };
@@ -318,7 +318,7 @@ impl SourceTrait for SolanaSnapshotSource {
                 let program_ids = owners
                     .iter()
                     .map(|owner| SolanaPubkey::new_from_array(**owner))
-                    .collect::<HashSet<_>>();
+                    .collect::<Vec<_>>();
                 let mut is_closed = false;
                 let mut error: Option<ShipsternError> = None;
 
