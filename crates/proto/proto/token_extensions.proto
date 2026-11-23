@@ -425,9 +425,12 @@ message ConfidentialTransferAccounts {
   shipstern.parser.token.PublicKey source_account = 1;
   shipstern.parser.token.PublicKey mint = 2;
   shipstern.parser.token.PublicKey destination = 3;
-  shipstern.parser.token.PublicKey context_account = 4;
-  shipstern.parser.token.PublicKey owner = 5;
-  repeated shipstern.parser.token.PublicKey multisig_signers = 6;
+  optional shipstern.parser.token.PublicKey instructions_sysvar = 4;
+  optional shipstern.parser.token.PublicKey equality_context = 5;
+  optional shipstern.parser.token.PublicKey ciphertext_validity_context = 6;
+  optional shipstern.parser.token.PublicKey range_context = 7;
+  shipstern.parser.token.PublicKey owner = 8;
+  repeated shipstern.parser.token.PublicKey multisig_signers = 9;
 }
 
 message ApplyPendingBalanceAccounts {
@@ -446,6 +449,14 @@ message TransferWithFeeAccounts {
   shipstern.parser.token.PublicKey source_account = 1;
   shipstern.parser.token.PublicKey mint = 2;
   shipstern.parser.token.PublicKey destination = 3;
+  optional shipstern.parser.token.PublicKey instructions_sysvar = 4;
+  optional shipstern.parser.token.PublicKey equality_context = 5;
+  optional shipstern.parser.token.PublicKey transfer_amount_ciphertext_validity_context = 6;
+  optional shipstern.parser.token.PublicKey fee_sigma_context = 7;
+  optional shipstern.parser.token.PublicKey fee_ciphertext_validity_context = 8;
+  optional shipstern.parser.token.PublicKey range_context = 9;
+  shipstern.parser.token.PublicKey owner = 10;
+  repeated shipstern.parser.token.PublicKey multisig_signers = 11;
 }
 
 message ConfigureAccountWithRegistryAccounts {
