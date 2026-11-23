@@ -63,8 +63,9 @@ struct ShortBank<R> {
     statuses: Vec<CoordinatorEvent<R>>,
 }
 
-/// About 25 seconds of 400 ms slots behind a slot that never resolves. Accounts committed at
-/// finalized trail confirmation by about 32 slots on TowerBFT, so such a consumer may want more.
+/// About 64 slots behind a slot that never resolves. On Alpenglow, Agave reports confirmed only
+/// when it roots a finalized block, so this also fits accounts committed at finalized. A
+/// slow-finality cluster can need more.
 pub const DEFAULT_MAX_PENDING_BANKS: usize = 64;
 
 /// Banks per generation of `bank_slots`.
@@ -81,8 +82,8 @@ impl<R: Send + 'static> BlockMachineCoordinator<R> {
         max_pending_banks: usize,
     ) -> Self {
         Self {
-            // Freeze on BlockMeta: the coordinator does not use footer data, and mainnet has
-            // no footers before Alpenglow.
+            // Freeze on BlockMeta: the coordinator does not use footer data, and the source never
+            // forwards footers, so a footer gate would never freeze a bank.
             wrapper: BlocksStateMachineWrapper::default().with_config(BlockMachineConfig {
                 require_block_footer: false,
             }),

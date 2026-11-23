@@ -2,6 +2,27 @@ use std::borrow::Cow;
 
 use shipstern_core::{ParseResult, Parser, Prefilter, ProgramParser, Pubkey, SlotUpdate};
 
+///
+/// Passes slot status updates through. The default prefilter receives only the status at
+/// the stream's commitment.
+///
+/// For `CreatedBank` and `Dead`, add `slot_interslot_updates(true)` with a `FilterPipeline`.
+/// It also turns off the commitment filter, so the pipeline gets every status. A `Dead` status
+/// has no `bank_id`. On a confirmed or finalized stream, yellowstone-grpc 16.2.0 and newer
+/// sends `CreatedBank` only for the bank that reaches that level.
+///
+/// Fumarole ignores `interslot_updates` but applies the commitment filter. There the setting
+/// adds the processed, confirmed and finalized statuses, but no `CreatedBank` or `Dead`.
+/// A dead slot comes as one of these statuses, with `dead_error` set.
+///
+/// ```rust, ignore
+/// Runtime::builder().slot(FilterPipeline::new(
+///     SlotParser,
+///     [Handler],
+///     Prefilter::builder().slot_interslot_updates(true),
+/// ))
+/// ```
+///
 #[derive(Debug, Clone, Copy)]
 pub struct SlotParser;
 
@@ -22,5 +43,32 @@ impl ProgramParser for SlotParser {
         "S111111111111111111111111111111111111111112"
             .parse()
             .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use shipstern_core::SlotPrefilter;
+
+    use super::*;
+
+    /// A `FilterPipeline` merges its extra prefilter into the parser's, as here.
+    #[test]
+    fn extra_prefilter_turns_on_every_slot_status() {
+        let mut prefilter = SlotParser.prefilter();
+        prefilter.merge(
+            Prefilter::builder()
+                .slot_interslot_updates(true)
+                .build()
+                .unwrap(),
+        );
+
+        assert_eq!(
+            prefilter.slot,
+            Some(SlotPrefilter {
+                filter_by_commitment: false,
+                interslot_updates: Some(true),
+            })
+        );
     }
 }

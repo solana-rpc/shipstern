@@ -52,9 +52,9 @@ in this repository are all in that shape and make a useful reference.
 ```toml
 [dependencies]
 borsh = { version = "^1.0.0", features = ["derive"] }
-shipstern-core = { version = "0.12.0" }
-shipstern-parser = { version = "0.12.0" }
-shipstern-proc-macro = { version = "0.12.0" }
+shipstern-core = { version = "0.13.0" }
+shipstern-parser = { version = "0.13.0" }
+shipstern-proc-macro = { version = "0.13.0" }
 prost = "0.14.4"
 ```
 
@@ -66,7 +66,7 @@ imports `shipstern_core` and derives `BorshDeserialize` / `BorshSerialize` on ev
 To parse events, including self-CPI events, add the `program-events` feature:
 
 ```toml
-shipstern-proc-macro = { version = "0.12.0", features = ["program-events"] }
+shipstern-proc-macro = { version = "0.13.0", features = ["program-events"] }
 ```
 
 **3. Invoke the macro.** The path is resolved relative to your crate root

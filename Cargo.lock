@@ -2038,7 +2038,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 3.0.9",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -2617,9 +2617,9 @@ checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -3721,9 +3721,9 @@ dependencies = [
 
 [[package]]
 name = "libz-sys"
-version = "1.1.31"
+version = "1.1.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff20308ecabd635a2dc1dd5834a86c462cca20efba1d5d3ddab1f8aea3455cb2"
+checksum = "fee3f59f4321dab0c78d828942e7aa09d0bd8ad6e78a501977e6bf3d02938045"
 dependencies = [
  "cc",
  "libc",
@@ -4715,6 +4715,7 @@ dependencies = [
  "serde_json",
  "shipstern",
  "shipstern-block-meta-parser",
+ "shipstern-bpf-loader-parser",
  "shipstern-core",
  "shipstern-mock",
  "shipstern-parser",
@@ -6046,7 +6047,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -6068,7 +6069,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-block-coordinator"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "bs58",
@@ -6093,7 +6094,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-block-meta-parser"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "prost 0.14.4",
  "prost-types 0.14.4",
@@ -6106,7 +6107,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-bpf-loader-parser"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "bincode",
  "prost 0.14.4",
@@ -6122,7 +6123,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-codama-from-anchor"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anchor-lang-idl",
  "bs58",
@@ -6136,7 +6137,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-core"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "base64 0.22.1",
  "borsh",
@@ -6205,7 +6206,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-example-jetstreamer"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "bs58",
@@ -6221,7 +6222,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-example-preconf"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "clap",
  "rustls",
@@ -6279,7 +6280,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-jetstream-source"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6315,7 +6316,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-kafka-sink"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "futures",
  "mockito",
@@ -6334,7 +6335,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-mock"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "bs58",
  "futures",
@@ -6353,7 +6354,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-parser"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "base64 0.22.1",
  "bs58",
@@ -6368,7 +6369,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-preconf-source"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6393,7 +6394,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-proc-macro"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "base64 0.22.1",
  "bs58",
@@ -6411,7 +6412,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-proto"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "prost 0.14.4",
  "prost-types 0.14.4",
@@ -6424,7 +6425,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-slot-parser"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "shipstern-core",
  "shipstern-mock",
@@ -6433,7 +6434,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-solana-rpc-source"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -6451,7 +6452,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-solana-snapshot-source"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "agave-fs",
  "agave-snapshots",
@@ -6478,7 +6479,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-spl-token-extensions-parser"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "borsh",
  "bs58",
@@ -6505,7 +6506,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-spl-token-parser"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "bs58",
  "bytemuck",
@@ -6528,7 +6529,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-stake-pool-parser"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "borsh",
  "prost 0.14.4",
@@ -6545,7 +6546,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-stream"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -6576,7 +6577,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-yellowstone-fumarole-source"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "bytesize 2.7.0",
@@ -6596,7 +6597,7 @@ dependencies = [
 
 [[package]]
 name = "shipstern-yellowstone-grpc-source"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -10317,7 +10318,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -11023,9 +11024,9 @@ dependencies = [
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",

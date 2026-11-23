@@ -455,8 +455,8 @@ impl<R> CoordinatorState<R> {
             self.buffer.retain(|key, _| key.slot > last);
         }
         self.prune_discarded_slots();
-        // Prune by the account frontier, not the instruction one: in finalized mode
-        // instruction slots flush far earlier, and pruning by them drops valid counts.
+        // Prune by the account frontier: in finalized mode the instruction frontier can be ahead,
+        // and pruning by it drops valid counts.
         if let Some(last) = self.last_account_flushed_slot {
             self.account_event_counts = self
                 .account_event_counts

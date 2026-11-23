@@ -99,6 +99,9 @@ All keys are `kebab-case`.
 | `max-decoding-message-size` | `int`                    | No       | Max decoded message size in bytes (default: `usize::MAX`).                                          |
 | `accept-compression`        | `"zstd"` &#124; `"gzip"` | No       | Request/response compression.                                                                       |
 
+With no `commitment-level`, Fumarole uses processed. On Alpenglow, confirmed and
+finalized arrive together, so the real choice is processed or finalized.
+
 ### Prometheus-related fields
 
 `FumaroleConfig` also defines (behind the crate feature `prometheus`) these keys:
