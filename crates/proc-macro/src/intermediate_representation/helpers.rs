@@ -68,7 +68,7 @@ pub fn build_fields_ir(
     let mut out = Vec::new();
     let mut tag: u32 = 0;
     let mut seen_names: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    let prefix_len = discriminator_prefix_len(fields, discriminators);
+    let prefix_len = discriminator_prefix_len(fields, discriminators, ir);
 
     for (index, field) in fields.iter().enumerate() {
         let omitted =
@@ -118,30 +118,66 @@ pub fn build_fields_ir(
 /// How many leading fields the parser strips as a discriminator prefix.
 ///
 /// A field discriminator names a carrier field, and the parser drops every byte up to the end of
-/// it, so the fields up to the last carrier never reach the struct decoder. A constant or size
-/// discriminator names no field, so all omitted fields stay skipped as they always were. Without
-/// discriminators nothing is stripped.
+/// it, so the fields up to the last carrier never reach the struct decoder. A constant
+/// discriminator drops the bytes up to the end of its constant, and the omitted fields that fit
+/// in those bytes are its carrier. A size discriminator drops nothing. Any omitted field behind
+/// the stripped prefix is still on the wire, so it is decoded.
+///
+/// A discriminator that cannot be sized, or a field carrier that is not a field, keeps every
+/// omitted field skipped. Without discriminators nothing is stripped.
 fn discriminator_prefix_len(
     fields: &[impl FieldLikeNode],
     discriminators: &[codama_nodes::DiscriminatorNode],
+    ir: &SchemaIr,
 ) -> usize {
     if discriminators.is_empty() {
         return 0;
     }
 
-    let mut carriers = Vec::new();
+    let mut carrier_fields = 0;
+    let mut stripped_bytes = 0;
 
     for discriminator in discriminators {
         match discriminator {
-            codama_nodes::DiscriminatorNode::Field(node) => carriers.push(&node.name),
-            _ => return usize::MAX,
+            codama_nodes::DiscriminatorNode::Field(node) => {
+                let Some(index) = fields.iter().rposition(|field| field.name() == &node.name)
+                else {
+                    return usize::MAX;
+                };
+
+                carrier_fields = carrier_fields.max(index + 1);
+            },
+            codama_nodes::DiscriminatorNode::Constant(node) => {
+                let Some(width) = ir.fixed_size_of_type(&node.constant.r#type) else {
+                    return usize::MAX;
+                };
+
+                stripped_bytes = stripped_bytes.max(crate::utils::as_index(node.offset) + width);
+            },
+            codama_nodes::DiscriminatorNode::Size(_) => {},
         }
     }
 
-    fields
-        .iter()
-        .rposition(|field| carriers.contains(&field.name()))
-        .map_or(usize::MAX, |index| index + 1)
+    let mut carrier_bytes = 0;
+    let mut by_bytes = 0;
+
+    for field in fields {
+        let omitted =
+            field.default_value_strategy() == Some(codama_nodes::DefaultValueStrategy::Omitted);
+
+        let Some(size) = ir.fixed_size_of_type(field.r#type()).filter(|_| omitted) else {
+            break;
+        };
+
+        if carrier_bytes + size > stripped_bytes {
+            break;
+        }
+
+        carrier_bytes += size;
+        by_bytes += 1;
+    }
+
+    carrier_fields.max(by_bytes)
 }
 
 /// Materialize a Codama type whenever its protobuf form needs a named message,

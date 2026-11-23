@@ -11,11 +11,11 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 - **Breaking** `shipstern-proc-macro` and the instruction parser crates: instruction parsers select their program with `transaction_accounts_include`, not `transaction_accounts`. The runtime merges all instruction parsers into one filter, so it received only transactions that touched every program. Include keys merged into `InstructionPipeline::ID` now widen it ([#395](https://github.com/solana-rpc/shipstern/pull/395), from #340 by @hack-wrench and @senzenn).
 - `shipstern`: a bundled `FilterPipeline` also checks its transaction filter in the client and skips a transaction that the filter rejects, on every source. The check drops a false cuckoo match, and a filter update through `RuntimeHandle` does not change it. `DynPipeline::client_filter` is new and returns `None` by default ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- **Breaking** for struct literals: `shipstern-proc-macro`: the generated args, account and defined-type structs gain a field for each `omitted` field that is not part of the discriminator, such as a constant version byte after it. That includes any omitted field behind a constant or size discriminator, which strips only its own bytes. The field is still on the wire, but the parser skipped it, so every field after it decoded from the wrong offset. A fixed option also pads `None` for such a field ([#439](https://github.com/solana-rpc/shipstern/pull/439) by @Estereg).
 
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
-- `shipstern-proc-macro`: an `omitted` field that is not the discriminator, such as a constant version byte after it, is decoded and kept in the struct. It is still on the wire, but the parser skipped it, so every field after it decoded from the wrong offset. A fixed option also pads `None` for such a field ([#439](https://github.com/solana-rpc/shipstern/pull/439) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 
