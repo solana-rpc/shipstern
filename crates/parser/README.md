@@ -1,52 +1,22 @@
 # Shipstern Parser
 
-This crate provides several account parsers, such as Token and TokenExtension. These parsers can be imported from this crate and used within shipstern.
+Shared helpers for Shipstern parser crates and for the code that
+`include_shipstern_parser!` generates. It holds the parser `Error` type,
+`check_min_accounts_req`, the `Pubkey` conversion helpers and a `prelude` that
+re-exports the `shipstern-core` parser types.
+
+This crate has no parsers of its own. For ready-made parsers, use the program
+crates:
+
+- `shipstern-spl-token-parser` for the SPL Token program
+- `shipstern-spl-token-extensions-parser` for Token-2022
+- `shipstern-stake-pool-parser` for the SPL Stake Pool program
+- `shipstern-bpf-loader-parser` for the upgradeable BPF loader
+
+To build a parser from an Anchor or Codama IDL, see `shipstern-proc-macro`.
 
 ## Installation
 
 ```bash
-
 cargo add shipstern-parser
-
-```
-
-## Example
-
-```rust
-
-use std::path::PathBuf;
-
-use clap::Parser as _;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use shipstern::Pipeline;
-use shipstern_yellowstone_grpc_source::YellowstoneGrpcSource;
-use shipstern_parser::{
-    token_extension_program::{
-        AccountParser as TokenExtensionProgramAccParser,
-        InstructionParser as TokenExtensionProgramIxParser,
-    },
-    token_program::{
-        AccountParser as TokenProgramAccParser, InstructionParser as TokenProgramIxParser,
-    },
-};
-
-fn main() {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::from_default_env())
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
-    let Opts { config } = Opts::parse();
-    let config = std::fs::read_to_string(config).expect("Error reading config file");
-    let config = toml::from_str(&config).expect("Error parsing config");
-
-    shipstern::Runtime::builder()
-        .account(Pipeline::new(TokenExtensionProgramAccParser, [Handler]))
-        .account(Pipeline::new(TokenProgramAccParser, [Handler]))
-        .instruction(Pipeline::new(TokenExtensionProgramIxParser, [Handler]))
-        .instruction(Pipeline::new(TokenProgramIxParser, [Handler]))
-        .metrics(prometheus::Registry::new())
-        .build::<YellowstoneGrpcSource>(config)
-        .run();
-}
 ```
