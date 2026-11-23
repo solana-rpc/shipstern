@@ -209,6 +209,21 @@ impl InstructionParser {
             } => {
                 check_min_accounts_req(accounts_len, 7)?;
 
+                // The program rejects an unpaired trailing account, so a lone one is not data.
+                let (validator_stake_accounts, transient_stake_accounts) = ix.accounts[7..]
+                    .chunks(2)
+                    .map(|pair| match pair {
+                        [validator, transient] => Ok((
+                            crate::Pubkey::new(validator.into_bytes()),
+                            crate::Pubkey::new(transient.into_bytes()),
+                        )),
+                        _ => Err(ParseError::from(
+                            "UpdateValidatorListBalance: unpaired trailing stake account"
+                                .to_owned(),
+                        )),
+                    })
+                    .collect::<Result<(Vec<_>, Vec<_>), _>>()?;
+
                 Out::UpdateValidatorListBalance(UpdateValidatorListBalanceInstruction {
                     accounts: UpdateValidatorListBalanceAccounts {
                         stake_pool: crate::Pubkey::new(ix.accounts[0].into_bytes()),
@@ -220,6 +235,8 @@ impl InstructionParser {
                         clock: crate::Pubkey::new(ix.accounts[4].into_bytes()),
                         sysvar_stake_history: crate::Pubkey::new(ix.accounts[5].into_bytes()),
                         stake_program: crate::Pubkey::new(ix.accounts[6].into_bytes()),
+                        validator_stake_accounts,
+                        transient_stake_accounts,
                     },
                     args: UpdateValidatorListBalanceArgs {
                         start_index,
@@ -697,5 +714,71 @@ impl InstructionParser {
         Ok(StakePoolProgram {
             instruction: Some(instruction),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use shipstern_core::instruction::{InstructionShared, Path};
+
+    use super::*;
+
+    fn key(n: u8) -> shipstern_core::Pubkey { shipstern_core::Pubkey::from([n; 32]) }
+
+    fn update_ix(n_accounts: u8) -> InstructionUpdate {
+        let data = borsh::to_vec(&StakePoolInstruction::UpdateValidatorListBalance {
+            start_index: 3,
+            no_merge: true,
+        })
+        .unwrap();
+
+        InstructionUpdate {
+            program: spl_stake_pool::id().to_bytes().into(),
+            accounts: (1..=n_accounts).map(key).collect(),
+            data,
+            shared: Arc::new(InstructionShared::default()),
+            inner: Vec::new(),
+            path: Path::new_single(0),
+            log_range: 0..0,
+        }
+    }
+
+    #[test]
+    fn update_validator_list_balance_keeps_stake_account_pairs() {
+        let parsed = InstructionParser::parse_impl(&update_ix(11)).unwrap();
+
+        let Some(stake_pool_program::Instruction::UpdateValidatorListBalance(ix)) =
+            parsed.instruction
+        else {
+            panic!("Invalid Instruction");
+        };
+
+        let pk = |n: u8| crate::Pubkey::new([n; 32]);
+
+        assert_eq!(ix.accounts.stake_program, pk(7));
+        assert_eq!(ix.accounts.validator_stake_accounts, vec![pk(8), pk(10)]);
+        assert_eq!(ix.accounts.transient_stake_accounts, vec![pk(9), pk(11)]);
+        assert_eq!(ix.args.start_index, 3);
+    }
+
+    #[test]
+    fn update_validator_list_balance_without_pairs_has_empty_lists() {
+        let parsed = InstructionParser::parse_impl(&update_ix(7)).unwrap();
+
+        let Some(stake_pool_program::Instruction::UpdateValidatorListBalance(ix)) =
+            parsed.instruction
+        else {
+            panic!("Invalid Instruction");
+        };
+
+        assert!(ix.accounts.validator_stake_accounts.is_empty());
+        assert!(ix.accounts.transient_stake_accounts.is_empty());
+    }
+
+    #[test]
+    fn update_validator_list_balance_rejects_unpaired_trailing_account() {
+        assert!(InstructionParser::parse_impl(&update_ix(10)).is_err());
     }
 }

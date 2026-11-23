@@ -14,6 +14,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Breaking** for struct literals: `shipstern-stake-pool-parser`'s `UpdateValidatorListBalanceAccounts` gains `validator_stake_accounts` and `transient_stake_accounts`, so a consumer sees which validators an `UpdateValidatorListBalance` crank updated. The parser dropped the trailing pairs of validator and transient stake accounts. An unpaired trailing account is a parse error, as the program rejects it ([#448](https://github.com/solana-rpc/shipstern/pull/448) by @Estereg).
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
 
 ## [0.13.0] - 2026-11-12

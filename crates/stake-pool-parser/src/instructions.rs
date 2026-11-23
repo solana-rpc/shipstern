@@ -284,6 +284,8 @@ pub struct UpdateValidatorListBalanceAccounts {
     pub clock: Pubkey,
     pub sysvar_stake_history: Pubkey,
     pub stake_program: Pubkey,
+    pub validator_stake_accounts: Vec<Pubkey>,
+    pub transient_stake_accounts: Vec<Pubkey>,
 }
 
 #[shipstern]
