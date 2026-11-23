@@ -15,7 +15,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
-- `shipstern-yellowstone-fumarole-source`: `FumaroleConfig` reads its fields from `--endpoint`, `--subscriber-name` and the other named flags, or from their environment variables, like the gRPC source. Before, clap took them as positional arguments, and a debug build panicked when it built the command line ([#445](https://github.com/solana-rpc/shipstern/pull/445) by @Estereg).
+- **Breaking** for command lines that passed positional arguments: `shipstern-yellowstone-fumarole-source`: `FumaroleConfig` reads its fields from `--endpoint`, `--subscriber-name` and the other named flags, or from their environment variables, like the gRPC source. Before, clap took them as positional arguments, and a debug build panicked when it built the command line ([#445](https://github.com/solana-rpc/shipstern/pull/445) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 
