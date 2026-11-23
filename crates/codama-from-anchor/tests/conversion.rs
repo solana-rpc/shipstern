@@ -793,6 +793,7 @@ fn a_zero_copy_struct_with_an_unknown_layout_is_rejected() {
         json!([
             { "name": "Data", "type": { "kind": "enum", "variants": [{ "name": "A", "fields": ["u64"] }, { "name": "B" }] } },
             { "name": "One", "type": { "kind": "enum", "variants": [{ "name": "A" }] } },
+            { "name": "EnumC", "repr": { "kind": "c" }, "type": { "kind": "enum", "variants": [{ "name": "A" }, { "name": "B" }] } },
             { "name": "Repr", "repr": { "kind": "rust" }, "type": { "kind": "enum", "variants": [{ "name": "A" }, { "name": "B" }] } },
             { "name": "Reordered", "repr": { "kind": "rust" }, "type": { "kind": "struct", "fields": [
                 { "name": "a", "type": "u8" },
@@ -834,6 +835,7 @@ fn a_zero_copy_struct_with_an_unknown_layout_is_rejected() {
         json!({ "defined": { "name": "Data" } }),
         json!({ "defined": { "name": "One" } }),
         json!({ "defined": { "name": "Repr" } }),
+        json!({ "defined": { "name": "EnumC" } }),
         json!({ "defined": { "name": "Reordered" } }),
         json!({ "defined": { "name": "NoRepr" } }),
         json!({ "defined": { "name": "PackedBool" } }),

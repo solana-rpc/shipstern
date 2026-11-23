@@ -205,7 +205,14 @@ struct Layout {
 /// Anchor omits `fields` on an empty struct, and the type mapping reads that as
 /// empty; the layout walker must agree, or a marker struct hides the whole account.
 fn struct_fields(ty: &TypeDef) -> Option<&[Value]> {
-    match ty.ty.as_ref()?.as_object()?.get("fields") {
+    let body = ty.ty.as_ref()?.as_object()?;
+
+    // An enum body has no `fields` either, and `repr(C)` enums carry a repr too.
+    if body.get("kind").and_then(Value::as_str) == Some("enum") {
+        return None;
+    }
+
+    match body.get("fields") {
         None | Some(Value::Null) => Some(&[]),
         Some(fields) => fields.as_array().map(Vec::as_slice),
     }
