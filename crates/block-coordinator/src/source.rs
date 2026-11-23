@@ -238,43 +238,57 @@ impl SourceTrait for CoordinatorSource {
         let mut last_seen_slot: Option<u64> = None;
         let mut idle_since: Option<std::time::Instant> = None;
 
+        let mut closed = std::pin::pin!(tx.closed());
+
         let exit_status = 'stream: loop {
-            let update = if idle_warn_secs == 0 {
-                match stream.next().await {
-                    Some(update) => update,
-                    None => break SourceExitStatus::StreamEnded,
-                }
-            } else {
-                match tokio::time::timeout(stream_idle_timeout, stream.next()).await {
-                    Ok(Some(update)) => {
-                        // Stream resumed after idle — log recovery.
-                        if let Some(since) = idle_since.take() {
-                            tracing::info!(
-                                source_label,
-                                idle_duration_ms = since.elapsed().as_millis() as u64,
-                                ?last_seen_slot,
-                                endpoint = %self.config.source.endpoint,
-                                "stream resumed"
-                            );
-                        }
-                        update
-                    },
-                    Ok(None) => break SourceExitStatus::StreamEnded,
-                    Err(_) => {
-                        // Timeout — stream idle.
-                        if idle_since.is_none() {
-                            idle_since = Some(std::time::Instant::now());
-                            tracing::warn!(
-                                source_label,
-                                idle_warn_secs,
-                                ?last_seen_slot,
-                                endpoint = %self.config.source.endpoint,
-                                "stream idle"
-                            );
-                        }
-                        continue;
-                    },
-                }
+            // A send notices a dropped receiver only for an account or transaction, which a
+            // narrow filter or a quiet stream may never send, so watch the receiver too.
+            let next = tokio::select! {
+                biased;
+
+                () = &mut closed => {
+                    tracing::info!("Runtime channel closed, stopping source");
+                    break SourceExitStatus::ReceiverDropped;
+                },
+
+                next = async {
+                    if idle_warn_secs == 0 {
+                        Ok(stream.next().await)
+                    } else {
+                        tokio::time::timeout(stream_idle_timeout, stream.next()).await
+                    }
+                } => next,
+            };
+
+            let update = match next {
+                Ok(Some(update)) => {
+                    // Stream resumed after idle — log recovery.
+                    if let Some(since) = idle_since.take() {
+                        tracing::info!(
+                            source_label,
+                            idle_duration_ms = since.elapsed().as_millis() as u64,
+                            ?last_seen_slot,
+                            endpoint = %self.config.source.endpoint,
+                            "stream resumed"
+                        );
+                    }
+                    update
+                },
+                Ok(None) => break SourceExitStatus::StreamEnded,
+                Err(_) => {
+                    // Timeout — stream idle.
+                    if idle_since.is_none() {
+                        idle_since = Some(std::time::Instant::now());
+                        tracing::warn!(
+                            source_label,
+                            idle_warn_secs,
+                            ?last_seen_slot,
+                            endpoint = %self.config.source.endpoint,
+                            "stream idle"
+                        );
+                    }
+                    continue;
+                },
             };
 
             if let Ok(subscribe_update) = &update {

@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use futures_util::{stream, Stream};
+use futures_util::{stream, Stream, StreamExt};
 use shipstern::sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait};
 use shipstern_block_coordinator::{CoordinatorInput, CoordinatorSource, CoordinatorSourceConfig};
 use shipstern_core::Filters;
@@ -21,11 +21,13 @@ use yellowstone_grpc_proto::{
 
 type Responses<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send>>;
 
-/// Sends `updates` on every subscription and then ends the stream. It records each
+/// Sends `updates` on every subscription and then ends the stream, or holds it open with
+/// `keep_open`. It records each
 /// subscribe request, so a test sees what the source asked for and how often.
 #[derive(Clone)]
 struct Server {
     updates: Vec<SubscribeUpdate>,
+    keep_open: bool,
     requests: Arc<Mutex<Vec<SubscribeRequest>>>,
 }
 
@@ -46,7 +48,11 @@ impl Geyser for Server {
             .push(request);
 
         let updates = self.updates.clone().into_iter().map(Ok);
-        Ok(Response::new(Box::pin(stream::iter(updates))))
+        let updates = stream::iter(updates);
+        if self.keep_open {
+            return Ok(Response::new(Box::pin(updates.chain(stream::pending()))));
+        }
+        Ok(Response::new(Box::pin(updates)))
     }
 
     async fn subscribe_deshred(
@@ -137,6 +143,7 @@ async fn run(
         let requests = Arc::new(Mutex::new(Vec::new()));
         let service = Server {
             updates,
+            keep_open: false,
             requests: Arc::clone(&requests),
         };
         let server = tokio::spawn(async move {
@@ -297,4 +304,75 @@ async fn entry_update_parent_reaches_the_coordinator() {
         .collect();
     assert_eq!(forwarded, [cleared]);
     assert!(run.runtime.is_empty(), "no runtime pipeline takes it");
+}
+
+/// A stream with no account or transaction update never fails a send to the runtime, so the
+/// source must watch the receiver itself. This server sends one slot update and then holds
+/// the stream open.
+#[tokio::test]
+async fn receiver_drop_stops_a_stream_with_no_runtime_updates() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let incoming = stream::unfold(listener, |listener| async {
+        Some((listener.accept().await.map(|(socket, _)| socket), listener))
+    });
+    let service = Server {
+        updates: vec![slot_status(42, SlotStatus::SlotCreatedBank as i32, Some(7))],
+        keep_open: true,
+        requests: Arc::default(),
+    };
+    let server = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(geyser_server::GeyserServer::new(service))
+            .serve_with_incoming(incoming)
+            .await
+            .unwrap();
+    });
+
+    let (coordinator_tx, mut coordinator_rx) = mpsc::channel(64);
+    let source = CoordinatorSource::from_config(CoordinatorSourceConfig {
+        source: YellowstoneGrpcConfig {
+            endpoint: format!("http://{address}"),
+            x_token: None,
+            timeout: 3,
+            commitment_level: None,
+            from_slot: None,
+            accounts_data_slice: Vec::new(),
+            max_decoding_message_size: None,
+            accept_compression: None,
+            auto_reconnect: false,
+            reconnect_max_retries: None,
+        },
+        source_label: None,
+        stream_idle_warn_secs: 0,
+        coordinator_input_tx: Some(coordinator_tx),
+        fixture_path: None,
+        fixture_slots: None,
+    });
+    let (tx, rx) = mpsc::channel(64);
+
+    let connect = source.connect(SourceContext::new(Filters::new(HashMap::new()), tx));
+    let stop = async {
+        // The slot update reaching the coordinator proves the stream is live.
+        assert!(coordinator_rx.recv().await.is_some());
+        drop(rx);
+        std::future::pending::<()>().await;
+    };
+
+    let exit = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::select! {
+            exit = connect => exit,
+            () = stop => unreachable!(),
+        }
+    })
+    .await
+    .expect("the source kept running after the runtime receiver was dropped");
+    server.abort();
+
+    assert!(
+        matches!(exit, Ok(SourceExitStatus::ReceiverDropped)),
+        "got {exit:?}"
+    );
 }
