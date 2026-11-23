@@ -138,6 +138,14 @@ impl<E: Error> fmt::Display for Chain<'_, E> {
     }
 }
 
+/// Aborts a task when dropped, so cancelling a future also cancels the tasks it spawned.
+#[derive(Debug)]
+pub(crate) struct AbortOnDrop(pub(crate) tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) { self.0.abort(); }
+}
+
 pub mod stop {
     //! A oneshot channel for requesting a task to stop.
 
