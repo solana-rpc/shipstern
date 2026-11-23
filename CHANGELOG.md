@@ -15,7 +15,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
-- `shipstern-proc-macro`: an account or argument named after a Rust keyword, such as `type` or `match`, no longer generates a syntax error. The Rust field is a raw identifier and the protobuf field keeps the name. `self`, `super` and `crate` get a trailing `_` in both, since they cannot be raw identifiers ([#418](https://github.com/solana-rpc/shipstern/pull/418) by @Estereg).
+- `shipstern-proc-macro`: an account, argument or data enum named after a Rust keyword, such as `type` or `match`, no longer generates a syntax error. The Rust field is a raw identifier and the protobuf field keeps the name. `self`, `super` and `crate` get a trailing `_` in both, since they cannot be raw identifiers ([#418](https://github.com/solana-rpc/shipstern/pull/418) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 
