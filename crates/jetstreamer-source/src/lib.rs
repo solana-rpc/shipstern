@@ -868,38 +868,54 @@ impl JetstreamSource {
             forwarder.abort();
         }
 
-        if handler.receiver_closed.load(Ordering::SeqCst) {
-            info!("Runtime stopped reading updates; Jetstream replay stopped");
-
-            return Ok(SourceExitStatus::ReceiverDropped);
-        }
-
-        if let Err((error, slot)) = result {
-            let error_msg = format!("{:?}", error);
-            if error_msg.contains("incomplete frame") {
-                error!(
-                    slot,
-                    error = %error_msg,
-                    "Corrupted CAR file detected"
-                );
-                return Err(Error::Jetstreamer(format!(
-                    "Corrupted data at slot {}: {}. Try a different epoch or slot range.",
-                    slot, error_msg
-                )));
-            } else {
-                return Err(Error::Jetstreamer(format!(
-                    "Firehose error at slot {}: {:?}",
-                    slot, error
-                )));
-            }
-        }
-
-        info!(
+        exit_status(
+            handler.receiver_closed.load(Ordering::SeqCst),
+            result,
             start_slot,
-            end_slot, "Jetstream historical replay completed successfully"
-        );
-        Ok(SourceExitStatus::Completed)
+            end_slot,
+        )
     }
+}
+
+/// Map the firehose result to the source's exit status. A closed receiver wins over
+/// the firehose's own result, which is an error when the callback failed.
+fn exit_status<E: std::fmt::Debug>(
+    receiver_closed: bool,
+    result: Result<(), (E, u64)>,
+    start_slot: u64,
+    end_slot: u64,
+) -> Result<SourceExitStatus, Error> {
+    if receiver_closed {
+        info!("Runtime stopped reading updates; Jetstream replay stopped");
+
+        return Ok(SourceExitStatus::ReceiverDropped);
+    }
+
+    if let Err((error, slot)) = result {
+        let error_msg = format!("{:?}", error);
+        if error_msg.contains("incomplete frame") {
+            error!(
+                slot,
+                error = %error_msg,
+                "Corrupted CAR file detected"
+            );
+            return Err(Error::Jetstreamer(format!(
+                "Corrupted data at slot {}: {}. Try a different epoch or slot range.",
+                slot, error_msg
+            )));
+        }
+
+        return Err(Error::Jetstreamer(format!(
+            "Firehose error at slot {}: {:?}",
+            slot, error
+        )));
+    }
+
+    info!(
+        start_slot,
+        end_slot, "Jetstream historical replay completed successfully"
+    );
+    Ok(SourceExitStatus::Completed)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1263,6 +1279,21 @@ slot-end = 2000
             shutdown.try_recv().is_ok(),
             "the firehose is told to stop, or it retries the callback with no limit"
         );
+    }
+
+    #[test]
+    fn a_closed_receiver_exits_with_receiver_dropped() {
+        let failed_callback: Result<(), (&str, u64)> = Err(("callback failed", 7));
+
+        assert!(matches!(
+            exit_status(true, failed_callback, 0, 10),
+            Ok(SourceExitStatus::ReceiverDropped)
+        ));
+        assert!(matches!(
+            exit_status::<&str>(false, Ok(()), 0, 10),
+            Ok(SourceExitStatus::Completed)
+        ));
+        assert!(exit_status(false, Err(("boom", 7)), 0, 10).is_err());
     }
 
     #[tokio::test]
