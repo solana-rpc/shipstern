@@ -15,7 +15,6 @@ shipstern = { workspace = true }
 rustls = { workspace = true }
 tracing-opentelemetry = "0.30.0"
 opentelemetry-appender-tracing = "0.29.0"
-tokio = { version = "1.39.3", features = ["rt", "rt-multi-thread"] }
 shipstern-spl-token-parser = { workspace = true }
 
 # OTEL
@@ -32,7 +31,6 @@ opentelemetry-otlp = { version = "0.29.0", features = [
   "gzip-tonic",
   "zstd-tonic",
 ] }
-opentelemetry-stdout = "0.29.0"
 
 
 # Sources

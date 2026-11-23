@@ -9,14 +9,8 @@ repository = "https://github.com/solana-rpc/shipstern"
 [dependencies]
 clap = { version = "4.5.4", features = ["derive", "cargo", "wrap_help"] }
 toml = "0.8.12"
-tracing = "0.1.40"
 shipstern = { workspace = true, features = ["prometheus"] }
-prometheus = { version = "0.14.0", features = ["push"] }
 tokio = { version = "1.39.3", features = ["rt", "rt-multi-thread"] }
-shipstern-parser = { workspace = true }
-borsh = { workspace = true, features = ["derive"] }
 shipstern-yellowstone-fumarole-source = { workspace = true }
 shipstern-spl-token-parser = { workspace = true, features = ["proto"] }
-shipstern-spl-token-extensions-parser = { workspace = true, features = ["proto"] }
 rustls = { workspace = true }
-prost = { workspace = true, features = ["derive"] }

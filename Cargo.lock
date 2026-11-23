@@ -186,7 +186,7 @@ dependencies = [
  "solana-lattice-hash",
  "solana-measure",
  "solana-metrics",
- "strum 0.28.0",
+ "strum",
  "symlink",
  "tar",
  "tempfile",
@@ -4314,20 +4314,6 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry"
-version = "0.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c365a63eec4f55b7efeceb724f1336f26a9cf3427b70e59e2cd2a5b947fba96"
-dependencies = [
- "futures-core",
- "futures-sink",
- "js-sys",
- "once_cell",
- "pin-project-lite",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "opentelemetry"
 version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e87237e2775f74896f9ad219d26a2081751187eb7c9f5c58dde20a23b95d16c"
@@ -4346,7 +4332,7 @@ version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e716f864eb23007bdd9dc4aec381e188a1cee28eecf22066772b5fd822b9727d"
 dependencies = [
- "opentelemetry 0.29.1",
+ "opentelemetry",
  "tracing",
  "tracing-core",
  "tracing-subscriber",
@@ -4361,7 +4347,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "http",
- "opentelemetry 0.29.1",
+ "opentelemetry",
  "reqwest 0.12.28",
  "tracing",
 ]
@@ -4374,7 +4360,7 @@ checksum = "d899720fe06916ccba71c01d04ecd77312734e2de3467fd30d9d580c8ce85656"
 dependencies = [
  "futures-core",
  "http",
- "opentelemetry 0.29.1",
+ "opentelemetry",
  "opentelemetry-http",
  "opentelemetry-proto",
  "opentelemetry_sdk",
@@ -4392,22 +4378,10 @@ version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c40da242381435e18570d5b9d50aca2a4f4f4d8e146231adb4e7768023309b3"
 dependencies = [
- "opentelemetry 0.29.1",
+ "opentelemetry",
  "opentelemetry_sdk",
  "prost 0.13.5",
  "tonic 0.12.3",
-]
-
-[[package]]
-name = "opentelemetry-stdout"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7e27d446dabd68610ef0b77d07b102ecde827a4596ea9c01a4d3811e945b286"
-dependencies = [
- "chrono",
- "futures-util",
- "opentelemetry 0.29.1",
- "opentelemetry_sdk",
 ]
 
 [[package]]
@@ -4420,7 +4394,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "glob",
- "opentelemetry 0.29.1",
+ "opentelemetry",
  "percent-encoding",
  "rand 0.9.5",
  "serde_json",
@@ -6054,7 +6028,6 @@ dependencies = [
  "crossbeam-channel",
  "futures-channel",
  "futures-util",
- "opentelemetry 0.24.0",
  "prometheus",
  "serde",
  "serde_json",
@@ -6097,7 +6070,6 @@ name = "shipstern-block-meta-parser"
 version = "0.13.0"
 dependencies = [
  "prost 0.14.4",
- "prost-types 0.14.4",
  "shipstern-core",
  "shipstern-mock",
  "shipstern-proc-macro",
@@ -6111,14 +6083,12 @@ version = "0.13.0"
 dependencies = [
  "bincode",
  "prost 0.14.4",
- "prost-types 0.14.4",
  "shipstern-core",
  "shipstern-parser",
  "shipstern-proc-macro",
  "shipstern-proto",
  "solana-loader-v3-interface",
  "solana-sdk-ids",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -6144,7 +6114,6 @@ dependencies = [
  "bs58",
  "clap",
  "prost 0.14.4",
- "prost-types 0.14.4",
  "serde",
  "shipstern-proto",
  "thiserror 1.0.69",
@@ -6158,30 +6127,22 @@ dependencies = [
  "clap",
  "rustls",
  "shipstern",
- "shipstern-solana-rpc-source",
  "shipstern-spl-token-parser",
  "shipstern-yellowstone-grpc-source",
  "toml",
- "tracing",
 ]
 
 [[package]]
 name = "shipstern-example-fumarole"
 version = "0.0.0"
 dependencies = [
- "borsh",
  "clap",
- "prometheus",
- "prost 0.14.4",
  "rustls",
  "shipstern",
- "shipstern-parser",
- "shipstern-spl-token-extensions-parser",
  "shipstern-spl-token-parser",
  "shipstern-yellowstone-fumarole-source",
  "tokio",
  "toml",
- "tracing",
 ]
 
 [[package]]
@@ -6189,10 +6150,8 @@ name = "shipstern-example-idl-parser"
 version = "0.0.0"
 dependencies = [
  "borsh",
- "bs58",
  "clap",
  "prost 0.14.4",
- "prost-types 0.14.4",
  "rustls",
  "serde",
  "shipstern",
@@ -6201,7 +6160,6 @@ dependencies = [
  "shipstern-proc-macro",
  "shipstern-yellowstone-grpc-source",
  "toml",
- "tracing",
 ]
 
 [[package]]
@@ -6209,7 +6167,6 @@ name = "shipstern-example-jetstreamer"
 version = "0.13.0"
 dependencies = [
  "anyhow",
- "bs58",
  "clap",
  "shipstern",
  "shipstern-core",
@@ -6240,15 +6197,10 @@ dependencies = [
 name = "shipstern-example-prometheus"
 version = "0.0.0"
 dependencies = [
- "borsh",
  "clap",
  "prometheus",
- "prost 0.14.4",
  "rustls",
  "shipstern",
- "shipstern-parser",
- "shipstern-proc-macro",
- "shipstern-spl-token-extensions-parser",
  "shipstern-spl-token-parser",
  "shipstern-yellowstone-grpc-source",
  "tokio",
@@ -6261,17 +6213,15 @@ name = "shipstern-example-tracing"
 version = "0.0.0"
 dependencies = [
  "clap",
- "opentelemetry 0.29.1",
+ "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
- "opentelemetry-stdout",
  "opentelemetry_sdk",
  "prost-build 0.13.5",
  "rustls",
  "shipstern",
  "shipstern-spl-token-parser",
  "shipstern-yellowstone-grpc-source",
- "tokio",
  "toml",
  "tracing",
  "tracing-opentelemetry",
@@ -6288,17 +6238,13 @@ dependencies = [
  "clap",
  "futures-util",
  "jetstreamer-firehose",
- "prometheus",
- "prost-types 0.14.4",
  "serde",
  "serde_json",
  "shipstern",
  "shipstern-core",
  "solana-accounts-db",
  "solana-hash",
- "solana-instruction 3.5.1",
  "solana-message",
- "solana-msg",
  "solana-pubkey 4.4.0",
  "solana-reward-info",
  "solana-runtime",
@@ -6310,7 +6256,6 @@ dependencies = [
  "toml",
  "tracing",
  "wincode",
- "yellowstone-grpc-client",
  "yellowstone-grpc-proto",
 ]
 
@@ -6458,7 +6403,6 @@ dependencies = [
  "agave-snapshots",
  "async-trait",
  "clap",
- "futures-util",
  "serde",
  "shipstern",
  "shipstern-core",
@@ -6467,14 +6411,10 @@ dependencies = [
  "solana-genesis-utils",
  "solana-pubkey 4.4.0",
  "solana-runtime",
- "tar",
  "tempfile",
  "tokio",
- "toml",
  "tracing",
- "yellowstone-grpc-client",
  "yellowstone-grpc-proto",
- "zstd 0.13.4",
 ]
 
 [[package]]
@@ -6482,10 +6422,8 @@ name = "shipstern-spl-token-extensions-parser"
 version = "0.13.0"
 dependencies = [
  "borsh",
- "bs58",
  "bytemuck",
  "prost 0.14.4",
- "prost-types 0.14.4",
  "shipstern-core",
  "shipstern-mock",
  "shipstern-parser",
@@ -6500,7 +6438,6 @@ dependencies = [
  "spl-token-group-interface",
  "spl-token-metadata-interface",
  "spl-type-length-value",
- "thiserror 1.0.69",
  "tokio",
 ]
 
@@ -6508,23 +6445,14 @@ dependencies = [
 name = "shipstern-spl-token-parser"
 version = "0.13.0"
 dependencies = [
- "bs58",
- "bytemuck",
  "prost 0.14.4",
- "prost-types 0.14.4",
  "shipstern-core",
  "shipstern-mock",
  "shipstern-parser",
  "shipstern-proc-macro",
  "shipstern-proto",
- "solana-program-error",
- "spl-pod",
  "spl-token",
- "strum 0.27.2",
- "strum_macros 0.27.2",
- "thiserror 1.0.69",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -6533,12 +6461,10 @@ version = "0.13.0"
 dependencies = [
  "borsh",
  "prost 0.14.4",
- "prost-types 0.14.4",
  "shipstern-core",
  "shipstern-mock",
  "shipstern-parser",
  "shipstern-proc-macro",
- "shipstern-proto",
  "solana-program-error",
  "spl-stake-pool",
  "tokio",
@@ -6548,9 +6474,7 @@ dependencies = [
 name = "shipstern-stream"
 version = "0.13.0"
 dependencies = [
- "async-trait",
  "clap",
- "futures-channel",
  "futures-util",
  "pin-project-lite",
  "prometheus",
@@ -6558,13 +6482,9 @@ dependencies = [
  "shipstern",
  "shipstern-core",
  "shipstern-proto",
- "shipstern-yellowstone-grpc-source",
- "smallvec",
  "thiserror 1.0.69",
  "tokio",
- "toml",
  "tracing",
- "yellowstone-grpc-client",
 ]
 
 [[package]]
@@ -6583,7 +6503,6 @@ dependencies = [
  "bytesize 2.7.0",
  "clap",
  "futures-util",
- "prometheus",
  "semver",
  "serde",
  "shipstern",
@@ -8511,8 +8430,8 @@ dependencies = [
  "solana-vote-program",
  "spl-generic-token",
  "static_assertions",
- "strum 0.28.0",
- "strum_macros 0.28.0",
+ "strum",
+ "strum_macros",
  "tempfile",
  "thiserror 2.0.21",
  "wincode",
@@ -10160,29 +10079,11 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "strum"
-version = "0.27.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
-
-[[package]]
-name = "strum"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9628de9b8791db39ceda2b119bbe13134770b56c138ec1d3af810d045c04f9bd"
 dependencies = [
- "strum_macros 0.28.0",
-]
-
-[[package]]
-name = "strum_macros"
-version = "0.27.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
-dependencies = [
- "heck 0.5.0",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
+ "strum_macros",
 ]
 
 [[package]]
@@ -10860,7 +10761,7 @@ checksum = "fd8e764bd6f5813fd8bebc3117875190c5b0415be8f7f8059bffb6ecd979c444"
 dependencies = [
  "js-sys",
  "once_cell",
- "opentelemetry 0.29.1",
+ "opentelemetry",
  "opentelemetry_sdk",
  "smallvec",
  "tracing",

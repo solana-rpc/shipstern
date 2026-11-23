@@ -13,12 +13,8 @@ solana-program-error = { workspace = true }
 shipstern-core = { workspace = true }
 shipstern-proc-macro = { workspace = true }
 shipstern-parser = { workspace = true }
-shipstern-proto = { workspace = true, features = [
-  "parser",
-], optional = true }
 borsh.workspace = true
 prost = { workspace = true }
-prost-types = { workspace = true, optional = true }
 
 [dev-dependencies]
 shipstern-mock = { workspace = true }
@@ -27,7 +23,6 @@ tokio.workspace = true
 [features]
 default = []
 proto = [
-  "dep:prost-types",
   "shipstern-core/proto",
   "shipstern-proc-macro/proto",
 ]

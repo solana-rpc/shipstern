@@ -9,10 +9,8 @@ repository = "https://github.com/solana-rpc/shipstern"
 [dependencies]
 clap = { workspace = true, features = ["derive", "cargo", "wrap_help"] }
 toml = { workspace = true }
-tracing = { workspace = true }
 rustls = { workspace = true }
 shipstern = { workspace = true }
 shipstern-spl-token-parser = { workspace = true }
 
 shipstern-yellowstone-grpc-source = { workspace = true }
-shipstern-solana-rpc-source = { workspace = true }

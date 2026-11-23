@@ -15,7 +15,6 @@ yellowstone-grpc-proto = { workspace = true }
 shipstern-core = { workspace = true }
 shipstern-proc-macro = { workspace = true }
 prost = { workspace = true }
-prost-types = { workspace = true, optional = true }
 
 [dev-dependencies]
 shipstern-mock = { workspace = true }
@@ -23,4 +22,4 @@ tokio.workspace = true
 
 [features]
 default = []
-proto = ["dep:prost-types", "shipstern-core/proto", "shipstern-proc-macro/proto"]
+proto = ["shipstern-core/proto", "shipstern-proc-macro/proto"]
