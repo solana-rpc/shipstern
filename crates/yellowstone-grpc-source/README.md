@@ -101,9 +101,10 @@ Naming an individual instruction parser is refused as unknown, and widening
 there widens the whole bundle. `handle.filters().parser_ids()` reports the keys
 that exist. Only the newest set matters: two updates in quick
 succession may reach the source as the second alone, and a set the sink rejects
-is dropped with a warning while `filters()` still reports it. A stream with a
-live `RuntimeHandle` does not reconnect, because the client cannot replay a
-changed request.
+is dropped with a warning while `filters()` still reports it. A processed
+stream with a live `RuntimeHandle` does not reconnect, because the client cannot
+replay a changed request. A confirmed or finalized stream reconnects as
+[Reconnect](#reconnect) describes.
 
 The server applies the new set promptly once it has it, but two different lags
 sit in front of that. The source awaits the runtime buffer inside the same
