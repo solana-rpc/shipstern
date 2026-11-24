@@ -240,9 +240,12 @@ impl ExtensionInstructionParser for TransferFeeIx {
             SplTransferFeeInstruction::WithdrawWithheldTokensFromAccounts {
                 num_token_accounts,
             } => {
-                let n = num_token_accounts as usize;
+                check_min_accounts_req(accounts_len, 3)?;
 
-                check_min_accounts_req(accounts_len, 3 + n)?;
+                // As the program does: the last `num_token_accounts` accounts are sources, and
+                // any before them are signers. A list shorter than `num_token_accounts` is valid
+                // on chain and holds only sources.
+                let n = (num_token_accounts as usize).min(accounts_len - 3);
 
                 oneof::Instruction::WithdrawWithheldTokensFromAccounts(
                     oneof::WithdrawWithheldTokensFromAccounts {

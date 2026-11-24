@@ -15,7 +15,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
-- `shipstern-spl-token-extensions-parser`: `WithdrawWithheldTokensFromAccounts` reads the multisig signers from `3..len-N` and the `N` source accounts from the end, as the Token-2022 instruction layout orders them. Before, it swapped the two lists for a multisig authority ([#411](https://github.com/solana-rpc/shipstern/pull/411) by @Estereg).
+- `shipstern-spl-token-extensions-parser`: `WithdrawWithheldTokensFromAccounts` reads the multisig signers from `3..len-N` and the `N` source accounts from the end, as the Token-2022 instruction layout orders them. Before, it swapped the two lists for a multisig authority. A list with fewer accounts than `num_token_accounts` holds only sources and parses, as the program allows ([#411](https://github.com/solana-rpc/shipstern/pull/411) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 

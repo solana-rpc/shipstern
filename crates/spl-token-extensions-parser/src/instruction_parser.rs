@@ -506,4 +506,34 @@ mod tests {
         assert_eq!(w.accounts.source_accounts, vec![pk(6), pk(7), pk(8)]);
         assert_eq!(w.args.num_token_accounts, 3);
     }
+
+    /// The program treats every account after the authority as a source when there are fewer
+    /// than `num_token_accounts`, so the instruction stays valid.
+    #[tokio::test]
+    async fn withdraw_withheld_from_accounts_accepts_fewer_sources_than_declared() {
+        use crate::extensions::transfer_fee_instruction::Instruction as Ix;
+
+        let mut ix = spl_token_2022::extension::transfer_fee::instruction::withdraw_withheld_tokens_from_accounts(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &key(3),
+            &[],
+            &[&key(6), &key(7)],
+        )
+        .unwrap();
+
+        // Declare 5 sources while passing 2.
+        *ix.data.last_mut().unwrap() = 5;
+
+        let parsed = InstructionParser.parse(&update_from(&ix)).await.unwrap();
+
+        let Ix::WithdrawWithheldTokensFromAccounts(w) = transfer_fee_ix(parsed) else {
+            panic!("expected WithdrawWithheldTokensFromAccounts");
+        };
+
+        assert!(w.accounts.multisig_signers.is_empty());
+        assert_eq!(w.accounts.source_accounts, vec![pk(6), pk(7)]);
+        assert_eq!(w.args.num_token_accounts, 5);
+    }
 }
