@@ -240,7 +240,17 @@ impl ShipsternStreamHandler {
 
             // 3. Transaction matches. The firehose can't filter by account, so any
             // transaction prefilter receives every transaction.
-            if prefilter.transaction.is_some() {
+            if let Some(transaction) = &prefilter.transaction {
+                let unapplied = unapplied_transaction_fields(filter_id, transaction);
+
+                if !unapplied.is_empty() {
+                    tracing::warn!(
+                        %filter_id,
+                        ?unapplied,
+                        "The jetstreamer source sends every transaction; these filter fields are not applied"
+                    );
+                }
+
                 matches.transaction.push(filter_id.clone());
             }
         }
@@ -911,9 +921,67 @@ impl From<Error> for ShipsternError {
     }
 }
 
+/// Transaction filter fields that this source does not apply, for a warning.
+///
+/// The instruction parsers' shared filter is skipped: each parser drops other programs'
+/// instructions itself, and a bundled `FilterPipeline` checks its own filter in the client.
+fn unapplied_transaction_fields(
+    filter_id: &str,
+    filter: &shipstern_core::TransactionPrefilter,
+) -> Vec<&'static str> {
+    if filter_id == shipstern::instruction::InstructionPipeline::ID {
+        return Vec::new();
+    }
+
+    [
+        ("accounts_include", !filter.accounts_include.is_empty()),
+        ("accounts_required", !filter.accounts_required.is_empty()),
+        ("accounts_exclude", !filter.accounts_exclude.is_empty()),
+        (
+            "cuckoo_accounts_include",
+            !filter.cuckoo_accounts_include.is_empty(),
+        ),
+        ("vote", filter.vote.is_some()),
+        ("signature", filter.signature.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(name, set)| set.then_some(name))
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unapplied_transaction_fields_lists_narrowing_fields() {
+        let filter = shipstern_core::Prefilter::builder()
+            .transaction_accounts_include([[1u8; 32]])
+            .transaction_vote(false)
+            .build()
+            .unwrap()
+            .transaction
+            .unwrap();
+
+        assert_eq!(
+            unapplied_transaction_fields("my-transaction-parser", &filter),
+            vec!["accounts_include", "vote"]
+        );
+
+        // Instruction parsers filter themselves, so their shared filter is not reported.
+        assert!(unapplied_transaction_fields(
+            shipstern::instruction::InstructionPipeline::ID,
+            &filter
+        )
+        .is_empty());
+
+        // The defaults narrow nothing that this source drops.
+        assert!(unapplied_transaction_fields(
+            "plain",
+            &shipstern_core::TransactionPrefilter::default()
+        )
+        .is_empty());
+    }
 
     #[test]
     fn invalid_slot_ranges_are_rejected() {
