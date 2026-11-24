@@ -182,7 +182,8 @@ impl ExtensionInstructionParser for ConfidentialTransferFeeIx {
             },
 
             SplConfidentialTransferFeeInstruction::HarvestWithheldTokensToMint => {
-                check_min_accounts_req(accounts_len, 2)?;
+                // Only the mint is required; the program accepts an empty source list.
+                check_min_accounts_req(accounts_len, 1)?;
 
                 oneof::Instruction::HarvestWithheldTokensToMint(
                     oneof::HarvestWithheldTokensToMint {
