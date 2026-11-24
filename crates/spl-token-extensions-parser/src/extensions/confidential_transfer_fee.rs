@@ -169,9 +169,13 @@ impl ExtensionInstructionParser for ConfidentialTransferFeeIx {
             SplConfidentialTransferFeeInstruction::WithdrawWithheldTokensFromAccounts => {
                 let data =
                     decode_extension_ix_data::<WithdrawWithheldTokensFromAccountsData>(&ix.data)?;
-                let n = data.num_token_accounts as usize;
 
-                check_min_accounts_req(accounts_len, 4 + n)?;
+                check_min_accounts_req(accounts_len, 4)?;
+
+                // As the program does: the last `num_token_accounts` accounts are sources, and
+                // any before them are signers. A list shorter than `num_token_accounts` is valid
+                // on chain and holds only sources.
+                let n = (data.num_token_accounts as usize).min(accounts_len - 4);
 
                 oneof::Instruction::WithdrawWithheldTokensFromAccounts(
                     oneof::WithdrawWithheldTokensFromAccounts {
@@ -318,7 +322,16 @@ mod tests {
     }
 
     #[test]
-    fn withdraw_from_accounts_with_too_few_accounts_is_rejected() {
-        assert!(parse_withdraw_from_accounts(2, &[1, 2, 3, 4, 5]).is_err());
+    fn withdraw_from_accounts_with_fewer_sources_than_declared_lists_them() {
+        // The program takes every account after the authority as a source in this case.
+        let a = parse_withdraw_from_accounts(2, &[1, 2, 3, 4, 5]).unwrap();
+
+        assert!(a.multisig_signers.is_empty());
+        assert_eq!(a.source_accounts, vec![pk(5)]);
+    }
+
+    #[test]
+    fn withdraw_from_accounts_without_an_authority_is_rejected() {
+        assert!(parse_withdraw_from_accounts(0, &[1, 2, 3]).is_err());
     }
 }
