@@ -17,6 +17,9 @@ pub enum ConnectError {
     /// The config names no region on either feed.
     #[error("the config names no harmonic or bam region")]
     NoRegion,
+    /// A zero `timeout` would fail every subscribe as if the server never answered.
+    #[error("the timeout is 0 seconds, it must be at least 1")]
+    ZeroTimeout,
     /// The endpoint scheme is neither `https` nor `http`.
     #[error(
         "the endpoint scheme is {}, the source dials only https or http",
