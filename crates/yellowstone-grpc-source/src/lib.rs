@@ -10,7 +10,10 @@ use shipstern::{
     CommitmentLevel, Error as ShipsternError,
 };
 use shipstern_core::{AccountsDataSlice, Filters, PrefilterError};
-use tokio::sync::{mpsc, watch};
+use tokio::{
+    sync::{mpsc, watch},
+    time::Instant,
+};
 use yellowstone_grpc_client::{
     Backoff, GeyserGrpcClient, ReconnectConfig, ReconnectEvent, SubscribeRequestSink,
 };
@@ -52,6 +55,13 @@ const DEFAULT_RECONNECT_MULTIPLIER: f64 = 2.0;
 /// The longest wait between two `SlotResume` attempts. Uncapped, the eighth wait
 /// alone is 64s, longer than many servers hold a slot for replay.
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(10);
+
+/// HTTP/2 pings that find a dead connection. Fixed, as in `shipstern-preconf-source`.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a `SlotResume` stream may send nothing but pings before it counts as lost.
+const SLOT_RESUME_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Yellowstone connection configuration.
 #[derive(Debug, clap::Args, serde::Deserialize, Clone)]
@@ -267,6 +277,13 @@ async fn wait_before_retry(backoff: &Backoff, attempts: &mut u32, from_slot: Opt
     true
 }
 
+async fn idle_expired(deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
+    }
+}
+
 /// A ping or a pong. The server can send one before it reads the request.
 fn is_ping(update: &SubscribeUpdate) -> bool {
     matches!(
@@ -317,6 +334,9 @@ async fn open_stream(
         .accept_compressed(config.accept_compression.unwrap_or_default().into())
         .connect_timeout(timeout)
         .timeout(timeout)
+        .http2_keep_alive_interval(KEEPALIVE_INTERVAL)
+        .keep_alive_timeout(KEEPALIVE_TIMEOUT)
+        .keep_alive_while_idle(true)
         .tls_config(ClientTlsConfig::new().with_native_roots())?;
 
     if mode == ReconnectMode::BankReplay
@@ -548,14 +568,54 @@ where
 
         tracing::debug!("gRPC stream started");
 
+        // Only `SlotResume` asks for a status every slot, so only there does a quiet stream
+        // mean a stall. It is also the only mode with a backoff.
+        let idle = (mode == ReconnectMode::SlotResume).then_some(SLOT_RESUME_IDLE_TIMEOUT);
+        let mut deadline = idle.map(|idle| Instant::now() + idle);
+
         let stop = loop {
             tokio::select! {
+                // Biased, so waiting data wins over an expired deadline. The rare filter
+                // update goes first and cannot starve the stream.
+                biased;
+
+                update = next_filter_update(&mut filter_updates_rx),
+                    if !hold_filter_updates => {
+                    let Some(new_filters) = update else {
+                        // Every handle is gone and no new one can be taken, so retire this
+                        // branch for the rest of the run.
+                        tracing::debug!(
+                            "Last runtime handle dropped, filter updates are off for this run"
+                        );
+                        filter_updates_rx = None;
+                        continue;
+                    };
+
+                    // A resubscribe must carry the newest set too.
+                    filters = new_filters.clone();
+                    let sending = Instant::now();
+                    send_filter_update(
+                        &mut sink,
+                        config,
+                        mode,
+                        new_filters,
+                        &mut filter_updates_sent,
+                    )
+                    .await;
+
+                    // Time blocked on the sink is our delay, not the server's silence.
+                    deadline = deadline.map(|at| at + sending.elapsed());
+                },
+
                 update = stream.next() => match update {
                     Some(Ok(mut update)) => {
                         // The server sends data only after it reads the request, but a ping
                         // can come before.
                         if !is_ping(&update) {
                             hold_filter_updates = false;
+                            // Any update but a ping shows that the server sends data, also one
+                            // dropped below.
+                            deadline = idle.map(|idle| Instant::now() + idle);
                         }
 
                         if mode == ReconnectMode::SlotResume
@@ -564,10 +624,14 @@ where
                             continue;
                         }
 
+                        let sending = Instant::now();
                         if tx.send(Ok(update)).await.is_err() {
                             tracing::info!("Receiver dropped, stopping source");
                             break StreamStop::Exit(SourceExitStatus::ReceiverDropped);
                         }
+
+                        // Time on a full channel is our delay, not the server's silence.
+                        deadline = deadline.map(|at| at + sending.elapsed());
                     },
                     Some(Err(status)) => {
                         // A server that rejects a filter set answers on the stream
@@ -604,28 +668,12 @@ where
                     None => break StreamStop::Exit(SourceExitStatus::StreamEnded),
                 },
 
-                update = next_filter_update(&mut filter_updates_rx),
-                    if !hold_filter_updates => {
-                    let Some(new_filters) = update else {
-                        // Every handle is gone and no new one can be taken, so retire this
-                        // branch for the rest of the run.
-                        tracing::debug!(
-                            "Last runtime handle dropped, filter updates are off for this run"
-                        );
-                        filter_updates_rx = None;
-                        continue;
-                    };
-
-                    // A resubscribe must carry the newest set too.
-                    filters = new_filters.clone();
-                    send_filter_update(
-                        &mut sink,
-                        config,
-                        mode,
-                        new_filters,
-                        &mut filter_updates_sent,
-                    )
-                    .await;
+                () = idle_expired(deadline) => {
+                    tracing::warn!(?idle, "Stream idle; treating it as lost");
+                    // A status, so a spent budget reports the timeout and not a server hang-up.
+                    break StreamStop::Lost(Some(Status::deadline_exceeded(format!(
+                        "no update for {SLOT_RESUME_IDLE_TIMEOUT:?}"
+                    ))));
                 },
             }
         };
@@ -738,7 +786,7 @@ mod tests {
     use super::{
         accept_update, build_subscribe_request, is_recoverable, retry_delay, run_stream,
         send_filter_update, CommitmentLevel, ReconnectMode, SubscribeRequest,
-        YellowstoneGrpcConfig,
+        YellowstoneGrpcConfig, SLOT_RESUME_IDLE_TIMEOUT,
     };
     use crate::resume::{
         tests::{slot_status, transaction},
@@ -1290,6 +1338,8 @@ mod tests {
     }
 
     type Script = Vec<Result<Vec<Result<SubscribeUpdate, Status>>, ()>>;
+    /// Like `Script`, with the time the server waits before it sends each item.
+    type TimedScript = Vec<Result<Vec<(Duration, Result<SubscribeUpdate, Status>)>, ()>>;
     type Requests = Arc<Mutex<Vec<SubscribeRequest>>>;
 
     /// What a scripted run of `run_stream` did.
@@ -1302,6 +1352,26 @@ mod tests {
         delivered: Vec<Result<SubscribeUpdate, Status>>,
     }
 
+    /// How a scripted run is set up and for how long it is watched.
+    struct Setup {
+        mode: ReconnectMode,
+        capacity: usize,
+        /// The wait before each read of the channel.
+        reader_delay: Duration,
+        window: Duration,
+    }
+
+    impl Default for Setup {
+        fn default() -> Self {
+            Self {
+                mode: ReconnectMode::SlotResume,
+                capacity: 64,
+                reader_delay: Duration::ZERO,
+                window: Duration::from_millis(50),
+            }
+        }
+    }
+
     /// Run `run_stream` with no server. Open `n` gets `script[n]` and then stays silent, or fails on
     /// `Err`. `publish` goes out during the first open. `exit` is `None` after 50 ms with no end.
     async fn run_scripted(
@@ -1310,11 +1380,35 @@ mod tests {
         script: Script,
         publish: Option<Filters>,
     ) -> Run {
+        let script = script
+            .into_iter()
+            .map(|open| {
+                open.map(|items| {
+                    items
+                        .into_iter()
+                        .map(|item| (Duration::ZERO, item))
+                        .collect()
+                })
+            })
+            .collect();
+
+        run_scripted_with(extra, retries, script, publish, Setup::default()).await
+    }
+
+    /// `run_scripted` with a mode, a channel size, a slow reader and timed items. Pause the clock
+    /// (`start_paused`) when the times are long.
+    async fn run_scripted_with(
+        extra: &str,
+        retries: u32,
+        script: TimedScript,
+        publish: Option<Filters>,
+        setup: Setup,
+    ) -> Run {
         let config = config_from(&format!(
             "endpoint = \"https://example.rpcpool.com\"\ntimeout = 60\ncommitment-level = \
              \"confirmed\"\n{extra}"
         ));
-        let (tx, mut rx) = mpsc::channel(64);
+        let (tx, mut rx) = mpsc::channel(setup.capacity);
         let (filters_tx, filters_rx) = watch::channel(filters_owned_by(1));
         let opens = Requests::default();
         let updates = Requests::default();
@@ -1334,6 +1428,12 @@ mod tests {
             let opened = match script.next() {
                 Some(Ok(items)) => {
                     let stream = futures_util::stream::iter(items)
+                        .then(|(delay, item)| async move {
+                            if !delay.is_zero() {
+                                tokio::time::sleep(delay).await;
+                            }
+                            item
+                        })
                         .chain(futures_util::stream::pending())
                         .boxed();
                     Ok((sink, stream))
@@ -1343,25 +1443,36 @@ mod tests {
             std::future::ready(opened)
         };
 
-        let exit = tokio::time::timeout(
-            Duration::from_millis(50),
+        let run = tokio::time::timeout(
+            setup.window,
             run_stream(
                 &config,
-                ReconnectMode::SlotResume,
+                setup.mode,
                 Some(Backoff::new(Duration::ZERO, 2.0, retries)),
                 filters_owned_by(1),
                 tx,
                 Some(filters_rx),
                 open,
             ),
-        )
-        .await
-        .ok();
+        );
 
-        let mut delivered = Vec::new();
-        while let Ok(update) = rx.try_recv() {
-            delivered.push(update);
-        }
+        // The reader ends when the run drops its sender.
+        let reader = async {
+            let mut delivered = Vec::new();
+            loop {
+                if !setup.reader_delay.is_zero() {
+                    tokio::time::sleep(setup.reader_delay).await;
+                }
+                let Some(update) = rx.recv().await else {
+                    break;
+                };
+                delivered.push(update);
+            }
+            delivered
+        };
+
+        let (exit, delivered) = tokio::join!(async { run.await.ok() }, reader);
+
         let opens = opens.lock().unwrap().clone();
         let updates = updates.lock().unwrap().clone();
 
@@ -1501,5 +1612,140 @@ mod tests {
         let request =
             build_subscribe_request(Filters::new(HashMap::new()), &config, ReconnectMode::Off);
         assert!(!request.slots.contains_key(RESUME_FILTER_KEY));
+    }
+
+    const IDLE: Duration = SLOT_RESUME_IDLE_TIMEOUT;
+
+    /// A transaction in slot 100 and its confirmed status, so a resubscribe asks for 96.
+    fn checkpoint_items() -> Vec<(Duration, Result<SubscribeUpdate, Status>)> {
+        vec![
+            (Duration::ZERO, Ok(transaction(100, 1))),
+            (Duration::ZERO, Ok(resume_only(100))),
+        ]
+    }
+
+    /// A silent stream is lost, and the source resubscribes from the checkpoint without a repeat.
+    #[tokio::test(start_paused = true)]
+    async fn idle_stream_resubscribes_from_checkpoint() {
+        let run = run_scripted_with(
+            "",
+            3,
+            vec![Ok(checkpoint_items()), Ok(checkpoint_items())],
+            None,
+            Setup {
+                window: IDLE + IDLE / 2,
+                ..Setup::default()
+            },
+        )
+        .await;
+
+        assert_eq!(from_slots(&run), [None, Some(96)]);
+
+        let delivered: Vec<_> = run.delivered.iter().flatten().collect();
+        assert_eq!(delivered, [&transaction(100, 1)]);
+    }
+
+    /// A ping shows that the link is up, not that the server has data, so it does not end the
+    /// silence.
+    #[tokio::test(start_paused = true)]
+    async fn pings_do_not_reset_idle() {
+        let mut items = checkpoint_items();
+        items.extend((0..2).map(|_| (IDLE / 3, Ok(ping()))));
+
+        let run = run_scripted_with(
+            "",
+            3,
+            vec![Ok(items), Ok(checkpoint_items())],
+            None,
+            Setup {
+                window: IDLE + IDLE / 2,
+                ..Setup::default()
+            },
+        )
+        .await;
+
+        assert_eq!(from_slots(&run), [None, Some(96)]);
+    }
+
+    /// Time spent on a full channel is our own delay, not server silence.
+    #[tokio::test(start_paused = true)]
+    async fn send_backpressure_is_not_idle() {
+        let mut items = checkpoint_items();
+        items.push((Duration::ZERO, Ok(transaction(101, 2))));
+
+        let run = run_scripted_with(
+            "from-slot = 90",
+            3,
+            vec![Ok(items), Ok(checkpoint_items())],
+            None,
+            Setup {
+                capacity: 1,
+                reader_delay: IDLE * 3,
+                // The blocked send ends at 3 x IDLE. The stream is silent after it, so the window
+                // closes before 4 x IDLE.
+                window: IDLE * 3 + IDLE / 2,
+                ..Setup::default()
+            },
+        )
+        .await;
+
+        assert_eq!(from_slots(&run), [Some(90)]);
+    }
+
+    /// A status that only the resume filter matched is dropped, but it still shows that the
+    /// server is sending.
+    #[tokio::test(start_paused = true)]
+    async fn resume_only_updates_are_not_idle() {
+        let mut items = checkpoint_items();
+        items.extend((1..=5).map(|n| (IDLE / 2, Ok(resume_only(100 + n)))));
+
+        let run = run_scripted_with(
+            "",
+            3,
+            vec![Ok(items), Ok(checkpoint_items())],
+            None,
+            Setup {
+                window: IDLE * 2 + IDLE / 3,
+                ..Setup::default()
+            },
+        )
+        .await;
+
+        assert_eq!(from_slots(&run), [None]);
+    }
+
+    /// Other modes get no status every slot, so a quiet stream there stays open.
+    #[tokio::test(start_paused = true)]
+    async fn no_idle_timeout_outside_slot_resume() {
+        let run = run_scripted_with("", 3, vec![Ok(checkpoint_items())], None, Setup {
+            mode: ReconnectMode::Off,
+            window: IDLE * 2,
+            ..Setup::default()
+        })
+        .await;
+
+        assert!(run.exit.is_none(), "exit: {:?}", run.exit);
+    }
+
+    /// A spent budget after an idle loss reports the timeout, not a server hang-up.
+    #[tokio::test(start_paused = true)]
+    async fn idle_loss_with_no_retries_reports_the_timeout() {
+        let run = run_scripted_with("", 0, vec![Ok(checkpoint_items())], None, Setup {
+            window: IDLE * 2,
+            ..Setup::default()
+        })
+        .await;
+
+        assert!(
+            matches!(
+                run.exit,
+                Some(Ok(SourceExitStatus::StreamError {
+                    code: Code::DeadlineExceeded,
+                    ..
+                }))
+            ),
+            "exit: {:?}",
+            run.exit
+        );
     }
 }

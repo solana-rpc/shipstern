@@ -7,6 +7,10 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `shipstern-yellowstone-grpc-source`: HTTP/2 keepalive in every mode, and a 30 s idle timeout in the slot checkpoint mode. A stream with nothing but pings for 30 s counts as lost, and the source subscribes again from the checkpoint.
+
 ### Changed
 
 - **Breaking** `shipstern-proc-macro` and the instruction parser crates: instruction parsers select their program with `transaction_accounts_include`, not `transaction_accounts`. The runtime merges all instruction parsers into one filter, so it received only transactions that touched every program. Include keys merged into `InstructionPipeline::ID` now widen it ([#395](https://github.com/solana-rpc/shipstern/pull/395), from #340 by @hack-wrench and @senzenn).

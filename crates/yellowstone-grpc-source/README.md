@@ -202,6 +202,18 @@ client subscribes again can also lose its first updates, with no error
 A processed stream with a `from_slot` or a `RuntimeHandle` does not reconnect,
 so run it under a supervisor that restarts it.
 
+**Keepalive and idle timeout.** Neither has a config field.
+
+- In every mode, the client sends an HTTP/2 ping when it reads nothing for 30 s.
+  It drops the connection if the ping gets no answer in 10 s, so a dead
+  connection ends the stream.
+- In the slot checkpoint mode, a stream that sends nothing but pings for 30 s
+  counts as lost, and the source subscribes again from the checkpoint. A ping
+  or a pong does not count as an update, but an update that the source drops
+  does. Time spent on a full channel does not count. The other modes have no
+  idle timeout.
+- `CoordinatorSource` builds its own client, so neither applies to it.
+
 ## Banks at processed
 
 At processed, a slot can have more than one bank, and each update carries its
