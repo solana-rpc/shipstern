@@ -67,12 +67,14 @@ pub struct KafkaSinkConfig {
     #[serde(default = "default_account_slots_topic")]
     pub account_slots_topic: String,
 
-    /// How accounts are processed and output.
+    /// How accounts are processed and output. The sink does not read this field: the account
+    /// commit level is the `AccountCommitAt` given to `AccountSlotSink::new` and to
+    /// `BlockMachineCoordinator::run`.
     #[serde(default)]
     pub account_mode: AccountMode,
 
-    /// Buffer size for the processing channel and deduplication tracking.
-    /// Used for mpsc channel capacity (handle bursts) and to prune old processed heights.
+    /// Meant for the processing channel and deduplication tracking. The sink does not read
+    /// this yet, so the value has no effect.
     #[serde(default = "default_buffer_size")]
     pub buffer_size: usize,
 
