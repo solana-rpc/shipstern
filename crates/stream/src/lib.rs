@@ -197,7 +197,7 @@ mod tests {
     #[derive(Debug)]
     struct PendingSource;
 
-    #[tonic::async_trait]
+    #[async_trait::async_trait]
     impl SourceTrait for PendingSource {
         async fn connect(&self, _ctx: SourceContext) -> Result<SourceExitStatus, shipstern::Error> {
             std::future::pending().await
