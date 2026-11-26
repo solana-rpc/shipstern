@@ -119,9 +119,12 @@ pub fn build_fields_ir(
 ///
 /// A field discriminator names a carrier field, and the parser drops every byte up to the end of
 /// it, so the fields up to the last carrier never reach the struct decoder. A constant
-/// discriminator drops the bytes up to the end of its constant, and the omitted fields that fit
-/// in those bytes are its carrier. A size discriminator drops nothing. Any omitted field behind
-/// the stripped prefix is still on the wire, so it is decoded.
+/// discriminator covers the bytes up to the end of its constant, and the omitted fields that fit
+/// in those bytes are its carrier. A bytes constant drops those bytes. A number constant keeps
+/// them for the struct, which then declares them itself in a field that is not omitted, as SPL
+/// Governance does with `accountType`, so the omitted carrier stays skipped there too. A size
+/// discriminator drops nothing. Any omitted field behind the covered prefix is still on the
+/// wire, so it is decoded.
 ///
 /// A discriminator that cannot be sized, or a field carrier that is not a field, keeps every
 /// omitted field skipped. Without discriminators nothing is stripped.
