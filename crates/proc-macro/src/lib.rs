@@ -438,8 +438,8 @@ mod expansion_tests {
 
         assert!(tokens.contains("compile_error"), "no compile_error emitted");
         assert!(
-            tokens.contains("account `widthMismatch` declares a 8-byte")
-                && tokens.contains("4 bytes"),
+            tokens.contains("account `widthMismatch` declares a discriminator field of 8 bytes")
+                && tokens.contains("is 4 bytes"),
             "message must name the account and both widths: {tokens}",
         );
     }
@@ -450,48 +450,50 @@ mod expansion_tests {
 
         assert!(tokens.contains("compile_error"), "no compile_error emitted");
         assert!(
-            tokens.contains("instruction `widthMismatchIx` declares a 8-byte")
-                && tokens.contains("4 bytes"),
+            tokens.contains(
+                "instruction `widthMismatchIx` declares a discriminator field of 8 bytes"
+            ) && tokens.contains("is 4 bytes"),
             "message must name the instruction and both widths: {tokens}",
         );
     }
 
+    #[cfg(feature = "program-events")]
     #[test]
     fn event_discriminator_width_mismatch_is_rejected() {
         let tokens = expand("invalid_width_mismatch_event.json", false);
 
         assert!(tokens.contains("compile_error"), "no compile_error emitted");
         assert!(
-            tokens.contains("event `widthMismatchEv` declares a 8-byte")
-                && tokens.contains("4 bytes"),
+            tokens.contains("event `widthMismatchEv` declares a discriminator field of 8 bytes")
+                && tokens.contains("is 4 bytes"),
             "message must name the event and both widths: {tokens}",
         );
     }
 
     /// An empty default holds no bytes to compare, so a non-zero width has nothing to match.
     #[test]
-    fn empty_default_on_a_sized_discriminator_is_rejected() {
-        for (fixture, entry) in [
-            (
-                "invalid_empty_default_account.json",
-                "account `emptyDefault`",
-            ),
-            (
-                "invalid_empty_default_instruction.json",
-                "instruction `emptyDefaultIx`",
-            ),
-        ] {
-            let tokens = expand(fixture, false);
+    fn empty_default_on_a_sized_instruction_discriminator_is_rejected() {
+        let tokens = expand("invalid_empty_default_instruction.json", false);
 
-            assert!(
-                tokens.contains("compile_error"),
-                "{fixture}: no compile_error emitted"
-            );
-            assert!(
-                tokens.contains(entry) && tokens.contains("4-byte") && tokens.contains("0 bytes"),
-                "{fixture}: message must name the entry and both widths: {tokens}",
-            );
-        }
+        assert!(tokens.contains("compile_error"), "no compile_error emitted");
+        assert!(
+            tokens.contains("instruction `emptyDefaultIx`")
+                && tokens.contains("of 4 bytes")
+                && tokens.contains("is 0 bytes"),
+            "message must name the instruction and both widths: {tokens}",
+        );
+    }
+
+    /// On an account an empty default makes a catch-all arm that matches any data,
+    /// so it stays legal.
+    #[test]
+    fn empty_default_on_a_sized_account_discriminator_still_expands() {
+        let tokens = expand("empty_default_sized_account.json", false);
+
+        assert!(
+            !tokens.contains("compile_error"),
+            "unexpected compile_error: {tokens}",
+        );
     }
 
     /// Only the fixtures built to fail may emit a `compile_error!`.
@@ -503,6 +505,9 @@ mod expansion_tests {
             "malformed_envelope_discriminator.json",
         ];
 
+        // Events are only checked under `program-events`.
+        let events_only = ["invalid_width_mismatch_event.json"];
+
         for entry in std::fs::read_dir(fixture("")).expect("tests/idls is readable") {
             let path = entry.expect("readable dir entry").path();
             let name = path.file_name().unwrap().to_string_lossy().to_string();
@@ -512,7 +517,8 @@ mod expansion_tests {
             }
 
             let fails = expand(&name, false).contains("compile_error");
-            let expected = name.starts_with("invalid_") || designed.contains(&name.as_str());
+            let expected = (name.starts_with("invalid_") || designed.contains(&name.as_str()))
+                && (cfg!(feature = "program-events") || !events_only.contains(&name.as_str()));
 
             assert_eq!(fails, expected, "{name}: compile_error presence changed");
         }

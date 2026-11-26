@@ -39,7 +39,9 @@ fn check_discriminator_widths(
                 continue;
             };
 
-            if !crate::utils::width_mismatch(field.size, &field.bytes) {
+            // An empty default has no bytes to compare, so the arm is a catch-all that
+            // matches any data long enough to hold the field.
+            if field.bytes.is_empty() || !crate::utils::width_mismatch(field.size, &field.bytes) {
                 continue;
             }
 
@@ -50,6 +52,12 @@ fn check_discriminator_widths(
                 field.bytes.len(),
             ));
         }
+    }
+
+    // Events are only parsed under `program-events`; checking them otherwise would
+    // reject IDLs that compile today.
+    if !cfg!(feature = "program-events") {
+        return Ok(());
     }
 
     let events = &idl.program.events;
@@ -74,7 +82,7 @@ fn check_discriminator_widths(
 
 fn width_message(kind: &str, name: &str, size: usize, len: usize) -> String {
     format!(
-        "{kind} `{name}` declares a {size}-byte discriminator field but its default value is \
+        "{kind} `{name}` declares a discriminator field of {size} bytes but its default value is \
          {len} bytes, so it can never match; make the declared size and the default agree",
     )
 }
