@@ -579,9 +579,9 @@ where
                 // update goes first and cannot starve the stream.
                 biased;
 
-                update = next_filter_update(&mut filter_updates_rx),
+                filter_update = next_filter_update(&mut filter_updates_rx),
                     if !hold_filter_updates => {
-                    let Some(new_filters) = update else {
+                    let Some(new_filters) = filter_update else {
                         // Every handle is gone and no new one can be taken, so retire this
                         // branch for the rest of the run.
                         tracing::debug!(
