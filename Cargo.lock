@@ -6498,6 +6498,7 @@ dependencies = [
  "solana-pubkey 4.4.0",
  "spl-pod",
  "spl-token-2022",
+ "spl-token-confidential-transfer-proof-extraction",
  "spl-token-group-interface",
  "spl-token-metadata-interface",
  "spl-type-length-value",

@@ -1,4 +1,5 @@
 mod common_instructions;
+mod confidential_mint_burn;
 mod confidential_transfer;
 mod confidential_transfer_fee;
 mod extension;
@@ -9,6 +10,7 @@ mod token_metadata;
 mod transfer_fee;
 
 pub use common_instructions::*;
+pub use confidential_mint_burn::*;
 pub use confidential_transfer::*;
 pub use confidential_transfer_fee::*;
 pub use extension::*;
