@@ -204,7 +204,8 @@ enum AccountQuery {
 }
 
 impl AccountQuery {
-    /// `None` when the prefilter has neither keys nor owners.
+    /// `None` when the prefilter has neither keys nor owners. Such a prefilter asks for every
+    /// account that passes its filters, which the RPC API cannot fetch.
     fn new(prefilter: &AccountPrefilter) -> Option<Self> {
         let keys = sorted_keys(
             prefilter
@@ -269,7 +270,14 @@ impl SourceTrait for SolanaAccountsRpcSource {
                 )
             };
 
+            // The RPC API has no call that scans every account, so a prefilter without keys or
+            // owners cannot be served. On gRPC it receives every account that passes its filters.
             let Some(query) = AccountQuery::new(account_prefilter) else {
+                tracing::warn!(
+                    %filter_id,
+                    "The solana-rpc source fetches accounts by key or owner only, and this \
+                     account prefilter sets neither, so it receives no accounts"
+                );
                 continue;
             };
 
@@ -512,6 +520,24 @@ mod tests {
                 solana_pubkey::Pubkey::new_from_array(owner)
             ]))
         );
+    }
+
+    #[test]
+    fn prefilters_without_keys_or_owners_have_no_query() {
+        use shipstern_core::AccountFilter;
+
+        use super::AccountQuery;
+
+        let only_filters = Prefilter::builder()
+            .account_filters([AccountFilter::DataSize(165)])
+            .build()
+            .unwrap();
+        let every_account = Prefilter::builder().accounts_include_all().build().unwrap();
+
+        for prefilter in [only_filters, every_account] {
+            let account = prefilter.account.expect("account prefilter");
+            assert_eq!(AccountQuery::new(&account), None);
+        }
     }
 
     #[test]
