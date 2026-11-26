@@ -5,7 +5,7 @@ use shipstern::{
     sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     CommitmentLevel, Error as ShipsternError,
 };
-use shipstern_core::{AccountFilter, LamportsCmp, MemcmpData};
+use shipstern_core::{AccountFilter, AccountPrefilter, LamportsCmp, MemcmpData};
 use solana_account_decoder_client_types::{UiAccount, UiAccountEncoding};
 use solana_client::{
     nonblocking::rpc_client::RpcClient,
@@ -189,6 +189,55 @@ async fn send_accounts<E>(
     Ok(())
 }
 
+/// How the source fetches the accounts of one prefilter. The gRPC server ANDs the fields of a
+/// filter: with keys set, only those keys can match, and the owners narrow them further.
+#[derive(Debug, PartialEq)]
+enum AccountQuery {
+    /// `getProgramAccounts` for each owner.
+    Owners(Vec<Pubkey>),
+    /// `getMultipleAccounts` for the keys. When `owners` is not empty, only accounts with a
+    /// listed owner are kept.
+    Keys {
+        keys: Vec<Pubkey>,
+        owners: Vec<Pubkey>,
+    },
+}
+
+impl AccountQuery {
+    /// `None` when the prefilter has neither keys nor owners.
+    fn new(prefilter: &AccountPrefilter) -> Option<Self> {
+        let keys = sorted_keys(
+            prefilter
+                .accounts
+                .iter()
+                .chain(prefilter.cuckoo_accounts.iter()),
+        );
+        let owners = sorted_keys(prefilter.owners.iter());
+
+        if !keys.is_empty() {
+            return Some(Self::Keys { keys, owners });
+        }
+
+        if owners.is_empty() {
+            return None;
+        }
+
+        Some(Self::Owners(owners))
+    }
+}
+
+fn sorted_keys<'a>(keys: impl Iterator<Item = &'a shipstern_core::Pubkey>) -> Vec<Pubkey> {
+    keys.map(|key| Pubkey::new_from_array(key.0))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Whether an account fetched by key has an owner in `owners`; an empty list allows any owner.
+fn owner_listed(owners: &[Pubkey], owner: &str) -> bool {
+    owners.is_empty() || Pubkey::from_str(owner).is_ok_and(|owner| owners.contains(&owner))
+}
+
 fn account_config() -> RpcAccountInfoConfig {
     RpcAccountInfoConfig {
         encoding: Some(UiAccountEncoding::Base64),
@@ -220,97 +269,94 @@ impl SourceTrait for SolanaAccountsRpcSource {
                 )
             };
 
-            for program in &account_prefilter.owners {
-                let program_id = Pubkey::new_from_array(program.0);
-                let tx = tx.clone();
-                let filter_id = filter_id.clone();
-                let filters = account_prefilter.filters.clone();
-                let client = client();
-
-                tasks_set.spawn(async move {
-                    let slot = client.get_slot().await.map_err(|e| {
-                        format!(
-                            "Failed to get slot for source: solana-rpc, filter: {filter_id}: {e}"
-                        )
-                    })?;
-
-                    // solana-client 4.x dropped `get_program_accounts_with_config`;
-                    // the config-taking call now yields RPC-encoded `UiAccount`s.
-                    let accounts = client
-                        .get_program_ui_accounts_with_config(
-                            &program_id,
-                            RpcProgramAccountsConfig {
-                                filters: Some(filters.iter().filter_map(rpc_filter).collect()),
-                                account_config: account_config(),
-                                with_context: Some(true),
-                                sort_results: Some(false),
-                            },
-                        )
-                        .await
-                        .map_err(|e| {
-                            format!(
-                                "Failed to get program accounts for source: solana-rpc, filter: \
-                                 {filter_id}: {e}"
-                            )
-                        })?;
-
-                    send_accounts(&tx, &filter_id, &filters, slot, accounts).await
-                });
-            }
-
-            // Accounts named by key, as the gRPC filter matches them: by key or by owner.
-            // An account whose owner is listed above comes from that query instead.
-            let keys: Vec<Pubkey> = account_prefilter
-                .accounts
-                .iter()
-                .chain(account_prefilter.cuckoo_accounts.iter())
-                .map(|key| Pubkey::new_from_array(key.0))
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect();
-
-            if keys.is_empty() {
+            let Some(query) = AccountQuery::new(account_prefilter) else {
                 continue;
-            }
+            };
 
-            let tx = tx.clone();
-            let filter_id = filter_id.clone();
-            let filters = account_prefilter.filters.clone();
-            let owners: Vec<String> = account_prefilter
-                .owners
-                .iter()
-                .map(ToString::to_string)
-                .collect();
-            let client = client();
+            match query {
+                AccountQuery::Owners(owners) => {
+                    for program_id in owners {
+                        let tx = tx.clone();
+                        let filter_id = filter_id.clone();
+                        let filters = account_prefilter.filters.clone();
+                        let client = client();
 
-            tasks_set.spawn(async move {
-                for chunk in keys.chunks(MAX_MULTIPLE_ACCOUNTS) {
-                    let response = client
-                        .get_multiple_ui_accounts_with_config(chunk, account_config())
-                        .await
-                        .map_err(|e| {
-                            format!(
-                                "Failed to get accounts for source: solana-rpc, filter: \
-                                 {filter_id}: {e}"
+                        tasks_set.spawn(async move {
+                            let slot = client.get_slot().await.map_err(|e| {
+                                format!(
+                                    "Failed to get slot for source: solana-rpc, filter: \
+                                     {filter_id}: {e}"
+                                )
+                            })?;
+
+                            // solana-client 4.x dropped `get_program_accounts_with_config`;
+                            // the config-taking call now yields RPC-encoded `UiAccount`s.
+                            let accounts = client
+                                .get_program_ui_accounts_with_config(
+                                    &program_id,
+                                    RpcProgramAccountsConfig {
+                                        filters: Some(
+                                            filters.iter().filter_map(rpc_filter).collect(),
+                                        ),
+                                        account_config: account_config(),
+                                        with_context: Some(true),
+                                        sort_results: Some(false),
+                                    },
+                                )
+                                .await
+                                .map_err(|e| {
+                                    format!(
+                                        "Failed to get program accounts for source: solana-rpc, \
+                                         filter: {filter_id}: {e}"
+                                    )
+                                })?;
+
+                            send_accounts(&tx, &filter_id, &filters, slot, accounts).await
+                        });
+                    }
+                },
+                AccountQuery::Keys { keys, owners } => {
+                    let tx = tx.clone();
+                    let filter_id = filter_id.clone();
+                    let filters = account_prefilter.filters.clone();
+                    let client = client();
+
+                    tasks_set.spawn(async move {
+                        for chunk in keys.chunks(MAX_MULTIPLE_ACCOUNTS) {
+                            let response = client
+                                .get_multiple_ui_accounts_with_config(chunk, account_config())
+                                .await
+                                .map_err(|e| {
+                                    format!(
+                                        "Failed to get accounts for source: solana-rpc, filter: \
+                                         {filter_id}: {e}"
+                                    )
+                                })?;
+
+                            let accounts = chunk
+                                .iter()
+                                .copied()
+                                .zip(response.value)
+                                .filter_map(|(key, account)| Some((key, account?)))
+                                .filter(|(_, account)| owner_listed(&owners, &account.owner));
+
+                            send_accounts(
+                                &tx,
+                                &filter_id,
+                                &filters,
+                                response.context.slot,
+                                accounts,
                             )
-                        })?;
+                            .await?;
+                        }
 
-                    let accounts = chunk
-                        .iter()
-                        .copied()
-                        .zip(response.value)
-                        .filter_map(|(key, account)| Some((key, account?)))
-                        .filter(|(_, account)| !owners.contains(&account.owner));
-
-                    send_accounts(&tx, &filter_id, &filters, response.context.slot, accounts)
-                        .await?;
-                }
-
-                Ok::<(), String>(())
-            });
+                        Ok::<(), String>(())
+                    });
+                },
+            }
         }
 
-        // One task runs per (filter, owner) pair and per filter with account keys, and the
+        // One task runs per owner of a filter without keys and per filter with keys, and the
         // runtime treats a source `Err` as fatal, so the first failure wins: keeping later
         // errors adds nothing, and updates already sent by sibling tasks stay in the buffer.
         let mut first_error: Option<String> = None;
@@ -420,6 +466,52 @@ mod tests {
         let mut multisig = vec![1_u8; 355];
         multisig[165] = 2;
         assert!(!is_token_account(&multisig), "multisig");
+    }
+
+    #[test]
+    fn keys_with_owners_fetch_only_the_keys_and_keep_listed_owners() {
+        use super::{owner_listed, AccountQuery};
+
+        let key = [1_u8; 32];
+        let owner = [2_u8; 32];
+        let other = solana_pubkey::Pubkey::new_from_array([3; 32]);
+        let account = |prefilter: Prefilter| prefilter.account.expect("account prefilter");
+
+        let both = account(
+            Prefilter::builder()
+                .accounts([key])
+                .account_owners([owner])
+                .build()
+                .unwrap(),
+        );
+        let Some(AccountQuery::Keys { keys, owners }) = AccountQuery::new(&both) else {
+            panic!("keys and owners should fetch only the keys");
+        };
+        assert_eq!(keys, vec![solana_pubkey::Pubkey::new_from_array(key)]);
+        assert!(owner_listed(
+            &owners,
+            &solana_pubkey::Pubkey::new_from_array(owner).to_string()
+        ));
+        assert!(!owner_listed(&owners, &other.to_string()));
+
+        let only_keys = account(Prefilter::builder().accounts([key]).build().unwrap());
+        let Some(AccountQuery::Keys { owners, .. }) = AccountQuery::new(&only_keys) else {
+            panic!("keys should fetch the keys");
+        };
+        assert!(owner_listed(&owners, &other.to_string()), "any owner");
+
+        let only_owners = account(
+            Prefilter::builder()
+                .account_owners([owner])
+                .build()
+                .unwrap(),
+        );
+        assert_eq!(
+            AccountQuery::new(&only_owners),
+            Some(AccountQuery::Owners(vec![
+                solana_pubkey::Pubkey::new_from_array(owner)
+            ]))
+        );
     }
 
     #[test]
