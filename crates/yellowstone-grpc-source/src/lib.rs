@@ -56,8 +56,8 @@ const DEFAULT_RECONNECT_MULTIPLIER: f64 = 2.0;
 /// alone is 64s, longer than many servers hold a slot for replay.
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(10);
 
-/// HTTP/2 pings that find a dead connection. Fixed, as in `shipstern-preconf-source`.
-const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+/// HTTP/2 pings that find a dead connection. A ping is small, so the interval is short.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long a `SlotResume` stream may send nothing but pings before it counts as lost.

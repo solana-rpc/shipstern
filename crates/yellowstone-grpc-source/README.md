@@ -204,7 +204,7 @@ so run it under a supervisor that restarts it.
 
 **Keepalive and idle timeout.** Neither has a config field.
 
-- In every mode, the client sends an HTTP/2 ping when it reads nothing for 30 s.
+- In every mode, the client sends an HTTP/2 ping when it reads nothing for 10 s.
   It drops the connection if the ping gets no answer in 10 s, so a dead
   connection ends the stream.
 - In the slot checkpoint mode, a stream that sends nothing but pings for 30 s
