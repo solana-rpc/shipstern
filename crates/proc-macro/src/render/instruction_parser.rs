@@ -161,25 +161,24 @@ fn resolve_event_field(
     })
 }
 
-/// The declared width and default length of the first field discriminator whose
-/// parser arm can never match, for expansion-time rejection.
+/// The declared width and default length of the first discriminator when it is a
+/// field whose parser arm can never match, for expansion-time rejection. The parser
+/// reads only the first discriminator, so later ones are never checked.
 fn dead_width(
     discriminators: &[DiscriminatorNode],
     resolve_field: impl Fn(&CamelCaseString) -> Option<ResolvedFieldDiscriminator>,
 ) -> Option<(usize, usize)> {
-    discriminators.iter().find_map(|discriminator| {
-        let DiscriminatorNode::Field(node) = discriminator else {
-            return None;
-        };
+    let Some(DiscriminatorNode::Field(node)) = discriminators.first() else {
+        return None;
+    };
 
-        let resolved = resolve_field(&node.name)?;
-        let bytes = resolved.bytes?;
-        let TypeNode::FixedSize(fixed) = resolved.r#type else {
-            return None;
-        };
+    let resolved = resolve_field(&node.name)?;
+    let bytes = resolved.bytes?;
+    let TypeNode::FixedSize(fixed) = resolved.r#type else {
+        return None;
+    };
 
-        crate::utils::width_mismatch(fixed.size, &bytes).then_some((fixed.size, bytes.len()))
-    })
+    crate::utils::width_mismatch(fixed.size, &bytes).then_some((fixed.size, bytes.len()))
 }
 
 pub(crate) fn dead_width_discriminator(

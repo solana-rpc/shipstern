@@ -28,30 +28,29 @@ fn check_discriminator_widths(
         return Err(width_message("instruction", &ix.name, size, len));
     }
 
+    // The account parser reads only the first discriminator, so later ones are
+    // never checked.
     for account in &idl.program.accounts {
-        for discriminator in &account.discriminators {
-            let DiscriminatorNode::Field(node) = discriminator else {
-                continue;
-            };
+        let Some(DiscriminatorNode::Field(node)) = account.discriminators.first() else {
+            continue;
+        };
 
-            let Some(field) = crate::render::account_parser::field_discriminator(account, node)
-            else {
-                continue;
-            };
+        let Some(field) = crate::render::account_parser::field_discriminator(account, node) else {
+            continue;
+        };
 
-            // An empty default has no bytes to compare, so the arm is a catch-all that
-            // matches any data long enough to hold the field.
-            if field.bytes.is_empty() || !crate::utils::width_mismatch(field.size, &field.bytes) {
-                continue;
-            }
-
-            return Err(width_message(
-                "account",
-                &account.name,
-                field.size,
-                field.bytes.len(),
-            ));
+        // An empty default has no bytes to compare, so the arm is a catch-all that
+        // matches any data long enough to hold the field.
+        if field.bytes.is_empty() || !crate::utils::width_mismatch(field.size, &field.bytes) {
+            continue;
         }
+
+        return Err(width_message(
+            "account",
+            &account.name,
+            field.size,
+            field.bytes.len(),
+        ));
     }
 
     // Events are only parsed under `program-events`; checking them otherwise would

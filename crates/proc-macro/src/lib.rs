@@ -496,6 +496,18 @@ mod expansion_tests {
         );
     }
 
+    /// The parsers read only the first discriminator, so a width mismatch in a later
+    /// one never reaches a parser arm and must not reject the IDL.
+    #[test]
+    fn later_discriminator_width_mismatch_still_expands() {
+        let tokens = expand("later_discriminator_width_mismatch.json", false);
+
+        assert!(
+            !tokens.contains("compile_error"),
+            "unexpected compile_error: {tokens}",
+        );
+    }
+
     /// Only the fixtures built to fail may emit a `compile_error!`.
     #[test]
     fn only_designed_invalid_fixtures_fail_expansion() {
