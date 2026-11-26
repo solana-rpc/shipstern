@@ -213,8 +213,8 @@ pub struct SolanaSnapshotSource {
     config: SolanaSnapshotConfig,
 }
 
-/// One parser's account prefilter, matched the way the gRPC server matches it: by key or by
-/// owner, then every data filter.
+/// One parser's account prefilter, matched the way the gRPC server matches it: the key is listed
+/// (when keys are set), the owner is listed (when owners are set), and every data filter passes.
 struct AccountMatcher {
     filter_id: String,
     accounts: HashSet<Pubkey>,
@@ -237,6 +237,15 @@ impl AccountMatchers {
             .iter()
             .filter_map(|(filter_id, prefilter)| {
                 let account = prefilter.account.as_ref()?;
+
+                // With neither keys nor owners the server sends every account. The snapshot
+                // source does not, as before.
+                if account.accounts.is_empty()
+                    && account.cuckoo_accounts.is_empty()
+                    && account.owners.is_empty()
+                {
+                    return None;
+                }
 
                 Some(AccountMatcher {
                     filter_id: filter_id.clone(),
@@ -274,7 +283,8 @@ impl AccountMatchers {
 
         self.matchers
             .iter()
-            .filter(|m| m.accounts.contains(pubkey) || m.owners.contains(owner))
+            .filter(|m| m.accounts.is_empty() || m.accounts.contains(pubkey))
+            .filter(|m| m.owners.is_empty() || m.owners.contains(owner))
             .filter(|m| m.filters.iter().all(|f| f.matches(data, lamports)))
             .map(|m| m.filter_id.clone())
             .collect()
@@ -457,7 +467,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn account_matchers_match_by_key_or_owner_then_filters() {
+    fn account_matchers_match_by_key_by_owner_then_filters() {
         use shipstern_core::{AccountFilter, Prefilter};
 
         let key = Pubkey::new([1; 32]);
@@ -492,5 +502,38 @@ mod tests {
         let mut both = m.matching(&key, &owner, &[0; 4], 0);
         both.sort();
         assert_eq!(both, vec!["by-key", "by-owner-sized"]);
+    }
+
+    #[test]
+    fn account_matchers_need_key_and_owner_when_both_are_set() {
+        use shipstern_core::{AccountFilter, Prefilter};
+
+        let key = Pubkey::new([1; 32]);
+        let owner = Pubkey::new([2; 32]);
+        let other = Pubkey::new([3; 32]);
+        let filters = Filters::new(std::collections::HashMap::from([(
+            "key-and-owner".to_string(),
+            Prefilter::builder()
+                .accounts([key])
+                .account_owners([owner])
+                .account_filters([AccountFilter::DataSize(4)])
+                .build()
+                .unwrap(),
+        )]));
+        let m = AccountMatchers::new(&filters);
+
+        assert_eq!(m.matching(&key, &owner, &[0; 4], 0), vec!["key-and-owner"]);
+        assert!(
+            m.matching(&key, &other, &[0; 4], 0).is_empty(),
+            "owner not listed"
+        );
+        assert!(
+            m.matching(&other, &owner, &[0; 4], 0).is_empty(),
+            "key not listed"
+        );
+        assert!(
+            m.matching(&key, &owner, &[0; 5], 0).is_empty(),
+            "data size filter"
+        );
     }
 }
