@@ -211,6 +211,8 @@ pub fn ensure_schemas_registered(
     config: &KafkaSinkConfig,
     schemas: &[SchemaDefinition],
 ) -> io::Result<HashMap<String, RegisteredSchema>> {
+    config.validate_credentials()?;
+
     let base_url = &config.schema_registry_url;
     let mut registered = HashMap::new();
 
@@ -420,5 +422,30 @@ mod tests {
         let err = check_schema_registry(&client, &config.schema_registry_url, &config).unwrap_err();
 
         assert!(err.to_string().contains("unreachable"));
+    }
+
+    #[test]
+    fn ensure_schemas_registered_rejects_half_set_schema_registry_credentials() {
+        let mut server = mockito::Server::new();
+
+        server
+            .mock("GET", "/subjects")
+            .with_status(200)
+            .with_body("[]")
+            .create();
+
+        let config = KafkaSinkConfig {
+            schema_registry_url: server.url(),
+            schema_registry_username: Some("user".to_string()),
+            ..Default::default()
+        };
+
+        let err = ensure_schemas_registered(&config, &[]).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("SCHEMA_REGISTRY_PASSWORD is missing"),
+            "{err}"
+        );
     }
 }

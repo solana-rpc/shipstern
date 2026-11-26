@@ -9,7 +9,17 @@ use rdkafka::{
 
 use crate::config::KafkaSinkConfig;
 
+/// Create the Kafka producer for `config`.
+///
+/// # Panics
+///
+/// Panics if `config` fails [`KafkaSinkConfig::validate_credentials`] or the
+/// client cannot be created.
 pub fn create_producer(config: &KafkaSinkConfig) -> FutureProducer {
+    if let Err(e) = config.validate_credentials() {
+        panic!("Invalid Kafka sink config: {e}");
+    }
+
     let mut client_config = ClientConfig::new();
 
     client_config
@@ -103,4 +113,20 @@ pub fn initialize_transactional_producer(
     }
 
     unreachable!("max_attempts is clamped to at least 1")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "KAFKA_SASL_PASSWORD is missing")]
+    fn create_producer_rejects_half_set_sasl_credentials() {
+        let config = KafkaSinkConfig {
+            sasl_username: Some("user".to_string()),
+            ..Default::default()
+        };
+
+        let _producer = create_producer(&config);
+    }
 }
