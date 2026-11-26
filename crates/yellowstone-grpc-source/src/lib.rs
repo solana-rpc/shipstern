@@ -733,8 +733,9 @@ impl SourceTrait for YellowstoneGrpcSource {
             .validate()
             .map_err(|err| ShipsternError::Other(Box::new(err)))?;
 
-        // tonic expires a zero timeout on its first poll, so every open would fail with
-        // `Cancelled` "Timeout expired", even against a server that answers at once.
+        // tonic expires a zero timeout on its first poll, so every open would fail at connect or
+        // with `Cancelled` "Timeout expired", depending on the server, even against a server
+        // that answers at once.
         if config.timeout == 0 {
             return Err(ShipsternError::Other(ZERO_TIMEOUT.into()));
         }
