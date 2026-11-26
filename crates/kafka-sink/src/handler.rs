@@ -202,7 +202,19 @@ impl shipstern::Handler<AccountUpdate, AccountUpdate> for BufferingHandler {
             let write_version = info.write_version;
 
             let key = AccountRecordSortKey::new(write_version, pubkey);
-            let is_decoded = record.is_decoded;
+
+            // A fallback account still counts as filtered or failed, like a fallback
+            // instruction. Send the stat first: the record can complete the slot, and the
+            // coordinator drops a stat that arrives after the slot flushed.
+            if !record.is_decoded {
+                let kind = if had_error {
+                    ParseStatsKind::AccountErrorFallback
+                } else {
+                    ParseStatsKind::AccountFilteredFallback
+                };
+
+                self.cancelable_send(self.handle.send_parse_stats(slot, bank_id, kind).await);
+            }
 
             let send_result = self
                 .handle
@@ -213,18 +225,6 @@ impl shipstern::Handler<AccountUpdate, AccountUpdate> for BufferingHandler {
                 tracing::error!(slot, "Failed to send account parsed record");
 
                 self.cancelable_send(Err(e));
-            }
-
-            // Fallback account records are still filtered/error outcomes, counted like
-            // fallback instruction records so slot stats reflect decode quality.
-            if !is_decoded {
-                let kind = if had_error {
-                    ParseStatsKind::AccountErrorFallback
-                } else {
-                    ParseStatsKind::AccountFilteredFallback
-                };
-
-                self.cancelable_send(self.handle.send_parse_stats(slot, bank_id, kind).await);
             }
         } else {
             let kind = if had_error {
@@ -301,7 +301,9 @@ mod tests {
 
     use prost::Message;
     use shipstern::Handler;
-    use shipstern_block_coordinator::CoordinatorMessage;
+    use shipstern_block_coordinator::{
+        BlockMetadata, CoordinatorEvent, CoordinatorMessage, CoordinatorState,
+    };
     use shipstern_core::{
         AccountUpdateInfo, ParseError, ParseResult, Parser, Prefilter, ProgramParser, Pubkey,
     };
@@ -352,8 +354,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn account_parse_error_routed_to_fallback_is_still_counted_as_error() {
+    /// Runs one account update through a handler whose parser fails, and returns the messages
+    /// it sent to the coordinator.
+    async fn handle_failing_account_update() -> Vec<CoordinatorMessage<PreparedRecord>> {
         let parsers = KafkaSinkBuilder::new()
             .account_parser_with_fallback(
                 FailingAccountParser,
@@ -379,10 +382,20 @@ mod tests {
 
         drop(handler);
 
+        let mut messages = Vec::new();
+        while let Some(message) = rx.recv().await {
+            messages.push(message);
+        }
+
+        messages
+    }
+
+    #[tokio::test]
+    async fn account_parse_error_routed_to_fallback_is_still_counted_as_error() {
         let mut fallback_records = 0;
         let mut error_stats = 0;
 
-        while let Some(message) = rx.recv().await {
+        for message in handle_failing_account_update().await {
             match message {
                 CoordinatorMessage::AccountParsed { record, .. } => {
                     assert_eq!(record.topic, "failed.test.accounts");
@@ -399,5 +412,69 @@ mod tests {
 
         assert_eq!(fallback_records, 1);
         assert_eq!(error_stats, 1);
+    }
+
+    #[tokio::test]
+    async fn fallback_account_completing_its_slot_keeps_its_error_stat() {
+        let update = account_update();
+        let (slot, bank_id) = (update.slot, update.bank_id.expect("bank id"));
+
+        // A confirmed slot that waits for this one account only.
+        let mut state = CoordinatorState::<PreparedRecord>::default();
+        let setup = [
+            CoordinatorEvent::BlockFrozen {
+                slot,
+                bank_id,
+                metadata: BlockMetadata {
+                    parent_slot: slot - 1,
+                    blockhash: Default::default(),
+                    expected_tx_count: 0,
+                },
+            },
+            CoordinatorEvent::AccountEventSeen { slot, bank_id },
+            CoordinatorEvent::SlotConfirmed { slot, bank_id },
+        ];
+        for event in setup {
+            state.apply(event).expect("apply setup event");
+        }
+        let _ = state
+            .drain_instruction_flushable()
+            .expect("drain instructions");
+
+        // The coordinator drains account slots after every message.
+        let mut flushed = Vec::new();
+        for message in handle_failing_account_update().await {
+            let event = match message {
+                CoordinatorMessage::AccountParsed {
+                    slot,
+                    bank_id,
+                    key,
+                    record,
+                } => CoordinatorEvent::AccountRecordParsed {
+                    slot,
+                    bank_id,
+                    key,
+                    record,
+                },
+                CoordinatorMessage::ParseStats {
+                    slot,
+                    bank_id,
+                    kind,
+                } => CoordinatorEvent::ParseStats {
+                    slot,
+                    bank_id,
+                    kind,
+                },
+                _ => continue,
+            };
+
+            state.apply(event).expect("apply handler event");
+            flushed.extend(state.drain_account_flushable());
+        }
+
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0].records.len(), 1);
+        assert_eq!(flushed[0].failed_account_count, 1);
+        assert_eq!(state.late_account_record_drops(), 0);
     }
 }
