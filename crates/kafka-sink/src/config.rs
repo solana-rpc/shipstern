@@ -67,9 +67,10 @@ pub struct KafkaSinkConfig {
     #[serde(default = "default_account_slots_topic")]
     pub account_slots_topic: String,
 
-    /// How accounts are processed and output. The sink does not read this field: the account
-    /// commit level is the `AccountCommitAt` given to `AccountSlotSink::new` and to
-    /// `BlockMachineCoordinator::run`.
+    /// How accounts are processed and output. The sink does not read this field. The sink you
+    /// build decides the mode: `AccountPassthroughSink` writes finalized accounts through, and
+    /// `AccountSlotSink` buffers them by slot. The commit level is the `AccountCommitAt` given
+    /// to `AccountSlotSink::new` and to `BlockMachineCoordinator::run`.
     #[serde(default)]
     pub account_mode: AccountMode,
 
