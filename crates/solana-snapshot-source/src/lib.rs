@@ -238,12 +238,17 @@ impl AccountMatchers {
             .filter_map(|(filter_id, prefilter)| {
                 let account = prefilter.account.as_ref()?;
 
-                // With neither keys nor owners the server sends every account. The snapshot
-                // source does not, as before.
+                // With neither keys nor owners the gRPC server sends every account that passes
+                // the data filters. The snapshot source sends none, as before.
                 if account.accounts.is_empty()
                     && account.cuckoo_accounts.is_empty()
                     && account.owners.is_empty()
                 {
+                    tracing::warn!(
+                        %filter_id,
+                        "The solana-snapshot source selects accounts by key or owner only, and \
+                         this account prefilter sets neither, so it receives no accounts"
+                    );
                     return None;
                 }
 
@@ -502,6 +507,34 @@ mod tests {
         let mut both = m.matching(&key, &owner, &[0; 4], 0);
         both.sort();
         assert_eq!(both, vec!["by-key", "by-owner-sized"]);
+    }
+
+    #[test]
+    fn account_matchers_skip_prefilters_without_keys_or_owners() {
+        use shipstern_core::{AccountFilter, Prefilter};
+
+        let other = Pubkey::new([3; 32]);
+        let filters = Filters::new(std::collections::HashMap::from([
+            (
+                "data-only".to_string(),
+                Prefilter::builder()
+                    .account_filters([AccountFilter::DataSize(4)])
+                    .build()
+                    .unwrap(),
+            ),
+            (
+                "include-all".to_string(),
+                Prefilter::builder()
+                    .accounts_include_all()
+                    .account_filters([AccountFilter::DataSize(4)])
+                    .build()
+                    .unwrap(),
+            ),
+        ]));
+        let m = AccountMatchers::new(&filters);
+
+        assert!(m.is_empty(), "the scan does not start");
+        assert!(m.matching(&other, &other, &[0; 4], 0).is_empty());
     }
 
     #[test]

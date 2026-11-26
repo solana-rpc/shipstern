@@ -14,7 +14,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- `shipstern-solana-snapshot-source`: account prefilters apply as on gRPC: an account matches when its key is listed (if keys are set) and its owner is listed (if owners are set), and it passes every data filter. Before, only `owners` was read, so a prefilter with only keys received nothing and memcmp, data size and lamports filters were ignored. `AccountFilter::matches` in `shipstern-core` is new and tests one filter as the server does ([#469](https://github.com/solana-rpc/shipstern/pull/469) by @Estereg).
+- `shipstern-solana-snapshot-source`: account prefilters with keys or owners apply as on gRPC: an account matches when its key is listed (if keys are set) and its owner is listed (if owners are set), and it passes every data filter. A prefilter with neither keys nor owners, such as one with only data filters or `accounts_include_all()`, still receives no accounts (on gRPC it receives every account that passes its filters), and the source now logs a warning for it. Before, only `owners` was read, so a prefilter with only keys received nothing and memcmp, data size and lamports filters were ignored. `AccountFilter::matches` in `shipstern-core` is new and tests one filter as the server does ([#469](https://github.com/solana-rpc/shipstern/pull/469) by @Estereg).
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
 
 ## [0.13.0] - 2026-11-12
