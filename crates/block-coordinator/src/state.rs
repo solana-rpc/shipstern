@@ -303,10 +303,7 @@ impl<R> CoordinatorState<R> {
                 kind,
             } => {
                 let key = BankKey::new(slot, bank_id);
-                let is_fallback_stat = matches!(
-                    kind,
-                    ParseStatsKind::AccountFilteredFallback | ParseStatsKind::AccountErrorFallback
-                );
+                let is_fallback_stat = matches!(kind, ParseStatsKind::AccountErrorFallback);
                 let is_account_stat = is_fallback_stat
                     || matches!(
                         kind,

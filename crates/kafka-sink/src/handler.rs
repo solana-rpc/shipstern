@@ -203,17 +203,15 @@ impl shipstern::Handler<AccountUpdate, AccountUpdate> for BufferingHandler {
 
             let key = AccountRecordSortKey::new(write_version, pubkey);
 
-            // A fallback account still counts as filtered or failed, like a fallback
-            // instruction. Send the stat first: the record can complete the slot, and the
-            // coordinator drops a stat that arrives after the slot flushed.
+            // A fallback account still counts as failed, like a fallback instruction. Only a
+            // parse error makes one. Send the stat first: the record can complete the slot, and
+            // the coordinator drops a stat that arrives after the slot flushed.
             if !record.is_decoded {
-                let kind = if had_error {
-                    ParseStatsKind::AccountErrorFallback
-                } else {
-                    ParseStatsKind::AccountFilteredFallback
-                };
-
-                self.cancelable_send(self.handle.send_parse_stats(slot, bank_id, kind).await);
+                self.cancelable_send(
+                    self.handle
+                        .send_parse_stats(slot, bank_id, ParseStatsKind::AccountErrorFallback)
+                        .await,
+                );
             }
 
             let send_result = self

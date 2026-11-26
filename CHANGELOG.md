@@ -16,7 +16,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
 - `shipstern-kafka-sink`: an account that fails to parse and goes to a fallback topic now counts in `decode_error_account_count` of its slot marker, as a fallback instruction already did. Before, only an account with no fallback topic was counted, so the marker undercounted parse errors ([#425](https://github.com/solana-rpc/shipstern/pull/425) by @Estereg).
-- **Breaking** for exhaustive matches: `shipstern-block-coordinator`'s `ParseStatsKind` gains `AccountFilteredFallback` and `AccountErrorFallback`. They update the filtered and failed counters of a slot without counting the account as processed again, for an account that already arrived as a parsed fallback record ([#425](https://github.com/solana-rpc/shipstern/pull/425) by @Estereg).
+- **Breaking** for exhaustive matches: `shipstern-block-coordinator`'s `ParseStatsKind` gains `AccountErrorFallback`. It updates the failed counter of a slot without counting the account as processed again, for an account that already arrived as a parsed fallback record ([#425](https://github.com/solana-rpc/shipstern/pull/425) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 
