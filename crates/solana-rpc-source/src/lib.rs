@@ -618,4 +618,91 @@ mod tests {
             assert!(rx.try_recv().is_err());
         });
     }
+
+    /// Counts the warnings about a prefilter without keys or owners.
+    #[derive(Clone, Default)]
+    struct SkipWarnings(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl tracing::Subscriber for SkipWarnings {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            *metadata.level() == tracing::Level::WARN
+        }
+
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            struct Message(bool);
+
+            impl tracing::field::Visit for Message {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    self.0 |=
+                        field.name() == "message" && format!("{value:?}").contains("sets neither");
+                }
+            }
+
+            let mut message = Message(false);
+            event.record(&mut message);
+
+            if message.0 {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        fn enter(&self, _: &tracing::span::Id) {}
+
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    /// Runs `connect` with one prefilter against a closed port and counts the skip warnings.
+    fn skip_warnings(prefilter: Prefilter) -> usize {
+        let warnings = SkipWarnings::default();
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should build");
+
+        tracing::subscriber::with_default(warnings.clone(), || {
+            runtime.block_on(async {
+                let filters = Filters::new(HashMap::from([("test-filter".to_string(), prefilter)]));
+                let source = SolanaAccountsRpcSource::from_config(SolanaAccountsRpcConfig {
+                    endpoint: "http://127.0.0.1:9".to_string(),
+                    timeout: 1,
+                    commitment_level: Some(CommitmentLevel::Confirmed),
+                });
+                let (tx, _rx) = mpsc::channel(1);
+
+                let _ = source.connect(SourceContext::new(filters, tx)).await;
+            });
+        });
+
+        warnings.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[test]
+    fn connect_warns_about_prefilters_without_keys_or_owners() {
+        use shipstern_core::AccountFilter;
+
+        let only_filters = Prefilter::builder()
+            .account_filters([AccountFilter::DataSize(165)])
+            .build()
+            .unwrap();
+        let every_account = Prefilter::builder().accounts_include_all().build().unwrap();
+        let keys = Prefilter::builder().accounts([[1_u8; 32]]).build().unwrap();
+        let owners = Prefilter::builder()
+            .account_owners([[1_u8; 32]])
+            .build()
+            .unwrap();
+
+        assert_eq!(skip_warnings(only_filters), 1);
+        assert_eq!(skip_warnings(every_account), 1);
+        assert_eq!(skip_warnings(keys), 0);
+        assert_eq!(skip_warnings(owners), 0);
+    }
 }
