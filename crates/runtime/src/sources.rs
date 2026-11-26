@@ -117,10 +117,10 @@ impl FilterUpdates {
     }
 
     /// The underlying receiver. The runtime cannot tell whether it is read, so
-    /// it no longer warns about an unread update.
+    /// it no longer warns about an unread update, this one or any later one.
     #[must_use]
     pub fn into_inner(self) -> watch::Receiver<Filters> {
-        self.reads.read();
+        self.reads.detach();
         self.rx
     }
 }

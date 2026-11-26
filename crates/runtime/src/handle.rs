@@ -37,6 +37,8 @@ pub(crate) const UNREAD_UPDATE_GRACE: Duration = Duration::from_secs(10);
 #[derive(Debug, Default)]
 pub(crate) struct ReadTracker {
     unread: AtomicBool,
+    /// The source took the raw receiver, so its reads can no longer be seen.
+    detached: AtomicBool,
     published: Notify,
 }
 
@@ -50,13 +52,15 @@ impl ReadTracker {
 
     pub(crate) fn read(&self) { self.unread.store(false, Ordering::Release); }
 
+    pub(crate) fn detach(&self) { self.detached.store(true, Ordering::Release); }
+
     /// Resolves once a published set has gone unread for [`UNREAD_UPDATE_GRACE`].
     pub(crate) async fn stalled(&self) {
         loop {
             self.published.notified().await;
             tokio::time::sleep(UNREAD_UPDATE_GRACE).await;
 
-            if self.unread.load(Ordering::Acquire) {
+            if self.unread.load(Ordering::Acquire) && !self.detached.load(Ordering::Acquire) {
                 return;
             }
         }

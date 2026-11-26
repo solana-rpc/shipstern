@@ -702,6 +702,31 @@ impl SourceTrait for MockIgnoringFilterUpdatesSource {
 
 impl FilterUpdateSource for MockIgnoringFilterUpdatesSource {}
 
+/// Takes the raw receiver with `into_inner`, as a source that passes it on
+/// does, then reads every update through it until the last handle is gone.
+#[derive(Debug)]
+struct MockRawReceiverSource;
+
+#[async_trait]
+impl SourceTrait for MockRawReceiverSource {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext {
+            tx, filter_updates, ..
+        } = ctx;
+        let mut filter_updates = filter_updates.into_inner();
+
+        while filter_updates.changed().await.is_ok() {
+            let _ = filter_updates.borrow_and_update();
+        }
+
+        drop(tx);
+
+        Ok(SourceExitStatus::StreamEnded)
+    }
+}
+
+impl FilterUpdateSource for MockRawReceiverSource {}
+
 /// Publish one update to a running runtime, let the grace period pass, and
 /// count the warnings logged for it.
 async fn unread_warnings_after_update<S: FilterUpdateSource>(source: S) -> usize {
@@ -745,6 +770,16 @@ async fn test_source_that_reads_filter_updates_is_not_warned_about() {
     let warnings = unread_warnings_after_update(MockFilterUpdateSource).await;
 
     assert_eq!(warnings, 0, "an update the source read must not warn");
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_source_that_takes_the_raw_receiver_is_not_warned_about() {
+    let warnings = unread_warnings_after_update(MockRawReceiverSource).await;
+
+    assert_eq!(
+        warnings, 0,
+        "reads through the raw receiver cannot be seen, so none may warn"
+    );
 }
 
 #[tokio::test]
