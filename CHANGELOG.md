@@ -15,7 +15,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
-- `shipstern-proc-macro`: a defined-type enum with no variants stops the build with a message that names the enum. Before, the macro panicked on an index with the `proto` feature, and without it generated a `match` with no arms that failed with E0004.
+- `shipstern-proc-macro`: a defined-type enum with no variants stops the build with a message that names the enum. Before, the macro panicked on an index with the `proto` feature, and without it generated a `match` with no arms that failed with E0004 ([#477](https://github.com/solana-rpc/shipstern/pull/477) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 
