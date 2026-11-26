@@ -12,8 +12,8 @@ use spl_token_metadata_interface::instruction::TokenMetadataInstruction as SplTo
 use crate::{
     extensions::{
         CommonExtensionInstructions, ConfidentialMintBurnIx, ConfidentialTransferFeeIx,
-        ConfidentialTransferIx, ExtensionWithCommonInstruction, PausableIx, ScaledUiAmountIx,
-        TokenGroupIx, TokenMetadataIx, TransferFeeIx,
+        ConfidentialTransferIx, ExtensionWithCommonInstruction, PausableIx, PermissionedBurnIx,
+        ScaledUiAmountIx, TokenGroupIx, TokenMetadataIx, TransferFeeIx,
     },
     instructions::{
         CreateNativeMintAccounts, InitializeMintCloseAuthorityAccounts,
@@ -238,6 +238,18 @@ impl InstructionParser {
                     Ok(envelope!(
                         crate::instruction::Instruction::ConfidentialMintBurn(
                             crate::instruction::ConfidentialMintBurn {
+                                instruction: Some(parsed),
+                            },
+                        )
+                    ))
+                },
+
+                SplTokenInstruction::PermissionedBurnExtension => {
+                    let parsed = PermissionedBurnIx::try_parse(ix)?;
+
+                    Ok(envelope!(
+                        crate::instruction::Instruction::PermissionedBurn(
+                            crate::instruction::PermissionedBurn {
                                 instruction: Some(parsed),
                             },
                         )
@@ -897,5 +909,179 @@ mod tests {
         burn.accounts.pop();
 
         assert!(InstructionParser.parse(&update_from(&burn)).await.is_err());
+    }
+
+    async fn parse_permissioned_burn(
+        ix: &solana_instruction::Instruction,
+    ) -> crate::extensions::permissioned_burn_instruction::Instruction {
+        let Some(crate::instruction::Instruction::PermissionedBurn(p)) = InstructionParser
+            .parse(&update_from(ix))
+            .await
+            .unwrap()
+            .instruction
+        else {
+            panic!("expected PermissionedBurn");
+        };
+
+        p.instruction
+            .and_then(|i| i.instruction)
+            .expect("empty permissioned burn ix")
+    }
+
+    #[tokio::test]
+    async fn permissioned_burn_instructions_parse() {
+        use spl_token_2022::extension::permissioned_burn::instruction::{
+            burn, burn_checked, initialize,
+        };
+
+        use crate::extensions::permissioned_burn_instruction::Instruction as Ix;
+
+        let init = initialize(&spl_token_2022::ID, &key(1), &key(2)).unwrap();
+        let Ix::Initialize(init) = parse_permissioned_burn(&init).await else {
+            panic!("expected Initialize");
+        };
+        assert_eq!(init.accounts.mint, pk(1));
+        assert_eq!(init.args.authority, pk(2));
+
+        let b = burn(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &key(3),
+            &key(4),
+            &[&key(5)],
+            42,
+        )
+        .unwrap();
+        let Ix::Burn(b) = parse_permissioned_burn(&b).await else {
+            panic!("expected Burn");
+        };
+        assert_eq!(b.accounts.account, pk(1));
+        assert_eq!(b.accounts.mint, pk(2));
+        assert_eq!(b.accounts.permissioned_burn_authority, pk(3));
+        assert_eq!(b.accounts.owner, pk(4));
+        assert_eq!(b.accounts.multisig_signers, vec![pk(5)]);
+        assert_eq!(b.args.amount, 42);
+
+        let b = burn_checked(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &key(3),
+            &key(4),
+            &[],
+            7,
+            9,
+        )
+        .unwrap();
+        let Ix::BurnChecked(b) = parse_permissioned_burn(&b).await else {
+            panic!("expected BurnChecked");
+        };
+        assert_eq!(b.accounts.account, pk(1));
+        assert_eq!(b.accounts.mint, pk(2));
+        assert_eq!(b.accounts.permissioned_burn_authority, pk(3));
+        assert_eq!(b.accounts.owner, pk(4));
+        assert!(b.accounts.multisig_signers.is_empty());
+        assert_eq!(b.args.amount, 7);
+        assert_eq!(b.args.decimals, 9);
+    }
+
+    #[tokio::test]
+    async fn permissioned_confidential_burn_reads_proof_accounts_from_offsets() {
+        use std::num::NonZeroI8;
+
+        use spl_token_2022::extension::permissioned_burn::instruction::confidential_burn_with_split_proofs;
+        use spl_token_confidential_transfer_proof_extraction::instruction::ProofLocation;
+
+        use crate::extensions::permissioned_burn_instruction::Instruction as Ix;
+
+        // All proofs pre-verified: three context accounts, no sysvar.
+        let burn = confidential_burn_with_split_proofs(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &key(3),
+            &bytemuck::pod_read_unaligned(&[7u8; 36]),
+            &bytemuck::cast([5u8; 64]),
+            &bytemuck::cast([6u8; 64]),
+            &key(4),
+            &[&key(5)],
+            ProofLocation::ContextStateAccount(&key(10)),
+            ProofLocation::ContextStateAccount(&key(11)),
+            ProofLocation::ContextStateAccount(&key(12)),
+        )
+        .unwrap();
+        let Ix::ConfidentialBurn(burn) = parse_permissioned_burn(&burn[0]).await else {
+            panic!("expected ConfidentialBurn");
+        };
+        assert_eq!(burn.accounts.token_account, pk(1));
+        assert_eq!(burn.accounts.mint, pk(2));
+        assert_eq!(burn.accounts.instructions_sysvar, None);
+        assert_eq!(burn.accounts.equality_context, Some(pk(10)));
+        assert_eq!(burn.accounts.ciphertext_validity_context, Some(pk(11)));
+        assert_eq!(burn.accounts.range_context, Some(pk(12)));
+        assert_eq!(burn.accounts.permissioned_burn_authority, pk(3));
+        assert_eq!(burn.accounts.owner, pk(4));
+        assert_eq!(burn.accounts.multisig_signers, vec![pk(5)]);
+        assert_eq!(burn.args.new_decryptable_available_balance, vec![7u8; 36]);
+        assert_eq!(burn.args.burn_amount_auditor_ciphertext_lo, vec![5u8; 64]);
+        assert_eq!(burn.args.burn_amount_auditor_ciphertext_hi, vec![6u8; 64]);
+
+        // Mixed: equality and range in the transaction, validity pre-verified.
+        let burn = confidential_burn_with_split_proofs(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &key(3),
+            &bytemuck::pod_read_unaligned(&[7u8; 36]),
+            &bytemuck::cast([5u8; 64]),
+            &bytemuck::cast([6u8; 64]),
+            &key(4),
+            &[],
+            ProofLocation::InstructionOffset(
+                NonZeroI8::new(1).unwrap(),
+                &bytemuck::Zeroable::zeroed(),
+            ),
+            ProofLocation::ContextStateAccount(&key(11)),
+            ProofLocation::InstructionOffset(
+                NonZeroI8::new(2).unwrap(),
+                &bytemuck::Zeroable::zeroed(),
+            ),
+        )
+        .unwrap();
+        let Ix::ConfidentialBurn(burn) = parse_permissioned_burn(&burn[0]).await else {
+            panic!("expected ConfidentialBurn");
+        };
+        assert!(burn.accounts.instructions_sysvar.is_some());
+        assert_eq!(burn.accounts.equality_context, None);
+        assert_eq!(burn.accounts.ciphertext_validity_context, Some(pk(11)));
+        assert_eq!(burn.accounts.range_context, None);
+        assert_eq!(burn.accounts.permissioned_burn_authority, pk(3));
+        assert_eq!(burn.accounts.owner, pk(4));
+        assert!(burn.accounts.multisig_signers.is_empty());
+        assert_eq!(burn.args.equality_proof_instruction_offset, 1);
+        assert_eq!(burn.args.range_proof_instruction_offset, 2);
+
+        // Without the owner the account list is too short.
+        let mut burn = confidential_burn_with_split_proofs(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &key(3),
+            &bytemuck::pod_read_unaligned(&[7u8; 36]),
+            &bytemuck::cast([5u8; 64]),
+            &bytemuck::cast([6u8; 64]),
+            &key(4),
+            &[],
+            ProofLocation::ContextStateAccount(&key(10)),
+            ProofLocation::ContextStateAccount(&key(11)),
+            ProofLocation::ContextStateAccount(&key(12)),
+        )
+        .unwrap();
+        burn[0].accounts.pop();
+        assert!(InstructionParser
+            .parse(&update_from(&burn[0]))
+            .await
+            .is_err());
     }
 }

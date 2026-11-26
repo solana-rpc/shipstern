@@ -4,8 +4,8 @@ use spl_token_2022::{extension::ExtensionType, instruction::AuthorityType as Spl
 
 use super::{
     CommonExtensionInstructions, ConfidentialMintBurnIx, ConfidentialTransferFeeIx,
-    ConfidentialTransferIx, PausableIx, ScaledUiAmountIx, TokenGroupIx, TokenMetadataIx,
-    TransferFeeIx,
+    ConfidentialTransferIx, PausableIx, PermissionedBurnIx, ScaledUiAmountIx, TokenGroupIx,
+    TokenMetadataIx, TransferFeeIx,
 };
 use crate::Pubkey;
 
@@ -142,8 +142,8 @@ pub struct TokenExtensionProgram {
 pub mod instruction {
     use super::{
         shipstern, BaseTokenProgram, CommonExtensionInstructions, ConfidentialMintBurnIx,
-        ConfidentialTransferFeeIx, ConfidentialTransferIx, PausableIx, ScaledUiAmountIx,
-        SetAuthorityAccounts, TokenGroupIx, TokenMetadataIx, TransferFeeIx,
+        ConfidentialTransferFeeIx, ConfidentialTransferIx, PausableIx, PermissionedBurnIx,
+        ScaledUiAmountIx, SetAuthorityAccounts, TokenGroupIx, TokenMetadataIx, TransferFeeIx,
     };
 
     #[shipstern]
@@ -294,6 +294,12 @@ pub mod instruction {
         pub instruction: Option<ConfidentialMintBurnIx>,
     }
 
+    #[shipstern]
+    #[derive(Clone, PartialEq)]
+    pub struct PermissionedBurn {
+        pub instruction: Option<PermissionedBurnIx>,
+    }
+
     #[shipstern(oneof)]
     #[derive(Clone, PartialEq)]
     pub enum Instruction {
@@ -321,6 +327,7 @@ pub mod instruction {
         ScaledUiAmount(ScaledUiAmount),
         Pausable(Pausable),
         ConfidentialMintBurn(ConfidentialMintBurn),
+        PermissionedBurn(PermissionedBurn),
     }
 }
 
