@@ -194,6 +194,12 @@ fn build_defined_type_tuple(
 /// ```
 ///
 fn build_defined_type_enum(name: &str, en: &codama_nodes::EnumTypeNode, ir: &mut SchemaIr) {
+    // No value of an empty enum exists, so no parser can decode one, and the
+    // renderers need a variant for the match arms and the prost `Default`.
+    if en.variants.is_empty() {
+        panic!("enum `{name}` has no variants");
+    }
+
     let enum_name = name.to_string();
     let mut variants = Vec::with_capacity(en.variants.len());
 
@@ -353,5 +359,19 @@ mod tests {
             &enum_idl(r#","discriminator":5"#),
             &mut SchemaIr::default(),
         );
+    }
+
+    /// An empty enum stops the build with its name instead of generating code
+    /// that panics (`proto`) or fails with E0004.
+    #[test]
+    #[should_panic(expected = "enum `mode` has no variants")]
+    fn empty_enum_fails_the_build() {
+        let en: codama_nodes::EnumTypeNode = serde_json::from_str(
+            r#"{"kind":"enumTypeNode","variants":[],
+              "size":{"kind":"numberTypeNode","format":"u8","endian":"le"}}"#,
+        )
+        .expect("enum IDL");
+
+        build_defined_type_enum("mode", &en, &mut SchemaIr::default());
     }
 }
