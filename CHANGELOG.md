@@ -9,7 +9,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- `shipstern-yellowstone-grpc-source`: HTTP/2 keepalive in every mode, and a 30 s idle timeout in the slot checkpoint mode. A stream with nothing but pings for 30 s counts as lost, and the source subscribes again from the checkpoint.
+- `shipstern-yellowstone-grpc-source`: HTTP/2 keepalive in every mode, and a 30 s idle timeout in the slot checkpoint mode. A stream with nothing but pings for 30 s counts as lost, and the source subscribes again from the checkpoint ([#483](https://github.com/solana-rpc/shipstern/pull/483) by @senzenn).
 
 ### Changed
 
