@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use prometheus::Registry;
 use shipstern::{
     config::BufferConfig,
+    filter_pipeline::FilterPipeline,
     instruction::InstructionPipeline,
     shipstern_core::{
         instruction::InstructionUpdate, ParseError, ParseResult, Parser, Prefilter,
@@ -324,5 +325,47 @@ async fn metrics_count_each_update_once_and_skip_filtered_ones() {
     assert_eq!(
         counter(&registry, "shipstern_transactions_successful") - successful_transactions,
         2
+    );
+
+    let successful_instructions = counter(&registry, "shipstern_instructions_successful");
+    let successful_transactions = counter(&registry, "shipstern_transactions_successful");
+
+    // The same filtering parsers wrapped in a `FilterPipeline`. One instruction
+    // and one transaction are filtered out.
+    let mut filtered = transaction(&[]);
+
+    filtered.slot = 2;
+
+    Runtime::builder()
+        .metrics(registry.clone())
+        .transaction(FilterPipeline::new(
+            FilteringTxParser,
+            [NoopHandler],
+            Prefilter::builder(),
+        ))
+        .instruction(FilterPipeline::new(
+            FilteringParser,
+            [NoopHandler],
+            Prefilter::builder(),
+        ))
+        .try_build_with(
+            TransactionSource {
+                transaction_parser: FILTERING_TX_PARSER,
+                transactions: vec![transaction(&[1, 2]), filtered],
+            },
+            BufferConfig::default(),
+        )
+        .unwrap()
+        .try_run_async()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        counter(&registry, "shipstern_instructions_successful") - successful_instructions,
+        1
+    );
+    assert_eq!(
+        counter(&registry, "shipstern_transactions_successful") - successful_transactions,
+        1
     );
 }

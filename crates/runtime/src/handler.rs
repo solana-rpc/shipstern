@@ -211,8 +211,8 @@ pub trait DynPipeline<T>: std::fmt::Debug + ParserId + GetPrefilter {
     fn client_filter(&self) -> Option<&TransactionPrefilter> { None }
 
     /// [`Self::handle`], reporting `false` when the parser filtered the value
-    /// out and no handler ran. The runtime counts instruction metrics with it.
-    /// A pipeline that cannot tell reports `true`.
+    /// out and no handler ran. The runtime counts the `_successful` metrics
+    /// with it. A pipeline that cannot tell reports `true`.
     #[doc(hidden)]
     fn handle_reporting_filtered<'h>(
         &'h self,
