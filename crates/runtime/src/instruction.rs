@@ -63,7 +63,7 @@ impl InstructionPipeline {
     /// Returns an error if any of the sub-pipelines return an error.
     pub async fn handle(&self, txn: &TransactionUpdate) -> Result<(), PipelineErrors> {
         let mut err = None;
-        let ixs = InstructionUpdate::build_from_txn(txn).map_err(PipelineErrors::parse)?;
+        let ixs = build_instructions(txn)?;
 
         // Members share one server filter, so skip each one whose own filter rejects the transaction.
         let skip: SmallVec<[bool; 8]> = self
@@ -117,6 +117,19 @@ impl InstructionPipeline {
     }
 }
 
+/// Builds the instruction tree, counting a failure as an instruction parsing
+/// error because the runtime counts instructions here, not per transaction.
+fn build_instructions(txn: &TransactionUpdate) -> Result<Vec<InstructionUpdate>, PipelineErrors> {
+    InstructionUpdate::build_from_txn(txn).map_err(|e| {
+        let err = PipelineErrors::parse(e);
+
+        #[cfg(feature = "prometheus")]
+        metrics::increment_failed(&err, metrics::UpdateType::Instruction);
+
+        err
+    })
+}
+
 impl ParserId for InstructionPipeline {
     fn id(&self) -> std::borrow::Cow<'static, str> { Self::ID.into() }
 }
@@ -155,7 +168,7 @@ impl SingleInstructionPipeline {
     /// Returns an error if the inner pipeline fails.
     pub async fn handle(&self, txn: &TransactionUpdate) -> Result<(), PipelineErrors> {
         let mut err = None;
-        let ixs = InstructionUpdate::build_from_txn(txn).map_err(PipelineErrors::parse)?;
+        let ixs = build_instructions(txn)?;
         let pipe = &self.0;
 
         for insn in ixs.iter().flat_map(|i| i.visit_all()) {
