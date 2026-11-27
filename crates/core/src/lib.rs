@@ -1468,7 +1468,7 @@ impl PrefilterBuilder {
     ///
     /// Exclusion wins over every other axis. Pair with
     /// [`Self::transaction_accounts_include`] or
-    /// [`Self::transaction_accounts_required`]; on its own it matches every
+    /// [`Self::transaction_accounts`]; on its own it matches every
     /// other transaction.
     ///
     pub fn transaction_accounts_exclude<I: IntoIterator>(self, it: I) -> Self
@@ -1485,7 +1485,7 @@ impl PrefilterBuilder {
     /// Receive only vote transactions, or only non-vote ones. Unset receives both.
     ///
     /// Pair with [`Self::transaction_accounts_include`] or
-    /// [`Self::transaction_accounts_required`]; on its own it matches every
+    /// [`Self::transaction_accounts`]; on its own it matches every
     /// transaction of that kind.
     ///
     /// On Alpenglow, blocks hold no consensus vote transactions (see

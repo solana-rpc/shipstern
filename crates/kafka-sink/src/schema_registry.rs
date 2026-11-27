@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::KafkaSinkConfig;
 
 pub struct SchemaDefinition {
-    /// Subject name (typically "<topic>-value" or "<topic>-key").
+    /// Subject name (typically `"<topic>-value"` or `"<topic>-key"`).
     pub subject: String,
     /// The protobuf schema content.
     pub schema: &'static str,
@@ -36,8 +36,8 @@ fn wire_format_max_capacity(indices_count: usize, payload_len: usize) -> usize {
     1 + SCHEMA_ID_SIZE + max_indices_bytes + payload_len
 }
 
-/// Format: [0x00][4-byte schema ID BE][zigzag varint message indices...][protobuf payload]
-/// See: https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html
+/// Format: `[0x00][4-byte schema ID BE][zigzag varint message indices...][protobuf payload]`
+/// See: <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html>
 pub fn wrap_payload_with_confluent_wire_format(
     schema_id: i32,
     message_indices: &[i32],

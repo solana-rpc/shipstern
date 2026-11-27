@@ -18,6 +18,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Docs: fix 11 broken rustdoc links and HTML tags in `shipstern-core`, `shipstern`, `shipstern-block-coordinator`, `shipstern-jetstream-source` and `shipstern-kafka-sink`, and drop the `shipstern-stream` links to examples removed in #168. `RUSTDOCFLAGS=-Dwarnings cargo doc` now passes ([#464](https://github.com/solana-rpc/shipstern/pull/464) by @Estereg).
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
 
 ## [0.13.0] - 2026-11-12
