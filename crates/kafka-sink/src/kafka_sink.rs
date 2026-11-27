@@ -10,14 +10,20 @@ use std::{future::Future, sync::Arc, time::Duration};
 use rdkafka::{
     error::KafkaError,
     message::OwnedHeaders,
-    producer::{FutureProducer, FutureRecord, Producer},
+    producer::{DeliveryFuture, FutureProducer, FutureRecord, Producer},
+    types::RDKafkaErrorCode,
 };
 #[cfg(feature = "experimental-account-parser")]
 use shipstern_block_coordinator::AccountSlot;
 use shipstern_block_coordinator::{AccountCommitAt, InstructionSlot};
-use tokio::{sync::mpsc, time::sleep};
+use tokio::{
+    sync::mpsc,
+    time::{sleep, Instant},
+};
 
 type SinkError = Box<dyn std::error::Error + Send + Sync>;
+
+const QUEUE_FULL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug)]
 enum TransactionCommitError {
@@ -184,31 +190,75 @@ fn to_kafka_headers(headers: &[RecordHeader]) -> OwnedHeaders {
     })
 }
 
+/// Enqueues a record, waiting up to `queue_timeout` for room in the producer queue.
+///
+/// Waits here instead of in `FutureProducer::send`, whose per-call retry lets a later
+/// record take a freed queue slot before an earlier one and reorder a partition.
+async fn enqueue_waiting_for_queue_space<'a>(
+    producer: &FutureProducer,
+    mut record: FutureRecord<'a, String, Vec<u8>>,
+    queue_timeout: Duration,
+) -> Result<DeliveryFuture, KafkaError> {
+    let deadline = Instant::now() + queue_timeout;
+
+    loop {
+        match producer.send_result(record) {
+            Ok(delivery) => return Ok(delivery),
+            Err((KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull), returned))
+                if Instant::now() < deadline =>
+            {
+                record = returned;
+
+                sleep(QUEUE_FULL_POLL_INTERVAL).await;
+            },
+            Err((err, _)) => return Err(err),
+        }
+    }
+}
+
+/// Publishes `records` and waits for every delivery ack.
+///
+/// Records are enqueued one at a time in order, so each partition sees them in order.
+/// Only the delivery acks are awaited concurrently. `enable.idempotence=true` keeps that
+/// order across librdkafka retries.
 async fn batch_publish_records(
     producer: &FutureProducer,
     slot: u64,
     records: &[PreparedRecord],
-    timeout: Duration,
+    queue_timeout: Duration,
     error_prefix: &'static str,
 ) -> Result<(), SinkError> {
-    let futures: Vec<_> = records
-        .iter()
-        .map(|record| {
-            let headers = to_kafka_headers(&record.headers);
+    let mut deliveries = Vec::with_capacity(records.len());
 
-            producer.send(
-                FutureRecord::to(&record.topic)
-                    .payload(&record.payload)
-                    .key(&record.key)
-                    .headers(headers),
-                timeout,
-            )
-        })
-        .collect();
+    for record in records {
+        let kafka_record = FutureRecord::to(&record.topic)
+            .payload(&record.payload)
+            .key(&record.key)
+            .headers(to_kafka_headers(&record.headers));
 
-    let results = futures::future::join_all(futures).await;
+        let delivery = enqueue_waiting_for_queue_space(producer, kafka_record, queue_timeout)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    ?e,
+                    slot,
+                    topic = %record.topic,
+                    error_prefix,
+                    "Kafka enqueue failed"
+                );
+
+                kafka_send_error(error_prefix, slot, e)
+            })?;
+
+        deliveries.push(delivery);
+    }
+
+    let results = futures::future::join_all(deliveries).await;
+
     for (i, result) in results.into_iter().enumerate() {
-        result.map_err(|(e, _)| {
+        let delivery_result = result.map_err(|e| kafka_send_error(error_prefix, slot, e))?;
+
+        delivery_result.map_err(|(e, _)| {
             tracing::error!(
                 ?e,
                 slot,
@@ -375,6 +425,7 @@ struct SlotWriteExecutor {
     write_retry_policy: RetrySettings,
     transaction_retry_policy: RetrySettings,
     transactions_initialized: bool,
+    queue_timeout: Duration,
 }
 
 impl SlotWriteExecutor {
@@ -395,6 +446,9 @@ impl SlotWriteExecutor {
                 config,
             ),
             transactions_initialized: transactions_initialized && config.transactional_id.is_some(),
+            // A queued record fails after `message.timeout.ms` anyway, so waiting longer
+            // for queue space gains nothing.
+            queue_timeout: Duration::from_millis(config.message_timeout_ms.into()),
         }
     }
 
@@ -450,7 +504,7 @@ impl SlotWriteExecutor {
             self.producer(),
             plan.slot,
             plan.records,
-            Duration::ZERO,
+            self.queue_timeout,
             plan.record_error_prefix,
         )
         .await?;
@@ -951,12 +1005,99 @@ impl From<AccountCommitAt> for CommitScope {
 
 #[cfg(test)]
 mod tests {
+    use rdkafka::{
+        consumer::{BaseConsumer, Consumer},
+        mocking::MockCluster,
+        producer::DefaultProducerContext,
+        ClientConfig, Message,
+    };
     #[cfg(feature = "experimental-account-parser")]
     use shipstern_block_coordinator::AccountSlot;
     use shipstern_block_coordinator::InstructionSlot;
 
     use super::*;
-    use crate::events::{AccountSlotCommitEvent, MarkerType};
+    use crate::{
+        create_producer,
+        events::{AccountSlotCommitEvent, MarkerType},
+    };
+
+    fn ordered_records(topic: &str, count: usize) -> Vec<PreparedRecord> {
+        (0..count)
+            .map(|i| PreparedRecord {
+                key: format!("{i:04}"),
+                ..record(topic, RecordKind::Instruction, true)
+            })
+            .collect()
+    }
+
+    fn write_plan(slot: u64, records: &[PreparedRecord]) -> SlotWritePlan<'_> {
+        SlotWritePlan {
+            slot,
+            records,
+            record_error_prefix: "Kafka write failed",
+            checkpoint: SlotCheckpointRecord {
+                topic: "slots",
+                payload: format!("{{\"slot\":{slot}}}"),
+                error_prefix: "Failed to publish slot checkpoint",
+                log: SlotCheckpointLog::Transaction(TransactionCheckpointLog {
+                    decoded_instruction_count: 0,
+                    decode_filtered_instruction_count: 0,
+                    decode_error_instruction_count: 0,
+                    fallback_instruction_count: 0,
+                    transaction_status_failed_count: 0,
+                    transaction_status_succeeded_count: 0,
+                }),
+            },
+        }
+    }
+
+    fn consume_keys(brokers: &str, topic: &str, count: usize) -> Vec<String> {
+        let consumer: BaseConsumer = ClientConfig::new()
+            .set("bootstrap.servers", brokers)
+            .set("group.id", "kafka-sink-test")
+            .set("auto.offset.reset", "earliest")
+            .set("enable.auto.commit", "false")
+            .create()
+            .expect("create test consumer");
+
+        consumer.subscribe(&[topic]).expect("subscribe");
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let mut keys = Vec::new();
+
+        while keys.len() < count && std::time::Instant::now() < deadline {
+            if let Some(Ok(message)) = consumer.poll(Duration::from_millis(100)) {
+                keys.push(String::from_utf8(message.key().expect("key").to_vec()).expect("utf8"));
+            }
+        }
+
+        keys
+    }
+
+    #[tokio::test]
+    async fn slot_larger_than_producer_queue_waits_for_space_and_keeps_order() {
+        let cluster = MockCluster::<DefaultProducerContext>::new(1).expect("mock cluster");
+        cluster.create_topic("ordered", 1, 1).expect("create topic");
+
+        let config = KafkaSinkConfig {
+            brokers: cluster.bootstrap_servers(),
+            queue_buffering_max_messages: 5,
+            ..Default::default()
+        };
+
+        let executor =
+            SlotWriteExecutor::from_kafka_config(&config, Arc::new(create_producer(&config)));
+        let records = ordered_records("ordered", 30);
+
+        executor
+            .execute(&write_plan(1, &records))
+            .await
+            .expect("a slot bigger than the producer queue must wait for space");
+
+        let expected: Vec<_> = records.iter().map(|r| r.key.clone()).collect();
+
+        assert_eq!(consume_keys(&config.brokers, "ordered", 30), expected);
+    }
 
     fn record(topic: &str, kind: RecordKind, is_decoded: bool) -> PreparedRecord {
         PreparedRecord {

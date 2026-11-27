@@ -19,6 +19,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- `shipstern-kafka-sink`: a slot with more records than free room in the producer queue (`queue.buffering.max.messages`), or a slow broker, no longer fails the slot with `QueueFull` and ends the sink after the write retries. The sink now waits up to `message_timeout_ms` for queue space. It still enqueues records one at a time in order, so partition order holds ([#406](https://github.com/solana-rpc/shipstern/pull/406) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 
