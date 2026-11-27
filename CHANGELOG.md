@@ -19,6 +19,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- `shipstern-kafka-sink`: the startup checkpoint scan stops when its consumer reaches the end of the partition. Before, it waited out the 5 s deadline for every partition, because it waited for a message at the high watermark, which is the next offset to be written and, in transactional mode, the control marker the consumer never receives ([#424](https://github.com/solana-rpc/shipstern/pull/424) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 
