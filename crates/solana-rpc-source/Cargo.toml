@@ -17,9 +17,13 @@ solana-commitment-config = { workspace = true }
 solana-pubkey = { workspace = true, features = ["serde", "borsh", "curve25519"] }
 solana-account-decoder-client-types = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 clap = { workspace = true, features = ["derive", "cargo", "wrap_help"] }
 shipstern = { workspace = true }
 shipstern-core = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
 
 [features]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "net", "io-util"] }
