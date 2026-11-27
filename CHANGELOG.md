@@ -19,6 +19,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- `shipstern-kafka-sink`: `AccountPassthroughSink` no longer emits a watermark for the slot in progress when its channel closes. The channel closes on shutdown or an upstream error, so that slot can be partial, and a resume from its watermark skipped the rest of it. The last slot is now written again after a restart ([#426](https://github.com/solana-rpc/shipstern/pull/426) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 
