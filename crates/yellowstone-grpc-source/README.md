@@ -150,6 +150,9 @@ finalized each wait caps at 10 s, so an outage of W seconds needs at least
 about 214 s, which needs about 25 retries. At processed the client doubles each
 wait with no cap, so more retries help little.
 
+In every mode, the source stops at once when the runtime has stopped, also during
+a connect or a reconnect wait.
+
 **Confirmed or finalized: resume from a slot checkpoint.** The checkpoint is the
 newest slot whose status at the commitment came, or an older slot whose content
 came without that status. The source subscribes again a few slots before it,
