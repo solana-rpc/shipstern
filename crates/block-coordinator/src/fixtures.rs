@@ -34,14 +34,14 @@ impl FixtureWriter {
         })
     }
 
-    /// Encode and write a single `SubscribeUpdate` to the fixture file.
-    ///
-    /// Returns `true` if capture should continue, `false` when the target
-    /// number of BlockMeta messages has been reached.
     /// Flush any buffered data to disk. Call this when the stream ends
     /// before the target slot count is reached to avoid losing trailing messages.
     pub fn finish(mut self) -> io::Result<()> { self.writer.flush() }
 
+    /// Encode and write a single `SubscribeUpdate` to the fixture file.
+    ///
+    /// Returns `true` if capture should continue, `false` when the target
+    /// number of BlockMeta messages has been reached.
     pub fn write(&mut self, update: &SubscribeUpdate) -> io::Result<bool> {
         let bytes = update.encode_to_vec();
         let len: u32 = bytes.len().try_into().map_err(|_| {
