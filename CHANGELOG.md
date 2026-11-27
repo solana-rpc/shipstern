@@ -19,6 +19,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- `shipstern-kafka-sink`: `create_producer`, `read_last_committed_transaction_block`, `read_last_committed_account_block` and `ensure_schemas_registered` now run `KafkaSinkConfig::validate_credentials` and reject a SASL or Schema Registry username without its password, or a password without its username. Before, nothing outside tests called the check, so the Kafka client was built without SASL and the Schema Registry request without Basic Auth, with no error. `create_producer` panics with the validation message, as it already does when the client cannot be created ([#476](https://github.com/solana-rpc/shipstern/pull/476) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 

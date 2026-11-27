@@ -44,6 +44,10 @@ fn read_last_slot_from_topic(
     config: &KafkaSinkConfig,
     topic: &str,
 ) -> Result<Option<LastCommitted>, String> {
+    config
+        .validate_credentials()
+        .map_err(|e| format!("Invalid Kafka sink config: {e}"))?;
+
     let mut client_config = ClientConfig::new();
 
     client_config
@@ -261,6 +265,19 @@ mod tests {
         let parsed = parse_last_committed_payload(payload);
 
         assert!(matches!(parsed, Some(LastCommitted { slot: 99 })));
+    }
+
+    #[test]
+    fn read_last_committed_block_rejects_half_set_sasl_credentials() {
+        let config = KafkaSinkConfig {
+            brokers: "127.0.0.1:1".to_string(),
+            sasl_password: Some("pass".to_string()),
+            ..Default::default()
+        };
+
+        let err = read_last_committed_transaction_block(&config).unwrap_err();
+
+        assert!(err.contains("KAFKA_SASL_USERNAME is missing"), "{err}");
     }
 
     #[test]

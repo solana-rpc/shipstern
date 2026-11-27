@@ -226,7 +226,8 @@ impl KafkaSinkConfig {
     }
 
     /// Validate credential pairs: each pair must be "both set or both unset".
-    /// Call this at startup before creating any Kafka client.
+    /// `create_producer`, the startup checkpoint readers and
+    /// `ensure_schemas_registered` call this before they build a client.
     pub fn validate_credentials(&self) -> io::Result<()> {
         if let Some(id) = &self.transactional_id
             && id.trim().is_empty()
