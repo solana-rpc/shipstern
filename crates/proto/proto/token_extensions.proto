@@ -555,7 +555,7 @@ message EnableHarvestToMintAccounts {
 }
 
 message DisableHarvestToMintAccounts {
-  shipstern.parser.token.PublicKey account = 1;
+  shipstern.parser.token.PublicKey mint = 1;
   shipstern.parser.token.PublicKey confidential_transfer_fee_authority = 2;
   repeated shipstern.parser.token.PublicKey multisig_signers = 3;
 }
