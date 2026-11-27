@@ -120,6 +120,7 @@ impl From<SplMultisig> for Multisig {
             signers: m
                 .signers
                 .iter()
+                .take(m.n as usize)
                 .map(|pk| Pubkey::new(pk.to_bytes()))
                 .collect(),
         }
@@ -193,5 +194,25 @@ mod tests {
         };
 
         assert_eq!(mint.decimals, 10);
+    }
+
+    #[test]
+    fn multisig_keeps_only_the_first_n_signers() {
+        use spl_token::solana_program::pubkey::Pubkey as SplPubkey;
+
+        let mut signers = [SplPubkey::default(); 11];
+        signers[0] = SplPubkey::new_from_array([1; 32]);
+        signers[1] = SplPubkey::new_from_array([2; 32]);
+
+        let multisig = super::Multisig::from(super::SplMultisig {
+            m: 1,
+            n: 2,
+            is_initialized: true,
+            signers,
+        });
+
+        assert_eq!(multisig.signers.len(), 2);
+        assert_eq!(multisig.signers[0], super::Pubkey::new([1; 32]));
+        assert_eq!(multisig.signers[1], super::Pubkey::new([2; 32]));
     }
 }
