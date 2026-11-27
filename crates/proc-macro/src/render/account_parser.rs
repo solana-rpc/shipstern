@@ -230,30 +230,36 @@ pub fn account_parser(
                     }
                 };
 
-                // Skip if discriminator field isn't fixed-size bytes
-                let TypeNode::FixedSize(fixed_size_node) = &*field.r#type else {
-                    return None;
+                // The discriminator is fixed-size bytes (Anchor) or a number (Shank, e.g. a `u8` key).
+                let (size, discriminator) = match (&*field.r#type, field.default_value.as_ref()) {
+                    (TypeNode::FixedSize(fixed), Some(ValueNode::Bytes(bytes))) => {
+                        (fixed.size, decode_discriminator_bytes(bytes))
+                    },
+
+                    (ty @ TypeNode::Number(_), Some(ValueNode::Number(nn))) => {
+                        let Number::UnsignedInteger(value) = nn.number else {
+                            return None;
+                        };
+
+                        let bytes =
+                            super::instruction_parser::number_discriminator_bytes(ty, value);
+
+                        (bytes.len(), bytes)
+                    },
+
+                    _ => return None,
                 };
-
-                let size = fixed_size_node.size;
-
-                // Skip if no default value
-                let default_value = match field.default_value.as_ref() {
-                    Some(v) => v,
-                    None => {
-                        return None;
-                    }
-                };
-
-                // Skip if default value isn't bytes
-                let ValueNode::Bytes(bytes) = default_value else {
-                    return None;
-                };
-
-                // Decode expected discriminator bytes
-                let discriminator = decode_discriminator_bytes(bytes);
 
                 let end = crate::utils::unsuffixed((offset_at + size) as u64);
+
+                // An omitted field is not in the account struct, so the struct starts after it.
+                let body_start = if field.default_value_strategy
+                    == Some(codama_nodes::DefaultValueStrategy::Omitted)
+                {
+                    end.clone()
+                } else {
+                    crate::utils::unsuffixed(0)
+                };
 
                 // Empty discriminator (size 0) matches any data — skip the
                 // byte comparison and match unconditionally on data length.
@@ -266,7 +272,7 @@ pub fn account_parser(
                 let arm = quote! {
                     if let Some(slice) = data.get(#offset..#end) {
                         if #disc_check {
-                            match <#account_ident as ::borsh::BorshDeserialize>::deserialize(&mut &data[#end..]) {
+                            match <#account_ident as ::borsh::BorshDeserialize>::deserialize(&mut &data[#body_start..]) {
                                 Ok(parsed) => {
                                     return Ok(#account_struct_ident {
                                         account: #account_mod_ident::Account::#account_ident(parsed),
