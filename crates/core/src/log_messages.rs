@@ -6,8 +6,8 @@ use crate::Pubkey;
 
 /// Structural shape of a Solana log line. Matching is on the line's structure,
 /// not substrings, so a `Program log:` payload containing `invoke [2]` is `Other`.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum LogLineKind {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLineKind {
     /// `Program <pubkey> invoke [<n>]`
     Invoke,
     /// `Program <pubkey> success` or `Program <pubkey> failed: ...`
@@ -22,7 +22,8 @@ pub(crate) enum LogLineKind {
 /// token is a real pubkey-shaped string — i.e. *not* one of the reserved
 /// runtime tags `log:`, `data:`, `return:`. This rejects adversarial
 /// `Program log: ... invoke [2]` payloads from being misclassified.
-pub(crate) fn classify_log_line(line: &str) -> LogLineKind {
+#[must_use]
+pub fn classify_log_line(line: &str) -> LogLineKind {
     let Some(rest) = line.strip_prefix("Program ") else {
         return LogLineKind::Other;
     };
@@ -97,7 +98,8 @@ fn is_outer_invoke(line: &str) -> bool {
 }
 
 /// The program that a `Program <pubkey> invoke [<n>]` line names.
-fn invoked_program(line: &str) -> Option<Pubkey> {
+#[must_use]
+pub fn invoked_program(line: &str) -> Option<Pubkey> {
     line.strip_prefix("Program ")?
         .split_once(' ')?
         .0
