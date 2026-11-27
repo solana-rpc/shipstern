@@ -52,51 +52,9 @@
         "discriminators": [
           { "kind": "fieldDiscriminatorNode", "name": "discriminator", "offset": 0 }
         ]
-      },
-      {
-        "kind": "accountNode",
-        "name": "widthMismatch",
-        "data": {
-          "kind": "structTypeNode",
-          "fields": [
-            {
-              "kind": "structFieldTypeNode",
-              "name": "discriminator",
-              "defaultValueStrategy": "omitted",
-              "type": { "kind": "fixedSizeTypeNode", "size": 8, "type": { "kind": "bytesTypeNode" } },
-              "defaultValue": { "kind": "bytesValueNode", "data": "aabbccdd", "encoding": "base16" }
-            },
-            {
-              "kind": "structFieldTypeNode",
-              "name": "flag",
-              "type": { "kind": "numberTypeNode", "format": "u8", "endian": "le" }
-            }
-          ]
-        },
-        "discriminators": [
-          { "kind": "fieldDiscriminatorNode", "name": "discriminator", "offset": 0 }
-        ]
       }
     ],
     "instructions": [
-      {
-        "kind": "instructionNode",
-        "name": "widthMismatchIx",
-        "accounts": [],
-        "arguments": [
-          {
-            "kind": "instructionArgumentNode",
-            "name": "discriminator",
-            "defaultValueStrategy": "omitted",
-            "docs": [],
-            "type": { "kind": "fixedSizeTypeNode", "size": 8, "type": { "kind": "bytesTypeNode" } },
-            "defaultValue": { "kind": "bytesValueNode", "data": "aabbccdd", "encoding": "base16" }
-          }
-        ],
-        "discriminators": [
-          { "kind": "fieldDiscriminatorNode", "name": "discriminator", "offset": 0 }
-        ]
-      },
       {
         "kind": "instructionNode",
         "name": "wellFormedIx",

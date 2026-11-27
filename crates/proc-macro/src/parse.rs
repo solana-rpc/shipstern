@@ -118,34 +118,20 @@ pub struct CpiEventEnvelope {
     pub payload_offset: usize,
 }
 
-/// Decode without the shared helper's `expect`, so a malformed envelope
-/// discriminator reaches `compile_error!` instead of panicking the macro.
-fn try_decode_bytes(bytes: &codama_nodes::BytesValueNode) -> Option<Vec<u8>> {
-    match bytes.encoding {
-        codama_nodes::BytesEncoding::Base16 => hex::decode(crate::utils::pad_hex(&bytes.data)).ok(),
-        codama_nodes::BytesEncoding::Base58 => bs58::decode(&bytes.data).into_vec().ok(),
-        codama_nodes::BytesEncoding::Base64 => {
-            use base64::Engine as _;
-            base64::engine::general_purpose::STANDARD
-                .decode(&bytes.data)
-                .ok()
-        },
-        codama_nodes::BytesEncoding::Utf8 => Some(bytes.data.as_bytes().to_vec()),
-    }
-}
-
 /// Numeric constants narrow to one byte, matching the generated match arm's
 /// `*d == (value as u8)`.
 fn constant_discriminator_bytes(
     node: &codama_nodes::ConstantDiscriminatorNode,
 ) -> Result<Vec<u8>, String> {
     match node.constant.value.as_ref() {
-        codama_nodes::ValueNode::Bytes(bytes) => try_decode_bytes(bytes).ok_or_else(|| {
-            format!(
-                "discriminator at offset {} is not valid {:?} data",
-                node.offset, bytes.encoding,
-            )
-        }),
+        codama_nodes::ValueNode::Bytes(bytes) => {
+            crate::utils::try_decode_bytes(bytes).ok_or_else(|| {
+                format!(
+                    "discriminator at offset {} is not valid {:?} data",
+                    node.offset, bytes.encoding,
+                )
+            })
+        },
 
         codama_nodes::ValueNode::Number(number) => {
             let codama_nodes::Number::UnsignedInteger(value) = number.number else {

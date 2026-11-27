@@ -11,6 +11,7 @@ mod parse;
 mod render;
 mod shipstern;
 mod utils;
+mod validate;
 
 #[cfg(test)]
 mod anchor_parity_tests;
@@ -299,6 +300,14 @@ fn expand_parser_tokens(
         };
     }
 
+    if let Err(message) = validate::validate_idl(&idl, envelope.as_ref()) {
+        let error_msg = format!("Invalid IDL {:?}: {}", full_path, message);
+
+        return quote::quote! {
+            compile_error!(#error_msg);
+        };
+    }
+
     let parser = crate::render::shipstern_parser(&idl, &events, &config);
 
     quote::quote! {
@@ -421,6 +430,110 @@ mod expansion_tests {
             tokens.contains("not valid"),
             "decode message missing: {tokens}",
         );
+    }
+
+    #[test]
+    fn account_discriminator_width_mismatch_is_rejected() {
+        let tokens = expand("invalid_width_mismatch_account.json", false);
+
+        assert!(tokens.contains("compile_error"), "no compile_error emitted");
+        assert!(
+            tokens.contains("account `widthMismatch` declares a discriminator field of 8 bytes")
+                && tokens.contains("is 4 bytes"),
+            "message must name the account and both widths: {tokens}",
+        );
+    }
+
+    #[test]
+    fn instruction_discriminator_width_mismatch_is_rejected() {
+        let tokens = expand("invalid_width_mismatch_instruction.json", false);
+
+        assert!(tokens.contains("compile_error"), "no compile_error emitted");
+        assert!(
+            tokens.contains(
+                "instruction `widthMismatchIx` declares a discriminator field of 8 bytes"
+            ) && tokens.contains("is 4 bytes"),
+            "message must name the instruction and both widths: {tokens}",
+        );
+    }
+
+    #[cfg(feature = "program-events")]
+    #[test]
+    fn event_discriminator_width_mismatch_is_rejected() {
+        let tokens = expand("invalid_width_mismatch_event.json", false);
+
+        assert!(tokens.contains("compile_error"), "no compile_error emitted");
+        assert!(
+            tokens.contains("event `widthMismatchEv` declares a discriminator field of 8 bytes")
+                && tokens.contains("is 4 bytes"),
+            "message must name the event and both widths: {tokens}",
+        );
+    }
+
+    /// An empty default holds no bytes to compare, so a non-zero width has nothing to match.
+    #[test]
+    fn empty_default_on_a_sized_instruction_discriminator_is_rejected() {
+        let tokens = expand("invalid_empty_default_instruction.json", false);
+
+        assert!(tokens.contains("compile_error"), "no compile_error emitted");
+        assert!(
+            tokens.contains("instruction `emptyDefaultIx`")
+                && tokens.contains("of 4 bytes")
+                && tokens.contains("is 0 bytes"),
+            "message must name the instruction and both widths: {tokens}",
+        );
+    }
+
+    /// On an account an empty default makes a catch-all arm that matches any data,
+    /// so it stays legal.
+    #[test]
+    fn empty_default_on_a_sized_account_discriminator_still_expands() {
+        let tokens = expand("empty_default_sized_account.json", false);
+
+        assert!(
+            !tokens.contains("compile_error"),
+            "unexpected compile_error: {tokens}",
+        );
+    }
+
+    /// The parsers read only the first discriminator, so a width mismatch in a later
+    /// one never reaches a parser arm and must not reject the IDL.
+    #[test]
+    fn later_discriminator_width_mismatch_still_expands() {
+        let tokens = expand("later_discriminator_width_mismatch.json", false);
+
+        assert!(
+            !tokens.contains("compile_error"),
+            "unexpected compile_error: {tokens}",
+        );
+    }
+
+    /// Only the fixtures built to fail may emit a `compile_error!`.
+    #[test]
+    fn only_designed_invalid_fixtures_fail_expansion() {
+        let designed = [
+            "colliding_envelope.json",
+            "mismatched_payload_offsets.json",
+            "malformed_envelope_discriminator.json",
+        ];
+
+        // Events are only checked under `program-events`.
+        let events_only = ["invalid_width_mismatch_event.json"];
+
+        for entry in std::fs::read_dir(fixture("")).expect("tests/idls is readable") {
+            let path = entry.expect("readable dir entry").path();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+
+            let fails = expand(&name, false).contains("compile_error");
+            let expected = (name.starts_with("invalid_") || designed.contains(&name.as_str()))
+                && (cfg!(feature = "program-events") || !events_only.contains(&name.as_str()));
+
+            assert_eq!(fails, expected, "{name}: compile_error presence changed");
+        }
     }
 
     /// The deprecation fires only when an IDL envelope and macro args conflict.
