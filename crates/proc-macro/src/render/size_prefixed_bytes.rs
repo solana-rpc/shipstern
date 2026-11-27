@@ -510,15 +510,7 @@ fn vec_size_prefixed() -> TokenStream {
         >(
             reader: &mut R,
         ) -> ::core::result::Result<Vec<T>, ::borsh::io::Error> {
-            let count = <u32 as ::borsh::BorshDeserialize>::deserialize_reader(reader)?;
-
-            // Grow only as actual input arrives, never allocate from the untrusted count.
-            let mut values = Vec::new();
-            for _ in 0..count {
-                values.push(borsh_deserialize_size_prefixed::<P, T, _>(reader)?);
-            }
-
-            ::core::result::Result::Ok(values)
+            borsh_deserialize_counted(reader, borsh_deserialize_size_prefixed::<P, T, R>)
         }
 
         fn borsh_serialize_vec_size_prefixed<
@@ -529,28 +521,13 @@ fn vec_size_prefixed() -> TokenStream {
             value: &[T],
             writer: &mut W,
         ) -> ::core::result::Result<(), ::borsh::io::Error> {
-            let count = u32::try_from(value.len()).map_err(|_| ::borsh::io::Error::new(
-                ::borsh::io::ErrorKind::InvalidInput,
-                "byte-array count overflow",
-            ))?;
-            ::borsh::BorshSerialize::serialize(&count, writer)?;
-
-            for value in value {
-                borsh_serialize_size_prefixed::<P, T, _>(value, writer)?;
-            }
-
-            ::core::result::Result::Ok(())
+            borsh_serialize_counted(value, writer, borsh_serialize_size_prefixed::<P, T, W>)
         }
     }
 }
 
-///
-/// An uncounted run of exactly `N` size-prefixed payloads.
-///
-/// The serializer rejects a `Vec` whose length is not `N`. `borsh_serialize_fixed_array` does
-/// not: it writes however many elements it is handed. That one is the outlier and should be
-/// aligned separately; until then both behaviours live in the same generated module.
-///
+/// An uncounted run of exactly `N` size-prefixed payloads. The serializer rejects a `Vec`
+/// whose length is not `N`.
 fn fixed_array_size_prefixed() -> TokenStream {
     quote! {
         fn borsh_deserialize_fixed_array_size_prefixed<
@@ -578,18 +555,11 @@ fn fixed_array_size_prefixed() -> TokenStream {
             value: &[T],
             writer: &mut W,
         ) -> ::core::result::Result<(), ::borsh::io::Error> {
-            if value.len() != N {
-                return ::core::result::Result::Err(::borsh::io::Error::new(
-                    ::borsh::io::ErrorKind::InvalidInput,
-                    "invalid fixed byte-array count",
-                ));
-            }
-
-            for value in value {
-                borsh_serialize_size_prefixed::<P, T, _>(value, writer)?;
-            }
-
-            ::core::result::Result::Ok(())
+            borsh_serialize_fixed_count::<_, N, _>(
+                value,
+                writer,
+                borsh_serialize_size_prefixed::<P, T, W>,
+            )
         }
     }
 }
