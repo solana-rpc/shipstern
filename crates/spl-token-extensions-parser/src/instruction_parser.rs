@@ -391,6 +391,49 @@ impl InstructionParser {
 
 #[cfg(test)]
 mod tests {
+    /// The program requires only the mint, so a harvest with no sources is valid.
+    #[tokio::test]
+    async fn confidential_harvest_accepts_no_source_accounts() {
+        use crate::extensions::confidential_transfer_fee_instruction::Instruction as Ix;
+
+        let mint = solana_pubkey::Pubkey::new_from_array([1; 32]);
+        let ix = spl_token_2022::extension::confidential_transfer_fee::instruction::harvest_withheld_tokens_to_mint(
+            &spl_token_2022::ID,
+            &mint,
+            &[],
+        )
+        .unwrap();
+
+        let update = InstructionUpdate {
+            program: shipstern_core::Pubkey::new(ix.program_id.to_bytes()),
+            accounts: ix
+                .accounts
+                .iter()
+                .map(|m| shipstern_core::Pubkey::new(m.pubkey.to_bytes()))
+                .collect(),
+            data: ix.data.clone(),
+            shared: Default::default(),
+            inner: vec![],
+            path: Path::new_single(0),
+            log_range: 0..0,
+        };
+
+        let parsed = InstructionParser.parse(&update).await.unwrap();
+
+        let Some(crate::instruction::Instruction::ConfidentialTransferFee(fee)) =
+            parsed.instruction
+        else {
+            panic!("expected ConfidentialTransferFee");
+        };
+        let Some(Ix::HarvestWithheldTokensToMint(h)) = fee.instruction.and_then(|i| i.instruction)
+        else {
+            panic!("expected HarvestWithheldTokensToMint");
+        };
+
+        assert_eq!(h.accounts.mint, shipstern_core::Pubkey::new([1; 32]));
+        assert!(h.accounts.source_accounts.is_empty());
+    }
+
     use std::ops::Mul;
 
     use shipstern_core::instruction::Path;
@@ -447,48 +490,5 @@ mod tests {
         let res = InstructionParser.parse(&ix).await;
 
         assert!(matches!(res, Err(ParseError::Filtered)), "{res:?}");
-    }
-
-    /// The program requires only the mint, so a harvest with no sources is valid.
-    #[tokio::test]
-    async fn confidential_harvest_accepts_no_source_accounts() {
-        use crate::extensions::confidential_transfer_fee_instruction::Instruction as Ix;
-
-        let mint = solana_pubkey::Pubkey::new_from_array([1; 32]);
-        let ix = spl_token_2022::extension::confidential_transfer_fee::instruction::harvest_withheld_tokens_to_mint(
-            &spl_token_2022::ID,
-            &mint,
-            &[],
-        )
-        .unwrap();
-
-        let update = InstructionUpdate {
-            program: shipstern_core::Pubkey::new(ix.program_id.to_bytes()),
-            accounts: ix
-                .accounts
-                .iter()
-                .map(|m| shipstern_core::Pubkey::new(m.pubkey.to_bytes()))
-                .collect(),
-            data: ix.data.clone(),
-            shared: Default::default(),
-            inner: vec![],
-            path: Path::new_single(0),
-            log_range: 0..0,
-        };
-
-        let parsed = InstructionParser.parse(&update).await.unwrap();
-
-        let Some(crate::instruction::Instruction::ConfidentialTransferFee(fee)) =
-            parsed.instruction
-        else {
-            panic!("expected ConfidentialTransferFee");
-        };
-        let Some(Ix::HarvestWithheldTokensToMint(h)) = fee.instruction.and_then(|i| i.instruction)
-        else {
-            panic!("expected HarvestWithheldTokensToMint");
-        };
-
-        assert_eq!(h.accounts.mint, shipstern_core::Pubkey::new([1; 32]));
-        assert!(h.accounts.source_accounts.is_empty());
     }
 }
