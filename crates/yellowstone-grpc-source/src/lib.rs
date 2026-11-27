@@ -73,7 +73,7 @@ pub struct YellowstoneGrpcConfig {
     /// The token to use for authentication.
     #[arg(long, env)]
     pub x_token: Option<String>,
-    /// The timeout for the connection.
+    /// Seconds for the connect and for each request to answer. `0` is refused at connect.
     #[arg(long, env, default_value_t = 120)]
     pub timeout: u64,
 
@@ -320,6 +320,8 @@ async fn stream_error(
     let _ = tx.send(Err(status)).await;
     SourceExitStatus::StreamError { code, message }
 }
+
+const ZERO_TIMEOUT: &str = "the timeout is 0 seconds, it must be at least 1";
 
 /// Dial the server and subscribe. `BankReplay` arms the client's own reconnect.
 async fn open_stream(
@@ -731,6 +733,13 @@ impl SourceTrait for YellowstoneGrpcSource {
             .validate()
             .map_err(|err| ShipsternError::Other(Box::new(err)))?;
 
+        // tonic expires a zero timeout on its first poll, so every open would fail at connect or
+        // with `Cancelled` "Timeout expired", depending on the server, even against a server
+        // that answers at once.
+        if config.timeout == 0 {
+            return Err(ShipsternError::Other(ZERO_TIMEOUT.into()));
+        }
+
         // With no RuntimeHandle the update channel is already closed, so no filter
         // update can arrive and the client may reconnect the stream.
         let has_handle = filter_updates.has_changed().is_ok();
@@ -774,7 +783,10 @@ mod tests {
     };
 
     use futures_util::StreamExt;
-    use shipstern::{sources::SourceExitStatus, Error as ShipsternError};
+    use shipstern::{
+        sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
+        Error as ShipsternError,
+    };
     use shipstern_core::{AccountPrefilter, Filters, Prefilter, Pubkey};
     use tokio::sync::{mpsc, watch};
     use yellowstone_grpc_client::Backoff;
@@ -786,7 +798,7 @@ mod tests {
     use super::{
         accept_update, build_subscribe_request, is_recoverable, retry_delay, run_stream,
         send_filter_update, CommitmentLevel, ReconnectMode, SubscribeRequest,
-        YellowstoneGrpcConfig, SLOT_RESUME_IDLE_TIMEOUT,
+        YellowstoneGrpcConfig, YellowstoneGrpcSource, SLOT_RESUME_IDLE_TIMEOUT, ZERO_TIMEOUT,
     };
     use crate::resume::{
         tests::{slot_status, transaction},
@@ -1140,6 +1152,27 @@ mod tests {
 
         assert!(config.accounts_data_slice.is_empty());
         config.validate().expect("an empty window list is valid");
+    }
+
+    /// A zero timeout is refused before the dial, not reported as a server timeout.
+    #[tokio::test]
+    async fn a_zero_timeout_is_refused() {
+        let source = YellowstoneGrpcSource::from_config(config_from(
+            r#"
+            endpoint = "http://127.0.0.1:9"
+            timeout = 0
+        "#,
+        ));
+        let (tx, _rx) = mpsc::channel(1);
+
+        let result = source
+            .connect(SourceContext::new(Filters::new(HashMap::new()), tx))
+            .await;
+
+        let Err(ShipsternError::Other(err)) = result else {
+            panic!("expected a config error, got {result:?}");
+        };
+        assert_eq!(err.to_string(), ZERO_TIMEOUT);
     }
 
     /// The server answers a malformed window list with an error instead of a
