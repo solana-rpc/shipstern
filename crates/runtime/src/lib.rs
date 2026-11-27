@@ -314,17 +314,23 @@ impl<S: SourceTrait> Runtime<S> {
         // channel close before the runtime learns how the source ended.
         let status_guard = tx.clone();
 
-        tokio::spawn(async move {
-            let ctx = SourceContext {
-                filters,
-                tx,
-                filter_updates,
-            };
+        // Dropping this future cancels the source too, which would otherwise keep
+        // its subscription open. The buffer needs no guard: dropping it below
+        // closes its stop channel, and it stops itself.
+        let _source_guard = util::AbortOnDrop(
+            tokio::spawn(async move {
+                let ctx = SourceContext {
+                    filters,
+                    tx,
+                    filter_updates,
+                };
 
-            let _ = status_tx.send(source.connect(ctx).await);
+                let _ = status_tx.send(source.connect(ctx).await);
 
-            drop(status_guard);
-        });
+                drop(status_guard);
+            })
+            .abort_handle(),
+        );
 
         let signal;
 

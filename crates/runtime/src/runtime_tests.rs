@@ -2,8 +2,8 @@ use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
     sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex, PoisonError,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex, PoisonError,
     },
     time::Duration,
 };
@@ -640,6 +640,47 @@ async fn test_source_runs_when_the_filter_update_handle_is_never_taken() {
     let runtime = filter_update_runtime();
 
     assert_server_hangup(runtime.try_run_async().await);
+}
+
+struct FlagOnDrop(Arc<AtomicBool>);
+
+impl Drop for FlagOnDrop {
+    fn drop(&mut self) { self.0.store(true, Ordering::SeqCst); }
+}
+
+#[derive(Debug)]
+struct PendingSource(Arc<AtomicBool>);
+
+#[async_trait]
+impl SourceTrait for PendingSource {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let _flag = FlagOnDrop(Arc::clone(&self.0));
+        let _ctx = ctx;
+
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn test_dropping_try_run_async_cancels_the_source() {
+    let source_dropped = Arc::new(AtomicBool::new(false));
+    let runtime = Runtime::builder()
+        .try_build_with(
+            PendingSource(Arc::clone(&source_dropped)),
+            default_buffer_config(),
+        )
+        .unwrap();
+
+    let timed_out = tokio::time::timeout(Duration::from_millis(100), runtime.try_run_async()).await;
+    assert!(timed_out.is_err(), "the source never returns");
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !source_dropped.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the source future is dropped after try_run_async is");
 }
 
 #[tokio::test]
