@@ -53,16 +53,22 @@ impl From<ShipsternCompressionEncoding> for CompressionEncoding {
 #[serde(rename_all = "kebab-case")]
 pub struct FumaroleConfig {
     /// The endpoint of the Yellowstone Fumarole server.
+    #[arg(long, env)]
     pub endpoint: String,
     /// The token to use for authentication.
+    #[arg(long, env)]
     pub x_token: Option<String>,
     /// Name of the persistent subscriber to use
+    #[arg(long, env)]
     pub subscriber_name: String,
     /// Slot commitment level. Unset gives processed.
+    #[arg(long, env)]
     pub commitment_level: Option<CommitmentLevel>,
     /// max incoming decoded message size in bytes
+    #[arg(long, env)]
     pub max_decoding_message_size: Option<usize>,
     /// accepted compression encoding
+    #[arg(long, env)]
     pub accept_compression: Option<ShipsternCompressionEncoding>,
 }
 
@@ -191,11 +197,45 @@ impl SourceTrait for YellowstoneFumaroleSource {
 mod tests {
     use std::collections::HashMap;
 
-    use shipstern::sources::{FromConfig, SourceContext, SourceTrait};
+    use clap::{CommandFactory, Parser};
+    use shipstern::{
+        config::ShipsternConfig,
+        sources::{FromConfig, SourceContext, SourceTrait},
+    };
     use shipstern_core::Filters;
     use tokio::sync::mpsc;
 
     use super::{FumaroleConfig, YellowstoneFumaroleSource};
+
+    #[derive(Debug, Parser)]
+    struct Cli {
+        #[command(flatten)]
+        config: ShipsternConfig<FumaroleConfig>,
+    }
+
+    #[test]
+    fn config_parses_from_named_flags() {
+        Cli::command().debug_assert();
+
+        let Cli { config } = Cli::try_parse_from([
+            "fumarole",
+            "--endpoint",
+            "https://fumarole.example",
+            "--subscriber-name",
+            "group",
+            "--accept-compression",
+            "gzip",
+        ])
+        .expect("named flags should parse");
+
+        assert_eq!(config.source.endpoint, "https://fumarole.example");
+        assert_eq!(config.source.subscriber_name, "group");
+        assert!(config.source.x_token.is_none());
+        assert!(matches!(
+            config.source.accept_compression,
+            Some(super::ShipsternCompressionEncoding::Gzip)
+        ));
+    }
 
     #[test]
     fn connect_reports_connection_errors_instead_of_panicking() {
