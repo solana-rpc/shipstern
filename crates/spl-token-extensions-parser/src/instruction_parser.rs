@@ -401,54 +401,6 @@ mod tests {
         TokenExtensionProgram,
     };
 
-    #[tokio::test]
-    async fn test_mint_to_checked_ix_parsing() {
-        let parser = InstructionParser;
-
-        let ixs = tx_fixture!(
-            "44gWEyKUkeUabtJr4eT3CQEkFGrD4jMdwUV6Ew5MR5K3RGizs9iwbkb5Q4T3gnAaSgHxn3ERQ8g5YTXuLP1FrWnt",
-            &parser
-        );
-
-        let Some(TokenExtensionProgram {
-            instruction:
-                Some(crate::instruction::Instruction::TokenProgram(
-                    crate::instruction::TokenProgram {
-                        instruction:
-                            Some(shipstern_spl_token_parser::TokenProgram {
-                                instruction: Some(shipstern_spl_token_parser::instruction::Instruction::MintToChecked(
-                                    shipstern_spl_token_parser::instruction::MintToChecked { args, .. }
-                                )),
-                            }),
-                    },
-                )),
-        }) = &ixs[0]
-        else {
-            panic!("Invalid Instruction");
-        };
-
-        assert_eq!(args.decimals, 9);
-        assert_eq!(args.amount, 100.mul(10u64.pow(args.decimals)));
-    }
-
-    /// Every parser gets every instruction, so an SPL Token transfer must come back Filtered.
-    #[tokio::test]
-    async fn spl_token_instruction_is_filtered() {
-        let ix = InstructionUpdate {
-            program: shipstern_spl_token_parser::InstructionParser.program_id(),
-            accounts: vec![shipstern_core::Pubkey::new([1; 32]); 3],
-            data: [&[3][..], &1_000u64.to_le_bytes()].concat(),
-            shared: Default::default(),
-            inner: vec![],
-            path: Path::new_single(0),
-            log_range: 0..0,
-        };
-
-        let res = InstructionParser.parse(&ix).await;
-
-        assert!(matches!(res, Err(ParseError::Filtered)), "{res:?}");
-    }
-
     fn key(n: u8) -> solana_pubkey::Pubkey { solana_pubkey::Pubkey::new_from_array([n; 32]) }
 
     fn update_from(ix: &solana_instruction::Instruction) -> InstructionUpdate {
@@ -535,5 +487,53 @@ mod tests {
         assert!(w.accounts.multisig_signers.is_empty());
         assert_eq!(w.accounts.source_accounts, vec![pk(6), pk(7)]);
         assert_eq!(w.args.num_token_accounts, 5);
+    }
+
+    #[tokio::test]
+    async fn test_mint_to_checked_ix_parsing() {
+        let parser = InstructionParser;
+
+        let ixs = tx_fixture!(
+            "44gWEyKUkeUabtJr4eT3CQEkFGrD4jMdwUV6Ew5MR5K3RGizs9iwbkb5Q4T3gnAaSgHxn3ERQ8g5YTXuLP1FrWnt",
+            &parser
+        );
+
+        let Some(TokenExtensionProgram {
+            instruction:
+                Some(crate::instruction::Instruction::TokenProgram(
+                    crate::instruction::TokenProgram {
+                        instruction:
+                            Some(shipstern_spl_token_parser::TokenProgram {
+                                instruction: Some(shipstern_spl_token_parser::instruction::Instruction::MintToChecked(
+                                    shipstern_spl_token_parser::instruction::MintToChecked { args, .. }
+                                )),
+                            }),
+                    },
+                )),
+        }) = &ixs[0]
+        else {
+            panic!("Invalid Instruction");
+        };
+
+        assert_eq!(args.decimals, 9);
+        assert_eq!(args.amount, 100.mul(10u64.pow(args.decimals)));
+    }
+
+    /// Every parser gets every instruction, so an SPL Token transfer must come back Filtered.
+    #[tokio::test]
+    async fn spl_token_instruction_is_filtered() {
+        let ix = InstructionUpdate {
+            program: shipstern_spl_token_parser::InstructionParser.program_id(),
+            accounts: vec![shipstern_core::Pubkey::new([1; 32]); 3],
+            data: [&[3][..], &1_000u64.to_le_bytes()].concat(),
+            shared: Default::default(),
+            inner: vec![],
+            path: Path::new_single(0),
+            log_range: 0..0,
+        };
+
+        let res = InstructionParser.parse(&ix).await;
+
+        assert!(matches!(res, Err(ParseError::Filtered)), "{res:?}");
     }
 }
