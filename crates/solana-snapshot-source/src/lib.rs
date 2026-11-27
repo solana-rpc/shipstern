@@ -249,7 +249,15 @@ impl SourceTrait for SolanaSnapshotSource {
         let SourceContext { filters, tx, .. } = ctx;
 
         let filter_owner_key_lookup = FilterOwnerKeyLookup::new(&filters);
-        let solana_snapshot = SolanaSnapshot::load_ledger(self.config.ledger_path.clone())?;
+
+        // Loading the bank takes minutes and would hold a runtime worker.
+        let ledger_path = self.config.ledger_path.clone();
+        let solana_snapshot =
+            tokio::task::spawn_blocking(move || SolanaSnapshot::load_ledger(ledger_path))
+                .await
+                .map_err(|_| {
+                    ShipsternError::Io(std::io::Error::other("Snapshot load task panicked"))
+                })??;
         let snapshot_slot = solana_snapshot.slot;
 
         let slot_filters = filters
