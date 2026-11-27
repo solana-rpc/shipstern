@@ -12,7 +12,8 @@ use spl_token_metadata_interface::instruction::TokenMetadataInstruction as SplTo
 use crate::{
     extensions::{
         CommonExtensionInstructions, ConfidentialTransferFeeIx, ConfidentialTransferIx,
-        ExtensionWithCommonInstruction, TokenGroupIx, TokenMetadataIx, TransferFeeIx,
+        ExtensionWithCommonInstruction, PausableIx, ScaledUiAmountIx, TokenGroupIx,
+        TokenMetadataIx, TransferFeeIx,
     },
     instructions::{
         CreateNativeMintAccounts, InitializeMintCloseAuthorityAccounts,
@@ -206,6 +207,26 @@ impl InstructionParser {
 
                     Ok(envelope!(crate::instruction::Instruction::TransferHook(
                         crate::instruction::TransferHook {
+                            instruction: Some(parsed),
+                        },
+                    )))
+                },
+
+                SplTokenInstruction::ScaledUiAmountExtension => {
+                    let parsed = ScaledUiAmountIx::try_parse(ix)?;
+
+                    Ok(envelope!(crate::instruction::Instruction::ScaledUiAmount(
+                        crate::instruction::ScaledUiAmount {
+                            instruction: Some(parsed),
+                        },
+                    )))
+                },
+
+                SplTokenInstruction::PausableExtension => {
+                    let parsed = PausableIx::try_parse(ix)?;
+
+                    Ok(envelope!(crate::instruction::Instruction::Pausable(
+                        crate::instruction::Pausable {
                             instruction: Some(parsed),
                         },
                     )))
@@ -447,5 +468,134 @@ mod tests {
         let res = InstructionParser.parse(&ix).await;
 
         assert!(matches!(res, Err(ParseError::Filtered)), "{res:?}");
+    }
+
+    fn key(n: u8) -> solana_pubkey::Pubkey { solana_pubkey::Pubkey::new_from_array([n; 32]) }
+
+    fn update_from(ix: &solana_instruction::Instruction) -> InstructionUpdate {
+        InstructionUpdate {
+            program: shipstern_core::Pubkey::new(ix.program_id.to_bytes()),
+            accounts: ix
+                .accounts
+                .iter()
+                .map(|m| shipstern_core::Pubkey::new(m.pubkey.to_bytes()))
+                .collect(),
+            data: ix.data.clone(),
+            shared: Default::default(),
+            inner: vec![],
+            path: Path::new_single(0),
+            log_range: 0..0,
+        }
+    }
+
+    fn pk(n: u8) -> shipstern_core::Pubkey { shipstern_core::Pubkey::new([n; 32]) }
+
+    #[tokio::test]
+    async fn scaled_ui_amount_instructions_parse() {
+        use crate::extensions::scaled_ui_amount_instruction::Instruction as Ix;
+
+        let init = spl_token_2022::extension::scaled_ui_amount::instruction::initialize(
+            &spl_token_2022::ID,
+            &key(1),
+            Some(key(2)),
+            1.5,
+        )
+        .unwrap();
+        let update = spl_token_2022::extension::scaled_ui_amount::instruction::update_multiplier(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &[&key(3)],
+            2.5,
+            1_700_000_000,
+        )
+        .unwrap();
+
+        let Some(crate::instruction::Instruction::ScaledUiAmount(init)) = InstructionParser
+            .parse(&update_from(&init))
+            .await
+            .unwrap()
+            .instruction
+        else {
+            panic!("expected ScaledUiAmount");
+        };
+        let Some(Ix::Initialize(init)) = init.instruction.and_then(|i| i.instruction) else {
+            panic!("expected Initialize");
+        };
+
+        assert_eq!(init.accounts.mint, pk(1));
+        assert_eq!(init.args.authority, Some(pk(2)));
+        assert_eq!(init.args.multiplier, 1.5);
+
+        let Some(crate::instruction::Instruction::ScaledUiAmount(update)) = InstructionParser
+            .parse(&update_from(&update))
+            .await
+            .unwrap()
+            .instruction
+        else {
+            panic!("expected ScaledUiAmount");
+        };
+        let Some(Ix::UpdateMultiplier(update)) = update.instruction.and_then(|i| i.instruction)
+        else {
+            panic!("expected UpdateMultiplier");
+        };
+
+        assert_eq!(update.accounts.authority, pk(2));
+        assert_eq!(update.accounts.multisig_signers, vec![pk(3)]);
+        assert_eq!(update.args.multiplier, 2.5);
+        assert_eq!(update.args.effective_timestamp, 1_700_000_000);
+    }
+
+    #[tokio::test]
+    async fn pausable_instructions_parse() {
+        use crate::extensions::pausable_instruction::Instruction as Ix;
+
+        let init = spl_token_2022::extension::pausable::instruction::initialize(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+        )
+        .unwrap();
+        let pause = spl_token_2022::extension::pausable::instruction::pause(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &[&key(3)],
+        )
+        .unwrap();
+        let resume = spl_token_2022::extension::pausable::instruction::resume(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &[],
+        )
+        .unwrap();
+
+        let mut parsed = vec![];
+        for ix in [&init, &pause, &resume] {
+            let Some(crate::instruction::Instruction::Pausable(p)) = InstructionParser
+                .parse(&update_from(ix))
+                .await
+                .unwrap()
+                .instruction
+            else {
+                panic!("expected Pausable");
+            };
+            parsed.push(
+                p.instruction
+                    .and_then(|i| i.instruction)
+                    .expect("empty pausable ix"),
+            );
+        }
+
+        let [Ix::Initialize(init), Ix::Pause(pause), Ix::Resume(resume)] = &parsed[..] else {
+            panic!("unexpected variants");
+        };
+
+        assert_eq!(init.accounts.mint, pk(1));
+        assert_eq!(init.args.authority, pk(2));
+        assert_eq!(pause.accounts.authority, pk(2));
+        assert_eq!(pause.accounts.multisig_signers, vec![pk(3)]);
+        assert!(resume.accounts.multisig_signers.is_empty());
     }
 }

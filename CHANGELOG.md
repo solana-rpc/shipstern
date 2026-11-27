@@ -10,6 +10,8 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - `shipstern-yellowstone-grpc-source`: HTTP/2 keepalive in every mode, and a 30 s idle timeout in the slot checkpoint mode. A stream with nothing but pings for 30 s counts as lost, and the source subscribes again from the checkpoint ([#483](https://github.com/solana-rpc/shipstern/pull/483) by @senzenn).
+- `shipstern-spl-token-extensions-parser`: parses the Token-2022 scaled UI amount (`ScaledUiAmountExtension`) instructions, initialize and update multiplier, as the `TokenExtensionProgram` oneof variant `scaled_ui_amount`. Before, they failed with a parse error ([#414](https://github.com/solana-rpc/shipstern/pull/414) by @Estereg).
+- `shipstern-spl-token-extensions-parser`: parses the Token-2022 pausable (`PausableExtension`) instructions, initialize, pause and resume, as the `TokenExtensionProgram` oneof variant `pausable`. Before, they failed with a parse error ([#415](https://github.com/solana-rpc/shipstern/pull/415) by @Estereg).
 
 ### Changed
 
