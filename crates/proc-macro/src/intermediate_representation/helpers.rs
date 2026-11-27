@@ -388,21 +388,7 @@ fn map_type(t: &codama_nodes::TypeNode) -> FieldTypeIr {
         T::PublicKey(_) => FieldTypeIr::Scalar(ScalarIr::PublicKey),
         T::Boolean(_) => FieldTypeIr::Scalar(ScalarIr::Bool),
 
-        T::Number(n) => match n.format {
-            NF::U8 => FieldTypeIr::Scalar(ScalarIr::U8),
-            NF::U16 => FieldTypeIr::Scalar(ScalarIr::U16),
-            NF::ShortU16 => FieldTypeIr::Scalar(ScalarIr::ShortU16),
-            NF::U32 => FieldTypeIr::Scalar(ScalarIr::Uint32),
-            NF::U64 => FieldTypeIr::Scalar(ScalarIr::Uint64),
-            NF::I8 => FieldTypeIr::Scalar(ScalarIr::I8),
-            NF::I16 => FieldTypeIr::Scalar(ScalarIr::I16),
-            NF::I32 => FieldTypeIr::Scalar(ScalarIr::Int32),
-            NF::I64 => FieldTypeIr::Scalar(ScalarIr::Int64),
-            NF::F32 => FieldTypeIr::Scalar(ScalarIr::Float),
-            NF::F64 => FieldTypeIr::Scalar(ScalarIr::Double),
-            NF::U128 => FieldTypeIr::Scalar(ScalarIr::U128),
-            NF::I128 => FieldTypeIr::Scalar(ScalarIr::I128),
-        },
+        T::Number(n) => FieldTypeIr::Scalar(ScalarIr::number(n.format, n.endian)),
 
         T::Link(link) => FieldTypeIr::Message(crate::utils::to_pascal_case(&link.name)),
 
