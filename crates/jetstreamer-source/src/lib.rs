@@ -292,7 +292,18 @@ impl ShipsternStreamHandler {
         let slot = entry.slot;
         {
             let mut buf = self.lock_entry_buffer()?;
-            buf.entry(slot).or_default().push(entry);
+            let entries = buf.entry(slot).or_default();
+
+            // After an error the firehose streams the failed slot again from its first entry,
+            // so an index we already hold means a replay: drop the first pass.
+            if entries
+                .last()
+                .is_some_and(|last| last.entry_index >= entry.entry_index)
+            {
+                entries.retain(|held| held.entry_index < entry.entry_index);
+            }
+
+            entries.push(entry);
         }
 
         Ok(())
@@ -1165,6 +1176,84 @@ slot-end = 2000
                 .is_empty(),
             "entry buffer must be drained after block emission"
         );
+    }
+
+    /// After an error the firehose streams the slot again from its first entry, so the block
+    /// must carry each entry once.
+    #[tokio::test]
+    async fn replayed_slot_entries_are_not_duplicated() {
+        use std::collections::HashMap as StdHashMap;
+
+        use shipstern_core::{BlockPrefilter, Prefilter};
+        use solana_hash::Hash;
+        use solana_runtime::bank::KeyedRewardsAndNumPartitions;
+
+        let mut prefilters = StdHashMap::new();
+        prefilters.insert("block-with-entries".to_string(), Prefilter {
+            account: None,
+            transaction: None,
+            block_meta: None,
+            block_footer: None,
+            block: Some(BlockPrefilter {
+                accounts_include: Default::default(),
+                include_transactions: false,
+                include_accounts: false,
+                include_entries: true,
+                cuckoo_accounts_include: Default::default(),
+            }),
+            slot: None,
+        });
+
+        let (updates_tx, mut updates_rx) = mpsc::channel(4);
+        let handler = ShipsternStreamHandler::new(updates_tx, None, Filters::new(prefilters));
+
+        // The first pass stops after two entries, the retry sends all three.
+        for entry_index in (0..2).chain(0..3) {
+            handler
+                .process_entry(EntryData {
+                    slot: 42,
+                    entry_index,
+                    transaction_indexes: entry_index..entry_index + 1,
+                    num_hashes: 1,
+                    hash: Hash::new_from_array([entry_index as u8; 32]),
+                })
+                .await
+                .expect("entry buffer push");
+        }
+
+        handler
+            .process_block(BlockData::Block {
+                parent_slot: 41,
+                parent_blockhash: Hash::default(),
+                slot: 42,
+                blockhash: Hash::default(),
+                rewards: KeyedRewardsAndNumPartitions {
+                    keyed_rewards: Vec::new(),
+                    num_partitions: None,
+                },
+                commission_rate_in_basis_points: false,
+                block_time: None,
+                block_height: None,
+                executed_transaction_count: 3,
+                entry_count: 3,
+                block_markers: None,
+                block_id: None,
+            })
+            .await
+            .expect("block emission");
+
+        let update = updates_rx.recv().await.expect("block update");
+        let UpdateOneof::Block(block) = update
+            .expect("ok")
+            .update_oneof
+            .expect("update_oneof present")
+        else {
+            panic!("expected Block variant");
+        };
+
+        let indexes: Vec<u64> = block.entries.iter().map(|entry| entry.index).collect();
+        assert_eq!(indexes, [0, 1, 2]);
+        assert_eq!(block.entries_count, 3);
     }
 
     #[tokio::test]
