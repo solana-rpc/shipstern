@@ -104,7 +104,8 @@ pub struct KafkaSinkConfig {
     pub kafka_write_max_attempts: u32,
 
     /// Max attempts for Kafka transactional control operations such as
-    /// init/begin/commit/abort before surfacing an error.
+    /// init/begin/abort before surfacing an error. A commit is not capped: it is
+    /// resumed for as long as Kafka reports it as retriable.
     #[serde(default = "default_kafka_transaction_op_max_attempts")]
     pub kafka_transaction_op_max_attempts: u32,
 
