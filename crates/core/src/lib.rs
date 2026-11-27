@@ -446,8 +446,13 @@ pub struct AccountPrefilter {
 }
 
 impl AccountPrefilter {
-    /// Merge another account prefilter into this one, producing a prefilter
-    /// that describes the union of the two.
+    /// Merge another account prefilter into this one by unioning each field.
+    ///
+    /// The server ANDs the fields of one account filter, so this is not always
+    /// the union of what the two match: merging one with only `accounts` into
+    /// one with only `owners` matches an account only when its key and its
+    /// owner are both listed.
+    ///
     pub fn merge(&mut self, other: AccountPrefilter) {
         let Self {
             accounts,
@@ -547,8 +552,13 @@ impl Default for TransactionPrefilter {
 }
 
 impl TransactionPrefilter {
-    /// Merge another transaction prefilter into this one, producing a prefilter
-    /// that describes the union of the two (consensus or all).
+    /// Merge another transaction prefilter into this one by unioning each field
+    /// (consensus or all).
+    ///
+    /// The server ANDs the fields of one transaction filter and needs every
+    /// `accounts_required` key, so the unioned required set narrows instead of
+    /// widening.
+    ///
     pub fn merge(&mut self, other: TransactionPrefilter) {
         let Self {
             accounts_include,
