@@ -28,6 +28,11 @@ use crate::{fixtures::FixtureWriter, types::CoordinatorInput};
 
 const DEFAULT_STREAM_IDLE_WARN_SECS: u64 = 0;
 
+/// Same HTTP/2 keepalive as `YellowstoneGrpcSource`: ping after 10 idle seconds, close after 10
+/// more. A half-open connection sends no error, so without a ping the stream waits forever.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
+
 const fn default_stream_idle_warn_secs() -> u64 { DEFAULT_STREAM_IDLE_WARN_SECS }
 
 /// Post Alpenglow validation for bank IDs in updates.
@@ -174,6 +179,9 @@ impl SourceTrait for CoordinatorSource {
             .accept_compressed(config.accept_compression.unwrap_or_default().into())
             .connect_timeout(timeout)
             .timeout(timeout)
+            .http2_keep_alive_interval(KEEPALIVE_INTERVAL)
+            .keep_alive_timeout(KEEPALIVE_TIMEOUT)
+            .keep_alive_while_idle(true)
             .tls_config(ClientTlsConfig::new().with_native_roots())?;
 
         // Neither reconnect mode fits. Slot resume needs confirmed or finalized, but the

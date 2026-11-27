@@ -212,7 +212,8 @@ so run it under a supervisor that restarts it.
   or a pong does not count as an update, but an update that the source drops
   does. Time spent on a full channel does not count. The other modes have no
   idle timeout.
-- `CoordinatorSource` builds its own client, so neither applies to it.
+- `CoordinatorSource` builds its own client with the same keepalive, so a dead
+  connection ends its run with an error. It has no idle timeout.
 
 ## Banks at processed
 
