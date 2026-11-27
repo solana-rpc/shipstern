@@ -237,6 +237,7 @@ fn is_recoverable(status: &Status) -> bool {
         Code::Unavailable
             | Code::Internal
             | Code::Unknown
+            | Code::DataLoss
             | Code::DeadlineExceeded
             | Code::Cancelled
             | Code::Aborted
@@ -1298,6 +1299,13 @@ mod tests {
         assert!(!is_recoverable(&Status::internal(
             "from_slot is not supported"
         )));
+    }
+
+    /// The client library and the preconf source both resume on `DataLoss`.
+    #[test]
+    fn data_loss_is_recoverable() {
+        assert!(is_recoverable(&Status::data_loss("lagged")));
+        assert!(!is_recoverable(&Status::out_of_range("gone")));
     }
 
     fn ping() -> SubscribeUpdate {
