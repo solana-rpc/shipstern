@@ -2028,62 +2028,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn account_filter_matches_as_the_server_tests() {
-        let data = [7_u8, 8, 9, 10];
-        let memcmp = |offset, bytes: &[u8]| AccountFilter::Memcmp {
-            offset,
-            data: MemcmpData::Bytes(bytes.to_vec()),
-        };
-
-        assert!(memcmp(1, &[8, 9]).matches(&data, 0));
-        assert!(!memcmp(1, &[9]).matches(&data, 0));
-        assert!(!memcmp(3, &[10, 11]).matches(&data, 0), "past the end");
-        assert!(!memcmp(u64::MAX, &[1]).matches(&data, 0));
-        assert!(AccountFilter::Memcmp {
-            offset: 0,
-            data: MemcmpData::Base58(bs58::encode([7_u8, 8]).into_string()),
-        }
-        .matches(&data, 0));
-        assert!(AccountFilter::Memcmp {
-            offset: 2,
-            data: MemcmpData::Base64(STANDARD.encode([9_u8, 10])),
-        }
-        .matches(&data, 0));
-
-        assert!(AccountFilter::DataSize(4).matches(&data, 0));
-        assert!(!AccountFilter::DataSize(5).matches(&data, 0));
-
-        assert!(AccountFilter::Lamports(LamportsCmp::Gt(5)).matches(&data, 6));
-        assert!(!AccountFilter::Lamports(LamportsCmp::Lt(5)).matches(&data, 6));
-        assert!(AccountFilter::Lamports(LamportsCmp::Ne(5)).matches(&data, 6));
-        assert!(AccountFilter::Lamports(LamportsCmp::Eq(6)).matches(&data, 6));
-    }
-
-    #[test]
-    fn token_account_state_matches_initialized_token_accounts() {
-        let state = AccountFilter::TokenAccountState(true);
-        let mut account = vec![0_u8; 165];
-        assert!(!state.matches(&account, 0), "uninitialized");
-
-        account[108] = 1;
-        assert!(state.matches(&account, 0), "SPL Token account");
-
-        let mut extended = account.clone();
-        extended.extend_from_slice(&[2, 0, 0]);
-        assert!(
-            state.matches(&extended, 0),
-            "Token-2022 account with extensions"
-        );
-
-        extended[165] = 1;
-        assert!(!state.matches(&extended, 0), "Token-2022 mint");
-
-        let mut multisig = vec![1_u8; 355];
-        multisig[165] = 2;
-        assert!(!state.matches(&multisig, 0), "multisig");
-    }
-
     fn owned_by(marker: u8) -> Prefilter {
         Prefilter {
             account: Some(AccountPrefilter {
@@ -2206,6 +2150,62 @@ mod tests {
         assert!(filters.get("p").is_none());
         assert_eq!(filters.parser_ids().count(), 0);
         assert!(filters.remove("p").is_none());
+    }
+
+    #[test]
+    fn account_filter_matches_as_the_server_tests() {
+        let data = [7_u8, 8, 9, 10];
+        let memcmp = |offset, bytes: &[u8]| AccountFilter::Memcmp {
+            offset,
+            data: MemcmpData::Bytes(bytes.to_vec()),
+        };
+
+        assert!(memcmp(1, &[8, 9]).matches(&data, 0));
+        assert!(!memcmp(1, &[9]).matches(&data, 0));
+        assert!(!memcmp(3, &[10, 11]).matches(&data, 0), "past the end");
+        assert!(!memcmp(u64::MAX, &[1]).matches(&data, 0));
+        assert!(AccountFilter::Memcmp {
+            offset: 0,
+            data: MemcmpData::Base58(bs58::encode([7_u8, 8]).into_string()),
+        }
+        .matches(&data, 0));
+        assert!(AccountFilter::Memcmp {
+            offset: 2,
+            data: MemcmpData::Base64(STANDARD.encode([9_u8, 10])),
+        }
+        .matches(&data, 0));
+
+        assert!(AccountFilter::DataSize(4).matches(&data, 0));
+        assert!(!AccountFilter::DataSize(5).matches(&data, 0));
+
+        assert!(AccountFilter::Lamports(LamportsCmp::Gt(5)).matches(&data, 6));
+        assert!(!AccountFilter::Lamports(LamportsCmp::Lt(5)).matches(&data, 6));
+        assert!(AccountFilter::Lamports(LamportsCmp::Ne(5)).matches(&data, 6));
+        assert!(AccountFilter::Lamports(LamportsCmp::Eq(6)).matches(&data, 6));
+    }
+
+    #[test]
+    fn token_account_state_matches_initialized_token_accounts() {
+        let state = AccountFilter::TokenAccountState(true);
+        let mut account = vec![0_u8; 165];
+        assert!(!state.matches(&account, 0), "uninitialized");
+
+        account[108] = 1;
+        assert!(state.matches(&account, 0), "SPL Token account");
+
+        let mut extended = account.clone();
+        extended.extend_from_slice(&[2, 0, 0]);
+        assert!(
+            state.matches(&extended, 0),
+            "Token-2022 account with extensions"
+        );
+
+        extended[165] = 1;
+        assert!(!state.matches(&extended, 0), "Token-2022 mint");
+
+        let mut multisig = vec![1_u8; 355];
+        multisig[165] = 2;
+        assert!(!state.matches(&multisig, 0), "multisig");
     }
 
     fn block_prefilter(
