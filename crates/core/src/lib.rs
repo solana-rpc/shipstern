@@ -1066,6 +1066,26 @@ fn check_memcmp_len(
     Ok(())
 }
 
+/// An initialized SPL Token or Token-2022 account, as the server's token account
+/// state filter tests it.
+fn is_initialized_token_account(data: &[u8]) -> bool {
+    const ACCOUNT_LEN: usize = 165;
+    const MULTISIG_LEN: usize = 355;
+    // The `AccountState` byte; 0 is uninitialized.
+    const STATE_OFFSET: usize = 108;
+    // Token-2022 `AccountType::Account`, right after the base layout.
+    const ACCOUNT_TYPE_ACCOUNT: u8 = 2;
+
+    let initialized = data.get(STATE_OFFSET).is_some_and(|&state| state != 0);
+
+    match data.len() {
+        ACCOUNT_LEN => initialized,
+        MULTISIG_LEN => false,
+        len if len > ACCOUNT_LEN => initialized && data[ACCOUNT_LEN] == ACCOUNT_TYPE_ACCOUNT,
+        _ => false,
+    }
+}
+
 impl AccountFilter {
     /// The longest base58 memcmp string the server accepts.
     const MAX_DATA_BASE58_SIZE: usize = 175;
@@ -1143,6 +1163,41 @@ impl AccountFilter {
         check_memcmp_len(decoded.len(), Self::MAX_DATA_SIZE, offset, "decoded bytes")?;
 
         Ok(())
+    }
+
+    /// Whether an account with `data` and `lamports` passes this filter, as the
+    /// server tests it. A source that cannot filter on the server checks it itself.
+    #[must_use]
+    pub fn matches(&self, data: &[u8], lamports: u64) -> bool {
+        match self {
+            Self::Memcmp {
+                offset,
+                data: expected,
+            } => {
+                let expected: Option<Cow<[u8]>> = match expected {
+                    MemcmpData::Bytes(bytes) => Some(Cow::Borrowed(bytes)),
+                    MemcmpData::Base58(text) => bs58::decode(text).into_vec().ok().map(Cow::Owned),
+                    MemcmpData::Base64(text) => STANDARD.decode(text).ok().map(Cow::Owned),
+                };
+
+                let (Some(expected), Ok(start)) = (expected, usize::try_from(*offset)) else {
+                    return false;
+                };
+
+                start
+                    .checked_add(expected.len())
+                    .and_then(|end| data.get(start..end))
+                    == Some(&expected[..])
+            },
+            Self::DataSize(size) => data.len() as u64 == *size,
+            Self::TokenAccountState(_) => is_initialized_token_account(data),
+            Self::Lamports(cmp) => match *cmp {
+                LamportsCmp::Eq(value) => lamports == value,
+                LamportsCmp::Ne(value) => lamports != value,
+                LamportsCmp::Lt(value) => lamports < value,
+                LamportsCmp::Gt(value) => lamports > value,
+            },
+        }
     }
 
     /// Check the list-level rules: the server's filter count limit and at most
@@ -2095,6 +2150,62 @@ mod tests {
         assert!(filters.get("p").is_none());
         assert_eq!(filters.parser_ids().count(), 0);
         assert!(filters.remove("p").is_none());
+    }
+
+    #[test]
+    fn account_filter_matches_as_the_server_tests() {
+        let data = [7_u8, 8, 9, 10];
+        let memcmp = |offset, bytes: &[u8]| AccountFilter::Memcmp {
+            offset,
+            data: MemcmpData::Bytes(bytes.to_vec()),
+        };
+
+        assert!(memcmp(1, &[8, 9]).matches(&data, 0));
+        assert!(!memcmp(1, &[9]).matches(&data, 0));
+        assert!(!memcmp(3, &[10, 11]).matches(&data, 0), "past the end");
+        assert!(!memcmp(u64::MAX, &[1]).matches(&data, 0));
+        assert!(AccountFilter::Memcmp {
+            offset: 0,
+            data: MemcmpData::Base58(bs58::encode([7_u8, 8]).into_string()),
+        }
+        .matches(&data, 0));
+        assert!(AccountFilter::Memcmp {
+            offset: 2,
+            data: MemcmpData::Base64(STANDARD.encode([9_u8, 10])),
+        }
+        .matches(&data, 0));
+
+        assert!(AccountFilter::DataSize(4).matches(&data, 0));
+        assert!(!AccountFilter::DataSize(5).matches(&data, 0));
+
+        assert!(AccountFilter::Lamports(LamportsCmp::Gt(5)).matches(&data, 6));
+        assert!(!AccountFilter::Lamports(LamportsCmp::Lt(5)).matches(&data, 6));
+        assert!(AccountFilter::Lamports(LamportsCmp::Ne(5)).matches(&data, 6));
+        assert!(AccountFilter::Lamports(LamportsCmp::Eq(6)).matches(&data, 6));
+    }
+
+    #[test]
+    fn token_account_state_matches_initialized_token_accounts() {
+        let state = AccountFilter::TokenAccountState(true);
+        let mut account = vec![0_u8; 165];
+        assert!(!state.matches(&account, 0), "uninitialized");
+
+        account[108] = 1;
+        assert!(state.matches(&account, 0), "SPL Token account");
+
+        let mut extended = account.clone();
+        extended.extend_from_slice(&[2, 0, 0]);
+        assert!(
+            state.matches(&extended, 0),
+            "Token-2022 account with extensions"
+        );
+
+        extended[165] = 1;
+        assert!(!state.matches(&extended, 0), "Token-2022 mint");
+
+        let mut multisig = vec![1_u8; 355];
+        multisig[165] = 2;
+        assert!(!state.matches(&multisig, 0), "multisig");
     }
 
     fn block_prefilter(

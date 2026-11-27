@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::HashSet,
     path::PathBuf,
     sync::{atomic::AtomicBool, Arc},
 };
@@ -17,7 +17,7 @@ use shipstern::{
     sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     Error as ShipsternError,
 };
-use shipstern_core::{Filters, Pubkey};
+use shipstern_core::{AccountFilter, Filters, Pubkey};
 use solana_account::ReadableAccount;
 use solana_accounts_db::{
     accounts_db::AccountsDbConfig,
@@ -25,7 +25,6 @@ use solana_accounts_db::{
     utils::{create_all_accounts_run_and_snapshot_dirs, move_and_async_delete_path_contents},
 };
 use solana_genesis_utils::open_genesis_config;
-use solana_pubkey::Pubkey as SolanaPubkey;
 use solana_runtime::{
     bank::Bank, runtime_config::RuntimeConfig, snapshot_bank_utils, snapshot_utils,
 };
@@ -214,27 +213,87 @@ pub struct SolanaSnapshotSource {
     config: SolanaSnapshotConfig,
 }
 
+/// One parser's account prefilter, matched the way the gRPC server matches it: the key is listed
+/// (when keys are set), the owner is listed (when owners are set), and every data filter passes.
+struct AccountMatcher {
+    filter_id: String,
+    accounts: HashSet<Pubkey>,
+    owners: HashSet<Pubkey>,
+    filters: Vec<AccountFilter>,
+}
+
+/// The account prefilters of every parser, with a quick test for accounts that none of them
+/// can match, since a snapshot scan visits every account.
 #[derive(Clone)]
-struct FilterOwnerKeyLookup(Arc<HashMap<Pubkey, Vec<String>>>);
+struct AccountMatchers {
+    matchers: Arc<Vec<AccountMatcher>>,
+    keys: Arc<HashSet<Pubkey>>,
+}
 
-impl FilterOwnerKeyLookup {
+impl AccountMatchers {
     fn new(filters: &Filters) -> Self {
-        let mut lookup: HashMap<Pubkey, Vec<String>> = HashMap::new();
+        let matchers: Vec<AccountMatcher> = filters
+            .parsers_filters
+            .iter()
+            .filter_map(|(filter_id, prefilter)| {
+                let account = prefilter.account.as_ref()?;
 
-        for (key, parser_filter) in filters.parsers_filters.iter() {
-            if let Some(account_filter) = parser_filter.account.as_ref() {
-                for owner in &account_filter.owners {
-                    lookup.entry(*owner).or_default().push(key.clone());
+                // With neither keys nor owners the gRPC server sends every account that passes
+                // the data filters. The snapshot source sends none, as before.
+                if account.accounts.is_empty()
+                    && account.cuckoo_accounts.is_empty()
+                    && account.owners.is_empty()
+                {
+                    tracing::warn!(
+                        %filter_id,
+                        "The solana-snapshot source selects accounts by key or owner only, and \
+                         this account prefilter sets neither, so it receives no accounts"
+                    );
+                    return None;
                 }
-            }
-        }
 
-        Self(Arc::new(lookup))
+                Some(AccountMatcher {
+                    filter_id: filter_id.clone(),
+                    accounts: account
+                        .accounts
+                        .iter()
+                        .chain(account.cuckoo_accounts.iter())
+                        .copied()
+                        .collect(),
+                    owners: account.owners.clone(),
+                    filters: account.filters.clone(),
+                })
+            })
+            .collect();
+
+        let keys = matchers
+            .iter()
+            .flat_map(|m| m.accounts.iter().chain(&m.owners))
+            .copied()
+            .collect();
+
+        Self {
+            matchers: Arc::new(matchers),
+            keys: Arc::new(keys),
+        }
     }
 
-    fn lookup_by_owner(&self, owner: &Pubkey) -> Option<Vec<String>> { self.0.get(owner).cloned() }
+    fn is_empty(&self) -> bool { self.keys.is_empty() }
 
-    fn owners(&self) -> Vec<Pubkey> { self.0.keys().copied().collect() }
+    /// The filter IDs that the account matches; empty when it matches none.
+    fn matching(&self, pubkey: &Pubkey, owner: &Pubkey, data: &[u8], lamports: u64) -> Vec<String> {
+        if !self.keys.contains(pubkey) && !self.keys.contains(owner) {
+            return Vec::new();
+        }
+
+        self.matchers
+            .iter()
+            .filter(|m| m.accounts.is_empty() || m.accounts.contains(pubkey))
+            .filter(|m| m.owners.is_empty() || m.owners.contains(owner))
+            .filter(|m| m.filters.iter().all(|f| f.matches(data, lamports)))
+            .map(|m| m.filter_id.clone())
+            .collect()
+    }
 }
 
 impl FromConfig for SolanaSnapshotSource {
@@ -248,7 +307,7 @@ impl SourceTrait for SolanaSnapshotSource {
     async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, ShipsternError> {
         let SourceContext { filters, tx, .. } = ctx;
 
-        let filter_owner_key_lookup = FilterOwnerKeyLookup::new(&filters);
+        let account_matchers = AccountMatchers::new(&filters);
         let solana_snapshot = SolanaSnapshot::load_ledger(self.config.ledger_path.clone())?;
         let snapshot_slot = solana_snapshot.slot;
 
@@ -299,18 +358,16 @@ impl SourceTrait for SolanaSnapshotSource {
             }
         });
 
-        tracing::info!("Scanning accounts for accounts owned by program ids");
+        tracing::info!("Scanning accounts for the account prefilters");
         let scan_sync_tx = sync_tx.clone();
-        let filter_owner_key_lookup = filter_owner_key_lookup.clone();
         let bank = solana_snapshot.bank.clone();
 
         let scan_handle = tokio::spawn(async move {
             tokio::task::spawn_blocking(move || {
-                let owners = filter_owner_key_lookup.owners();
-                let program_ids = owners
-                    .iter()
-                    .map(|owner| SolanaPubkey::new_from_array(**owner))
-                    .collect::<Vec<_>>();
+                if account_matchers.is_empty() {
+                    return Ok(());
+                }
+
                 let mut is_closed = false;
                 let mut error: Option<ShipsternError> = None;
 
@@ -326,7 +383,14 @@ impl SourceTrait for SolanaSnapshotSource {
                         }
 
                         let owner = account.owner();
-                        if !program_ids.contains(owner) {
+                        let filters = account_matchers.matching(
+                            &Pubkey::from(pubkey.to_bytes()),
+                            &Pubkey::from(owner.to_bytes()),
+                            account.data(),
+                            account.lamports(),
+                        );
+
+                        if filters.is_empty() {
                             return;
                         }
 
@@ -346,9 +410,7 @@ impl SourceTrait for SolanaSnapshotSource {
                                 is_startup: true,
                                 bank_id: None,
                             },
-                            filters: filter_owner_key_lookup
-                                .lookup_by_owner(&Pubkey::from(owner.to_bytes()))
-                                .unwrap_or_default(),
+                            filters,
                         };
 
                         if let Err(err) = scan_sync_tx.blocking_send(event) {
@@ -403,4 +465,189 @@ enum Event {
         filters: Vec<String>,
     },
     SnapshotFinished,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_matchers_match_by_key_by_owner_then_filters() {
+        use shipstern_core::{AccountFilter, Prefilter};
+
+        let key = Pubkey::new([1; 32]);
+        let owner = Pubkey::new([2; 32]);
+        let other = Pubkey::new([3; 32]);
+        let filters = Filters::new(std::collections::HashMap::from([
+            (
+                "by-owner-sized".to_string(),
+                Prefilter::builder()
+                    .account_owners([owner])
+                    .account_filters([AccountFilter::DataSize(4)])
+                    .build()
+                    .unwrap(),
+            ),
+            (
+                "by-key".to_string(),
+                Prefilter::builder().accounts([key]).build().unwrap(),
+            ),
+        ]));
+        let m = AccountMatchers::new(&filters);
+
+        assert_eq!(m.matching(&other, &owner, &[0; 4], 0), vec![
+            "by-owner-sized"
+        ]);
+        assert!(
+            m.matching(&other, &owner, &[0; 5], 0).is_empty(),
+            "data size filter"
+        );
+        assert_eq!(m.matching(&key, &other, &[0; 9], 0), vec!["by-key"]);
+        assert!(m.matching(&other, &other, &[0; 4], 0).is_empty());
+
+        let mut both = m.matching(&key, &owner, &[0; 4], 0);
+        both.sort();
+        assert_eq!(both, vec!["by-key", "by-owner-sized"]);
+    }
+
+    #[test]
+    fn account_matchers_skip_prefilters_without_keys_or_owners() {
+        use shipstern_core::{AccountFilter, Prefilter};
+
+        let other = Pubkey::new([3; 32]);
+        let filters = Filters::new(std::collections::HashMap::from([
+            (
+                "data-only".to_string(),
+                Prefilter::builder()
+                    .account_filters([AccountFilter::DataSize(4)])
+                    .build()
+                    .unwrap(),
+            ),
+            (
+                "include-all".to_string(),
+                Prefilter::builder()
+                    .accounts_include_all()
+                    .account_filters([AccountFilter::DataSize(4)])
+                    .build()
+                    .unwrap(),
+            ),
+        ]));
+        let m = AccountMatchers::new(&filters);
+
+        assert!(m.is_empty(), "the scan does not start");
+        assert!(m.matching(&other, &other, &[0; 4], 0).is_empty());
+    }
+
+    #[test]
+    fn account_matchers_need_key_and_owner_when_both_are_set() {
+        use shipstern_core::{AccountFilter, Prefilter};
+
+        let key = Pubkey::new([1; 32]);
+        let owner = Pubkey::new([2; 32]);
+        let other = Pubkey::new([3; 32]);
+        let filters = Filters::new(std::collections::HashMap::from([(
+            "key-and-owner".to_string(),
+            Prefilter::builder()
+                .accounts([key])
+                .account_owners([owner])
+                .account_filters([AccountFilter::DataSize(4)])
+                .build()
+                .unwrap(),
+        )]));
+        let m = AccountMatchers::new(&filters);
+
+        assert_eq!(m.matching(&key, &owner, &[0; 4], 0), vec!["key-and-owner"]);
+        assert!(
+            m.matching(&key, &other, &[0; 4], 0).is_empty(),
+            "owner not listed"
+        );
+        assert!(
+            m.matching(&other, &owner, &[0; 4], 0).is_empty(),
+            "key not listed"
+        );
+        assert!(
+            m.matching(&key, &owner, &[0; 5], 0).is_empty(),
+            "data size filter"
+        );
+    }
+
+    /// Counts the warnings about a prefilter without keys or owners.
+    #[derive(Clone, Default)]
+    struct SkipWarnings(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl tracing::Subscriber for SkipWarnings {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            *metadata.level() == tracing::Level::WARN
+        }
+
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            struct Message(bool);
+
+            impl tracing::field::Visit for Message {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    self.0 |=
+                        field.name() == "message" && format!("{value:?}").contains("sets neither");
+                }
+            }
+
+            let mut message = Message(false);
+            event.record(&mut message);
+
+            if message.0 {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        fn enter(&self, _: &tracing::span::Id) {}
+
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    /// Builds the matchers for one prefilter and counts the skip warnings.
+    fn skip_warnings(prefilter: shipstern_core::Prefilter) -> usize {
+        let warnings = SkipWarnings::default();
+        let filters = Filters::new(std::collections::HashMap::from([(
+            "test-filter".to_string(),
+            prefilter,
+        )]));
+
+        tracing::subscriber::with_default(warnings.clone(), || AccountMatchers::new(&filters));
+
+        warnings.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[test]
+    fn account_matchers_warn_about_prefilters_without_keys_or_owners() {
+        use shipstern_core::{AccountFilter, Prefilter};
+
+        let only_filters = Prefilter::builder()
+            .account_filters([AccountFilter::DataSize(4)])
+            .build()
+            .unwrap();
+        let every_account = Prefilter::builder().accounts_include_all().build().unwrap();
+        let keys = Prefilter::builder()
+            .accounts([Pubkey::new([1; 32])])
+            .build()
+            .unwrap();
+        let owners = Prefilter::builder()
+            .account_owners([Pubkey::new([2; 32])])
+            .build()
+            .unwrap();
+
+        assert_eq!(skip_warnings(only_filters), 1);
+        assert_eq!(skip_warnings(every_account), 1);
+        assert_eq!(skip_warnings(keys), 0);
+        assert_eq!(skip_warnings(owners), 0);
+    }
 }
