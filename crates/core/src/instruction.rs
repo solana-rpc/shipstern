@@ -634,13 +634,8 @@ fn derive_paths_from_stackheights(stack_heights: &[Option<u32>], outer_index: u3
 
         match current_height.cmp(&prev_height) {
             std::cmp::Ordering::Greater => {
-                // CPI call: descend one level (stack height always increments by exactly 1).
-                debug_assert_eq!(
-                    *current_height,
-                    prev_height + 1,
-                    "invalid stack heights: {stack_heights:?}"
-                );
-
+                // CPI call: descend one level. The runtime increments the height by exactly 1,
+                // but the heights come from the server, so a jump still descends only one level.
                 path_stack.push(0);
             },
             std::cmp::Ordering::Equal => {
@@ -651,7 +646,8 @@ fn derive_paths_from_stackheights(stack_heights: &[Option<u32>], outer_index: u3
             },
             std::cmp::Ordering::Less => {
                 // Return from CPI: may skip multiple levels at once (e.g. height 3 → 1).
-                path_stack.truncate(*current_height as usize);
+                // Never pop below the outer index and the first child index, whatever the server sent.
+                path_stack.truncate((*current_height as usize).max(2));
 
                 if let Some(last) = path_stack.last_mut() {
                     *last += 1;
@@ -770,6 +766,30 @@ mod tests {
         assert_eq!(paths, [
             "3.1", "3.2", "3.2.1", "3.2.2", "3.2.3", "3.2.4", "3.3"
         ]);
+    }
+
+    #[test]
+    fn derives_paths_from_malformed_stack_heights_without_panicking() {
+        use super::derive_paths_from_stackheights;
+
+        let cases: [(&[Option<u32>], &[&str]); 4] = [
+            (&[Some(2), Some(4), Some(4)], &["3.1", "3.1.1", "3.1.2"]),
+            (&[Some(2), Some(4), Some(2)], &["3.1", "3.1.1", "3.2"]),
+            (&[Some(2), Some(3), Some(1)], &["3.1", "3.1.1", "3.2"]),
+            (&[Some(2), Some(3), Some(0), Some(0)], &[
+                "3.1", "3.1.1", "3.2", "3.3",
+            ]),
+        ];
+
+        for (heights, expected) in cases {
+            let paths = derive_paths_from_stackheights(heights, 2);
+            let paths = paths
+                .iter()
+                .map(|path| format!("{path:?}"))
+                .collect::<Vec<_>>();
+
+            assert_eq!(paths, expected, "heights: {heights:?}");
+        }
     }
 
     #[test]

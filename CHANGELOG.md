@@ -19,6 +19,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- `shipstern-core`: inner instructions with a stack height that jumps by more than one, or drops to 0 or 1, no longer panic in debug builds or corrupt the instruction path in release builds. A jump descends one level and a drop never goes above the first CPI level ([#420](https://github.com/solana-rpc/shipstern/pull/420) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 
