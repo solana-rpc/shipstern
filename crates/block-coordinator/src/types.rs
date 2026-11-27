@@ -156,6 +156,8 @@ pub enum ParseStatsKind {
     InstructionError,
     AccountFiltered,
     AccountError,
+    /// Like `AccountError`, for an account already counted as processed by its fallback record.
+    AccountErrorFallback,
     TransactionStatusFailed,
     TransactionStatusSucceeded,
 }

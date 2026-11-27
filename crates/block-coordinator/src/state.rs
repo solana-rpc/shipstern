@@ -303,17 +303,21 @@ impl<R> CoordinatorState<R> {
                 kind,
             } => {
                 let key = BankKey::new(slot, bank_id);
-                let is_account_stat = matches!(
-                    kind,
-                    ParseStatsKind::AccountFiltered | ParseStatsKind::AccountError
-                );
+                let is_fallback_stat = matches!(kind, ParseStatsKind::AccountErrorFallback);
+                let is_account_stat = is_fallback_stat
+                    || matches!(
+                        kind,
+                        ParseStatsKind::AccountFiltered | ParseStatsKind::AccountError
+                    );
                 if is_account_stat {
                     if !self.validate_account_bank(key, "ParseStats") {
                         return Ok(());
                     }
                     let buf = self.buffer.entry(key).or_default();
                     buf.increment_parse_stat(kind);
-                    buf.increment_account_processed_count();
+                    if !is_fallback_stat {
+                        buf.increment_account_processed_count();
+                    }
                 } else {
                     if !self.validate_instruction_bank(key, "ParseStats") {
                         return Ok(());
@@ -1437,6 +1441,60 @@ mod tests {
         let acct_flushed = state.drain_account_flushable();
         assert_eq!(acct_flushed.len(), 1);
         assert_eq!(acct_flushed[0].slot, slot);
+    }
+
+    #[test]
+    fn fallback_account_stat_does_not_count_as_processed() {
+        let mut state = CoordinatorState::<String>::default();
+        let slot = 100;
+
+        state
+            .apply(CoordinatorEvent::BlockFrozen {
+                slot,
+                bank_id: 0,
+                metadata: metadata(99, 0),
+            })
+            .unwrap();
+        for _ in 0..2 {
+            state
+                .apply(CoordinatorEvent::AccountEventSeen { slot, bank_id: 0 })
+                .unwrap();
+        }
+        state
+            .apply(CoordinatorEvent::SlotConfirmed { slot, bank_id: 0 })
+            .unwrap();
+        let _ = state.drain_instruction_flushable().unwrap();
+
+        // A fallback record plus its error stat is one account, not two.
+        state
+            .apply(CoordinatorEvent::AccountRecordParsed {
+                slot,
+                bank_id: 0,
+                key: AccountRecordSortKey::new(1, [1; 32]),
+                record: "fallback".to_string(),
+            })
+            .unwrap();
+        state
+            .apply(CoordinatorEvent::ParseStats {
+                slot,
+                bank_id: 0,
+                kind: ParseStatsKind::AccountErrorFallback,
+            })
+            .unwrap();
+        assert!(state.drain_account_flushable().is_empty());
+
+        state
+            .apply(CoordinatorEvent::AccountRecordParsed {
+                slot,
+                bank_id: 0,
+                key: AccountRecordSortKey::new(2, [2; 32]),
+                record: "decoded".to_string(),
+            })
+            .unwrap();
+        let flushed = state.drain_account_flushable();
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0].records.len(), 2);
+        assert_eq!(flushed[0].failed_account_count, 1);
     }
 
     #[test]
