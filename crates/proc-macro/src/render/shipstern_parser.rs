@@ -177,11 +177,11 @@ pub fn shipstern_parser(
             fn borsh_deserialize_fixed_bytes<const N: usize, R: ::borsh::io::Read>(
                 reader: &mut R,
             ) -> ::core::result::Result<Vec<u8>, ::borsh::io::Error> {
-                let mut buf = [0u8; N];
+                let mut buf = ::std::vec![0u8; N];
 
                 reader.read_exact(&mut buf)?;
 
-                ::core::result::Result::Ok(buf.to_vec())
+                ::core::result::Result::Ok(buf)
             }
 
             fn borsh_serialize_fixed_bytes<const N: usize, W: ::borsh::io::Write>(
@@ -199,11 +199,11 @@ pub fn shipstern_parser(
                 match tag {
                     0 => ::core::result::Result::Ok(::core::option::Option::None),
                     1 => {
-                        let mut buf = [0u8; N];
+                        let mut buf = ::std::vec![0u8; N];
 
                         reader.read_exact(&mut buf)?;
 
-                        ::core::result::Result::Ok(::core::option::Option::Some(buf.to_vec()))
+                        ::core::result::Result::Ok(::core::option::Option::Some(buf))
                     }
                     _ => ::core::result::Result::Err(::borsh::io::Error::new(
                         ::borsh::io::ErrorKind::InvalidData,
@@ -236,10 +236,10 @@ pub fn shipstern_parser(
                 let mut result = Vec::with_capacity(len as usize);
 
                 for _ in 0..len {
-                    let mut buf = [0u8; N];
+                    let mut buf = ::std::vec![0u8; N];
 
                     reader.read_exact(&mut buf)?;
-                    result.push(buf.to_vec());
+                    result.push(buf);
                 }
 
                 ::core::result::Result::Ok(result)
@@ -290,11 +290,11 @@ pub fn shipstern_parser(
                 let mut result = Vec::with_capacity(N);
 
                 for _ in 0..N {
-                    let mut buf = [0u8; BYTE_SIZE];
+                    let mut buf = ::std::vec![0u8; BYTE_SIZE];
 
                     reader.read_exact(&mut buf)?;
 
-                    result.push(buf.to_vec());
+                    result.push(buf);
                 }
 
                 ::core::result::Result::Ok(result)
@@ -616,7 +616,7 @@ fn option_borsh_helpers() -> TokenStream {
         >(
             reader: &mut R,
         ) -> ::core::result::Result<(), ::borsh::io::Error> {
-            let mut padding = [0u8; NONE_PADDING];
+            let mut padding = ::std::vec![0u8; NONE_PADDING];
 
             reader.read_exact(&mut padding)
         }
@@ -687,9 +687,9 @@ fn option_borsh_helpers() -> TokenStream {
             reader: &mut R,
         ) -> ::core::result::Result<::core::option::Option<Vec<u8>>, ::borsh::io::Error> {
             if borsh_deserialize_option_prefix::<PREFIX_BYTES, PREFIX_ONE, BIG_ENDIAN, _>(reader)? {
-                let mut bytes = [0u8; BYTE_SIZE];
+                let mut bytes = ::std::vec![0u8; BYTE_SIZE];
                 reader.read_exact(&mut bytes)?;
-                ::core::result::Result::Ok(::core::option::Option::Some(bytes.to_vec()))
+                ::core::result::Result::Ok(::core::option::Option::Some(bytes))
             } else {
                 borsh_deserialize_option_none_padding::<NONE_PADDING, _>(reader)?;
                 ::core::result::Result::Ok(::core::option::Option::None)
@@ -880,9 +880,9 @@ fn option_borsh_helpers() -> TokenStream {
             reader: &mut R,
         ) -> ::core::result::Result<::core::option::Option<Vec<u8>>, ::borsh::io::Error> {
             if borsh_deserialize_short_u16_option_prefix(reader)? {
-                let mut bytes = [0u8; BYTE_SIZE];
+                let mut bytes = ::std::vec![0u8; BYTE_SIZE];
                 reader.read_exact(&mut bytes)?;
-                ::core::result::Result::Ok(::core::option::Option::Some(bytes.to_vec()))
+                ::core::result::Result::Ok(::core::option::Option::Some(bytes))
             } else {
                 borsh_deserialize_option_none_padding::<NONE_PADDING, _>(reader)?;
                 ::core::result::Result::Ok(::core::option::Option::None)
