@@ -43,6 +43,11 @@ pub enum BuilderError {
     /// Two block pipelines were registered with the same parser ID.
     #[error("ID collision detected among block pipelines")]
     BlockCollision,
+    /// Pipelines of different kinds were registered with the same parser ID.
+    /// The runtime keys its filter set by parser ID, so one pipeline's
+    /// prefilter would replace the other's.
+    #[error("parser ID {0:?} is registered by pipelines of more than one kind")]
+    ParserIdCollision(String),
     /// A required field was missing from the builder.
     #[error("Missing field {0:?}")]
     MissingField(&'static str),
@@ -302,6 +307,10 @@ impl RuntimeBuilder {
 
         if pipelines.slot.len() != slot_len {
             return Err(BuilderError::SlotPipelineCollision);
+        }
+
+        if let Some(id) = pipelines.id_shared_across_kinds() {
+            return Err(BuilderError::ParserIdCollision(id));
         }
 
         let (filter_updates_tx, filter_updates_rx) = watch::channel(pipelines.filters());

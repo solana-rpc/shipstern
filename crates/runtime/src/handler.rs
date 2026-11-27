@@ -1,7 +1,11 @@
 //! Helper types for bundling [Shipstern parsers](crate::shipstern_core::Parser) and
 //! handler callbacks.
 
-use std::{borrow::Cow, collections::HashMap, pin::Pin};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    pin::Pin,
+};
 
 use futures_util::{Future, FutureExt, StreamExt};
 use shipstern_core::{
@@ -266,6 +270,24 @@ pub(crate) struct PipelineSets {
 }
 
 impl PipelineSets {
+    /// A parser ID registered under more than one pipeline kind. The filter set
+    /// is keyed by ID alone, so such an ID would keep one prefilter and drop the
+    /// rest.
+    pub fn id_shared_across_kinds(&self) -> Option<String> {
+        let mut seen = HashSet::new();
+
+        self.account
+            .ids()
+            .chain(self.transaction.ids())
+            .chain(self.instruction.ids())
+            .chain(self.block_meta.ids())
+            .chain(self.block_footer.ids())
+            .chain(self.block.ids())
+            .chain(self.slot.ids())
+            .find(|id| !seen.insert(*id))
+            .cloned()
+    }
+
     #[must_use]
     pub fn filters(&self) -> Filters {
         Filters::new(
@@ -296,6 +318,8 @@ impl<P> PipelineSet<P> {
 
     #[inline]
     pub fn insert(&mut self, key: String, value: P) -> Option<P> { self.0.insert(key, value) }
+
+    fn ids(&self) -> impl Iterator<Item = &String> { self.0.keys() }
 }
 
 impl<P: GetPrefilter> PipelineSet<P> {
