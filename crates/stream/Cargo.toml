@@ -35,3 +35,7 @@ shipstern-proto = { workspace = true, features = ["stream"] }
 [features]
 default = []
 prometheus = ["dep:prometheus", "shipstern/prometheus"]
+
+[dev-dependencies]
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["macros", "time"] }

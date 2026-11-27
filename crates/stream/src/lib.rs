@@ -165,16 +165,62 @@ impl<S: SourceTrait> Server<'_, S> {
         } = self;
 
         let address = grpc_cfg.address;
-        let grpc = grpc::Server::run(grpc_cfg, &desc_sets, channels);
-        // TODO: check for early server shutdowns
+        let mut grpc =
+            grpc::Server::run(grpc_cfg, &desc_sets, channels).map_err(|e| Box::new(e.into()))?;
 
         info!(%address, "gRPC server created");
 
-        runtime
-            .try_run_async()
+        let runtime_res = tokio::select! {
+            res = runtime.try_run_async() => res,
+            res = &mut grpc => {
+                return res.map_err(|e| Box::new(e.into()));
+            },
+        };
+
+        let grpc_res = grpc.stop().await;
+        runtime_res.map_err(|e| Box::new(Error::Runtime(*e)))?;
+        grpc_res.map_err(|e| Box::new(e.into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use shipstern::{
+        config::BufferConfig,
+        sources::{SourceContext, SourceExitStatus},
+    };
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct PendingSource;
+
+    #[async_trait::async_trait]
+    impl SourceTrait for PendingSource {
+        async fn connect(&self, _ctx: SourceContext) -> Result<SourceExitStatus, shipstern::Error> {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn bind_failure_stops_the_server_promptly() {
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let grpc_cfg = GrpcConfig {
+            address: taken.local_addr().unwrap(),
+        };
+
+        let server = Server::builder()
+            .try_build_with(PendingSource, grpc_cfg, BufferConfig::default())
+            .unwrap();
+
+        let res = tokio::time::timeout(Duration::from_secs(5), server.try_run_async())
             .await
-            .map_err(|e| Box::new(Error::Runtime(*e)))?;
-        grpc.stop().await.map_err(|e| Box::new(e.into()))?;
-        Ok(())
+            .expect("server should stop when the gRPC bind fails");
+        assert!(matches!(
+            *res.unwrap_err(),
+            Error::Grpc(grpc::Error::Transport(_))
+        ));
     }
 }
