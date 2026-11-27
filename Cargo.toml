@@ -5,7 +5,7 @@ members = ["crates/*", "examples/*", "tests/*"]
 # proc-macro-test, changing InstructionParser::Output from Instructions
 # to ProgramEventOutput. Run its tests separately with:
 #   cd tests/proc-macro-events && cargo test
-exclude = ["examples/multi-dex-stream", "tests/idls", "tests/proc-macro-events"]
+exclude = ["tests/idls", "tests/proc-macro-events"]
 resolver = "2"
 
 [workspace.package]
