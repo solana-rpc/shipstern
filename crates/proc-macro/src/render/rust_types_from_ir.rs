@@ -558,6 +558,8 @@ pub fn render_field(f: &FieldIr, local_names: Option<&HashSet<&str>>) -> TokenSt
         )
     ) {
         super::size_prefixed_bytes::attrs(f, path_prefix)
+    } else if super::number_codecs::has_codec(&f.field_type) {
+        super::number_codecs::attrs(f, path_prefix)
     } else {
         let option = option_borsh_attrs(&f.label, &f.field_type, path_prefix);
 
