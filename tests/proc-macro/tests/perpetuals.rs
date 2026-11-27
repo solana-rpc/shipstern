@@ -502,7 +502,7 @@ fn missing_fixed_address_account_falls_back_to_idl_address() {
     );
     assert_eq!(
         token_program(&[token_ledger, token_account, passed_program]),
-        passed_program
+        p("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
     );
 
     let err = perpetuals::resolve_instruction_default(&[token_ledger], data, &path)
@@ -511,8 +511,8 @@ fn missing_fixed_address_account_falls_back_to_idl_address() {
     assert_eq!(err.to_string(), "Account does not exist at index 1");
 }
 
-/// A short list that does not line up with the IDL's fixed addresses is
-/// shifted, so it errors instead of filling the tail.
+/// A fixed tail address in a non-fixed prefix slot suggests a shifted list,
+/// so it errors instead of filling the tail.
 #[test]
 fn shifted_account_list_is_not_filled() {
     let path = shipstern_core::instruction::Path::new_single(0);
@@ -526,7 +526,7 @@ fn shifted_account_list_is_not_filled() {
     let system_program = p("11111111111111111111111111111111");
     let token_program = p("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
-    // The Token program sits in the systemProgram slot.
+    // The systemProgram address sits in the non-fixed custody slot.
     assert_eq!(
         parse_err(
             &[Pubkey::new([1; 32]), system_program, token_program],
@@ -543,4 +543,68 @@ fn shifted_account_list_is_not_filled() {
         ),
         "Account does not exist at index 2"
     );
+}
+
+#[test]
+fn trailing_fixed_accounts_do_not_consume_remaining_accounts() {
+    let path = shipstern_core::instruction::Path::new_single(0);
+    let ledger = Pubkey::new([1; 32]);
+    let token_account = Pubkey::new([2; 32]);
+    let token_program = p("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+    let extra = [Pubkey::new([3; 32]), Pubkey::new([4; 32])];
+
+    for carried in [vec![], vec![token_program]] {
+        let mut keys = vec![ledger, token_account];
+        keys.extend(carried);
+        keys.extend(extra);
+        let parsed = perpetuals::resolve_instruction_default(
+            &keys,
+            perpetuals::Instructions::SET_TOKEN_LEDGER_DISCRIMINATOR,
+            &path,
+        )
+        .unwrap();
+        let perpetuals::instruction::Instruction::SetTokenLedger { accounts, .. } =
+            parsed.instruction
+        else {
+            panic!("expected SetTokenLedger");
+        };
+        assert_eq!(accounts.token_ledger, ledger);
+        assert_eq!(accounts.token_account, token_account);
+        assert_eq!(accounts.token_program, token_program);
+        assert_eq!(accounts.remaining_accounts, extra);
+    }
+}
+
+#[test]
+fn trailing_fixed_accounts_can_be_omitted_independently() {
+    let path = shipstern_core::instruction::Path::new_single(0);
+    let keeper = Pubkey::new([1; 32]);
+    let custody = Pubkey::new([2; 32]);
+    let system = p("11111111111111111111111111111111");
+    let rent = p("SysvarRent111111111111111111111111111111111");
+    let extra = Pubkey::new([3; 32]);
+
+    for carried in [vec![], vec![system], vec![rent], vec![system, rent]] {
+        for remaining in [vec![], vec![extra, rent]] {
+            let mut keys = vec![keeper, custody];
+            keys.extend(&carried);
+            keys.extend(&remaining);
+            let parsed = perpetuals::resolve_instruction_default(
+                &keys,
+                perpetuals::Instructions::REALLOC_CUSTODY_DISCRIMINATOR,
+                &path,
+            )
+            .unwrap();
+            let perpetuals::instruction::Instruction::ReallocCustody { accounts, .. } =
+                parsed.instruction
+            else {
+                panic!("expected ReallocCustody");
+            };
+            assert_eq!(accounts.keeper, keeper);
+            assert_eq!(accounts.custody, custody);
+            assert_eq!(accounts.system_program, system);
+            assert_eq!(accounts.rent, rent);
+            assert_eq!(accounts.remaining_accounts, remaining);
+        }
+    }
 }
