@@ -56,7 +56,8 @@ pub struct BufferConfig {
     /// the number of CPUs.
     #[arg(long, env)]
     pub jobs: Option<usize>,
-    /// The maximum number of concurrent sources to run.
+    /// The capacity of the channel that carries updates from the source to the
+    /// buffer. When it is full, the source waits before it sends the next update.
     ///
     /// Defaults to 100: a `[buffer]` section omitting this key (including ones
     /// that predate the field) still deserializes.

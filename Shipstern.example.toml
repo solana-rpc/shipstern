@@ -65,7 +65,8 @@ timeout = 60
 # Defaults to the number of CPUs when unset.
 #jobs = 8
 
-# The maximum number of concurrent sources to run.
+# The capacity of the channel that carries updates from the source to the
+# buffer. When it is full, the source waits before it sends the next update.
 #sources-channel-size = 100
 
 # Metrics are not configured from this file. The runtime takes a
