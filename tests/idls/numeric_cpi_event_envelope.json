@@ -1,0 +1,113 @@
+{
+ "kind": "rootNode",
+ "standard": "codama",
+ "version": "1.0.0",
+ "program": {
+  "kind": "programNode",
+  "name": "numericEnvelope",
+  "publicKey": "11111111111111111111111111111111",
+  "version": "0.1.0",
+  "origin": "anchor",
+  "docs": [],
+  "accounts": [],
+  "definedTypes": [],
+  "pdas": [],
+  "errors": [],
+  "instructions": [
+   {
+    "kind": "instructionNode",
+    "name": "doThing",
+    "docs": [],
+    "optionalAccountStrategy": "programId",
+    "accounts": [],
+    "arguments": [
+     {
+      "kind": "instructionArgumentNode",
+      "name": "discriminator",
+      "defaultValueStrategy": "omitted",
+      "docs": [],
+      "type": {
+       "kind": "fixedSizeTypeNode",
+       "size": 8,
+       "type": {
+        "kind": "bytesTypeNode"
+       }
+      },
+      "defaultValue": {
+       "kind": "bytesValueNode",
+       "data": "0102030405060708",
+       "encoding": "base16"
+      }
+     }
+    ],
+    "discriminators": [
+     {
+      "kind": "fieldDiscriminatorNode",
+      "name": "discriminator",
+      "offset": 0
+     }
+    ]
+   }
+  ],
+  "events": [
+   {
+    "kind": "eventNode",
+    "name": "alphaEvent",
+    "docs": [],
+    "data": {
+     "kind": "structTypeNode",
+     "fields": [
+      {
+       "kind": "structFieldTypeNode",
+       "name": "amount",
+       "docs": [],
+       "type": {
+        "kind": "numberTypeNode",
+        "format": "u64",
+        "endian": "le"
+       }
+      }
+     ]
+    },
+    "discriminators": [
+     {
+      "kind": "constantDiscriminatorNode",
+      "offset": 0,
+      "constant": {
+       "kind": "constantValueNode",
+       "type": {
+        "kind": "numberTypeNode",
+        "format": "u32",
+        "endian": "le"
+       },
+       "value": {
+        "kind": "numberValueNode",
+        "number": 16909060
+       }
+      }
+     },
+     {
+      "kind": "constantDiscriminatorNode",
+      "offset": 4,
+      "constant": {
+       "kind": "constantValueNode",
+       "type": {
+        "kind": "fixedSizeTypeNode",
+        "size": 1,
+        "type": {
+         "kind": "bytesTypeNode"
+        }
+       },
+       "value": {
+        "kind": "bytesValueNode",
+        "data": "a1",
+        "encoding": "base16"
+       }
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "additionalPrograms": []
+}

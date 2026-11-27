@@ -134,8 +134,7 @@ fn try_decode_bytes(bytes: &codama_nodes::BytesValueNode) -> Option<Vec<u8>> {
     }
 }
 
-/// Numeric constants narrow to one byte, matching the generated match arm's
-/// `*d == (value as u8)`.
+/// A numeric constant is as wide as its declared type, the width the dispatch arms match.
 fn constant_discriminator_bytes(
     node: &codama_nodes::ConstantDiscriminatorNode,
 ) -> Result<Vec<u8>, String> {
@@ -155,7 +154,11 @@ fn constant_discriminator_bytes(
                 ));
             };
 
-            Ok(vec![value as u8])
+            crate::render::instruction_parser::try_number_discriminator_bytes(
+                &node.constant.r#type,
+                value,
+            )
+            .map_err(|reason| format!("discriminator at offset {}: {reason}", node.offset))
         },
 
         _ => Err(format!(
