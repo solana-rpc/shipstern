@@ -4,10 +4,17 @@
 //! [`SourceTrait`] for a custom one, [`FromConfig`] to build it from a config
 //! document, and [`FilterUpdateSource`] if it can change a live subscription.
 
+use std::{
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
+
 use async_trait::async_trait;
 use shipstern_core::Filters;
 use tokio::sync::{mpsc::Sender, watch};
 use yellowstone_grpc_proto::{geyser::SubscribeUpdate, tonic};
+
+use crate::handle::ReadTracker;
 
 /// How a source exited.
 #[derive(Debug)]
@@ -55,7 +62,83 @@ pub struct SourceContext {
     /// [`RuntimeHandle`](crate::RuntimeHandle). The slot holds only the newest
     /// set and closes once the last handle is dropped. Only a
     /// [`FilterUpdateSource`] has handles, so other sources can ignore it.
-    pub filter_updates: watch::Receiver<Filters>,
+    pub filter_updates: FilterUpdates,
+}
+
+/// The receiving end of the filter updates published through a
+/// [`RuntimeHandle`](crate::RuntimeHandle).
+///
+/// It is a [`watch::Receiver<Filters>`] that notes when its value is read, so
+/// the runtime can warn when a [`FilterUpdateSource`] never reads an update.
+/// It dereferences to the receiver, so `changed`, `has_changed` and the rest
+/// work as on the receiver itself. Reading the value with [`Self::borrow`],
+/// [`Self::borrow_and_update`] or [`Self::wait_for`] counts as handling the
+/// update, and so does a clone of this type. Take the receiver with
+/// [`Self::into_inner`] to use it where a [`watch::Receiver`] is needed, which
+/// ends the tracking.
+#[derive(Debug, Clone)]
+pub struct FilterUpdates {
+    rx: watch::Receiver<Filters>,
+    reads: Arc<ReadTracker>,
+}
+
+impl FilterUpdates {
+    pub(crate) fn new(rx: watch::Receiver<Filters>, reads: Arc<ReadTracker>) -> Self {
+        Self { rx, reads }
+    }
+
+    pub(crate) fn reads(&self) -> Arc<ReadTracker> { Arc::clone(&self.reads) }
+
+    /// See [`watch::Receiver::borrow`].
+    #[must_use]
+    pub fn borrow(&self) -> watch::Ref<'_, Filters> {
+        self.reads.read();
+        self.rx.borrow()
+    }
+
+    /// See [`watch::Receiver::borrow_and_update`].
+    pub fn borrow_and_update(&mut self) -> watch::Ref<'_, Filters> {
+        self.reads.read();
+        self.rx.borrow_and_update()
+    }
+
+    /// See [`watch::Receiver::wait_for`].
+    ///
+    /// # Errors
+    /// Returns an error once every handle is gone.
+    pub async fn wait_for(
+        &mut self,
+        f: impl FnMut(&Filters) -> bool,
+    ) -> Result<watch::Ref<'_, Filters>, watch::error::RecvError> {
+        let value = self.rx.wait_for(f).await?;
+        self.reads.read();
+
+        Ok(value)
+    }
+
+    /// The underlying receiver. The runtime cannot tell whether it is read, so
+    /// it no longer warns about an unread update, this one or any later one.
+    #[must_use]
+    pub fn into_inner(self) -> watch::Receiver<Filters> {
+        self.reads.detach();
+        self.rx
+    }
+}
+
+/// A receiver nothing reports reads of, for driving a source directly, in a
+/// test for instance.
+impl From<watch::Receiver<Filters>> for FilterUpdates {
+    fn from(rx: watch::Receiver<Filters>) -> Self { Self::new(rx, Arc::default()) }
+}
+
+impl Deref for FilterUpdates {
+    type Target = watch::Receiver<Filters>;
+
+    fn deref(&self) -> &Self::Target { &self.rx }
+}
+
+impl DerefMut for FilterUpdates {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.rx }
 }
 
 impl SourceContext {
@@ -68,7 +151,7 @@ impl SourceContext {
         Self {
             filters,
             tx,
-            filter_updates,
+            filter_updates: filter_updates.into(),
         }
     }
 }
@@ -152,8 +235,10 @@ pub trait FromConfig: SourceTrait {
 ///
 /// Implementing it promises that [`SourceTrait::connect`] reads
 /// [`SourceContext::filter_updates`] and sends each set to the server. Nothing
-/// else ties the two together, so a source that implements this and ignores
-/// the slot accepts every update and applies none.
+/// can check the second half. A source that implements this and ignores the
+/// slot accepts every update and applies none. The runtime logs a warning when
+/// a published set has gone unread for 10 seconds, which catches a source that
+/// destructures the context with `..` and never touches the slot.
 ///
 /// ```rust, ignore
 /// impl FilterUpdateSource for YellowstoneGrpcSource {}

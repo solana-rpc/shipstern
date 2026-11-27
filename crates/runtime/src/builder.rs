@@ -12,7 +12,7 @@ use crate::{
     handle::FilterState,
     handler::{BoxPipeline, DynPipeline, PipelineSet, PipelineSets},
     instruction::InstructionPipeline,
-    sources::{FromConfig, SourceTrait},
+    sources::{FilterUpdates, FromConfig, SourceTrait},
     util, Runtime,
 };
 
@@ -305,13 +305,15 @@ impl RuntimeBuilder {
         }
 
         let (filter_updates_tx, filter_updates_rx) = watch::channel(pipelines.filters());
-        let filter_state = Arc::new(FilterState::new(filter_updates_tx));
+        let reads = Arc::default();
+        let filter_updates = FilterUpdates::new(filter_updates_rx, Arc::clone(&reads));
+        let filter_state = Arc::new(FilterState::new(filter_updates_tx, reads));
 
         Ok(Runtime {
             buffer,
             source,
             pipelines,
-            filter_updates_rx,
+            filter_updates,
             filter_state,
             #[cfg(feature = "prometheus")]
             metrics_registry,

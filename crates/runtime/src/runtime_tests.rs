@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex, PoisonError,
+        Arc, Mutex, PoisonError,
     },
     time::Duration,
 };
@@ -20,6 +20,7 @@ use yellowstone_grpc_proto::{
 
 use crate::{
     config::BufferConfig,
+    handle,
     instruction::InstructionPipeline,
     sources::{FilterUpdateSource, SourceContext, SourceExitStatus, SourceTrait},
     Error, FilterUpdateError, Handler, HandlerResult, Pipeline, Runtime,
@@ -640,6 +641,145 @@ async fn test_source_runs_when_the_filter_update_handle_is_never_taken() {
     let runtime = filter_update_runtime();
 
     assert_server_hangup(runtime.try_run_async().await);
+}
+
+/// Counts the unread-update warnings logged on the current thread.
+#[derive(Debug, Clone, Default)]
+struct UnreadWarnings(Arc<AtomicUsize>);
+
+impl tracing::Subscriber for UnreadWarnings {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        *metadata.level() == tracing::Level::WARN
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Message(bool);
+
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                self.0 |= field.name() == "message"
+                    && format!("{value:?}").contains("filter update has gone unread");
+            }
+        }
+
+        let mut message = Message(false);
+        event.record(&mut message);
+
+        if message.0 {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// Implements the marker and destructures the context with `..`, as the
+/// migration step of #308 does, so the slot stays open and unread.
+#[derive(Debug)]
+struct MockIgnoringFilterUpdatesSource;
+
+#[async_trait]
+impl SourceTrait for MockIgnoringFilterUpdatesSource {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext { tx, .. } = ctx;
+
+        tokio::time::sleep(handle::UNREAD_UPDATE_GRACE * 3).await;
+        drop(tx);
+
+        Ok(SourceExitStatus::StreamEnded)
+    }
+}
+
+impl FilterUpdateSource for MockIgnoringFilterUpdatesSource {}
+
+/// Takes the raw receiver with `into_inner`, as a source that passes it on
+/// does, then reads every update through it until the last handle is gone.
+#[derive(Debug)]
+struct MockRawReceiverSource;
+
+#[async_trait]
+impl SourceTrait for MockRawReceiverSource {
+    async fn connect(&self, ctx: SourceContext) -> Result<SourceExitStatus, Error> {
+        let SourceContext {
+            tx, filter_updates, ..
+        } = ctx;
+        let mut filter_updates = filter_updates.into_inner();
+
+        while filter_updates.changed().await.is_ok() {
+            let _ = filter_updates.borrow_and_update();
+        }
+
+        drop(tx);
+
+        Ok(SourceExitStatus::StreamEnded)
+    }
+}
+
+impl FilterUpdateSource for MockRawReceiverSource {}
+
+/// Publish one update to a running runtime, let the grace period pass, and
+/// count the warnings logged for it.
+async fn unread_warnings_after_update<S: FilterUpdateSource>(source: S) -> usize {
+    let warnings = UnreadWarnings::default();
+    let _logging = tracing::subscriber::set_default(warnings.clone());
+
+    let runtime = Runtime::builder()
+        .slot(Pipeline::new(SlowSlotParser, [SlowSlotHandler(
+            &UNCOUNTED_SLOTS,
+        )]))
+        .try_build_with(source, default_buffer_config())
+        .unwrap();
+    let handle = runtime.handle();
+    let running = tokio::spawn(runtime.try_run_async());
+
+    wait_for_runtime_ready().await;
+
+    handle
+        .update_filters(|filters| filters.merge(TEST_SLOT_FILTER, owned_by(9)))
+        .unwrap();
+
+    tokio::time::sleep(handle::UNREAD_UPDATE_GRACE + Duration::from_secs(1)).await;
+
+    let seen = warnings.0.load(Ordering::SeqCst);
+
+    drop(handle);
+    let _ = running.await;
+
+    seen
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_source_that_ignores_filter_updates_is_warned_about() {
+    let warnings = unread_warnings_after_update(MockIgnoringFilterUpdatesSource).await;
+
+    assert_eq!(warnings, 1, "an update nobody read should warn once");
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_source_that_reads_filter_updates_is_not_warned_about() {
+    let warnings = unread_warnings_after_update(MockFilterUpdateSource).await;
+
+    assert_eq!(warnings, 0, "an update the source read must not warn");
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_source_that_takes_the_raw_receiver_is_not_warned_about() {
+    let warnings = unread_warnings_after_update(MockRawReceiverSource).await;
+
+    assert_eq!(
+        warnings, 0,
+        "reads through the raw receiver cannot be seen, so none may warn"
+    );
 }
 
 #[tokio::test]

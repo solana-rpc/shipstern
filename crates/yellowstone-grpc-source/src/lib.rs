@@ -6,14 +6,13 @@ use async_trait::async_trait;
 use clap::ValueEnum;
 use futures_util::{stream::BoxStream, SinkExt, StreamExt};
 use shipstern::{
-    sources::{FilterUpdateSource, FromConfig, SourceContext, SourceExitStatus, SourceTrait},
+    sources::{
+        FilterUpdateSource, FilterUpdates, FromConfig, SourceContext, SourceExitStatus, SourceTrait,
+    },
     CommitmentLevel, Error as ShipsternError,
 };
 use shipstern_core::{AccountsDataSlice, Filters, PrefilterError};
-use tokio::{
-    sync::{mpsc, watch},
-    time::Instant,
-};
+use tokio::{sync::mpsc, time::Instant};
 use yellowstone_grpc_client::{
     Backoff, GeyserGrpcClient, ReconnectConfig, ReconnectEvent, SubscribeRequestSink,
 };
@@ -430,9 +429,7 @@ fn build_subscribe_request(
 ///
 /// Returns `None` once every handle is gone and no unseen set remains.
 ///
-async fn next_filter_update(
-    filter_updates_rx: &mut Option<watch::Receiver<Filters>>,
-) -> Option<Filters> {
+async fn next_filter_update(filter_updates_rx: &mut Option<FilterUpdates>) -> Option<Filters> {
     match filter_updates_rx {
         Some(rx) => {
             rx.changed().await.ok()?;
@@ -516,7 +513,7 @@ async fn run_stream<S, F, Fut>(
     backoff: Option<Backoff>,
     mut filters: Filters,
     tx: mpsc::Sender<Result<SubscribeUpdate, Status>>,
-    mut filter_updates_rx: Option<watch::Receiver<Filters>>,
+    mut filter_updates_rx: Option<FilterUpdates>,
     mut open: F,
 ) -> Result<SourceExitStatus, ShipsternError>
 where
@@ -1451,7 +1448,7 @@ mod tests {
                 Some(Backoff::new(Duration::ZERO, 2.0, retries)),
                 filters_owned_by(1),
                 tx,
-                Some(filters_rx),
+                Some(filters_rx.into()),
                 open,
             ),
         );

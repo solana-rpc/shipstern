@@ -1,9 +1,15 @@
 //! A handle for talking to a [`Runtime`](crate::Runtime) after it has started.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, PoisonError,
+    },
+    time::Duration,
+};
 
 use shipstern_core::Filters;
-use tokio::sync::watch;
+use tokio::sync::{watch, Notify};
 
 /// Why a filter update never reached the source.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -17,6 +23,48 @@ pub enum FilterUpdateError {
     /// wire, and the runtime drops its updates.
     #[error("no pipeline registered for parser `{0}`")]
     UnknownParser(String),
+}
+
+/// How long a published filter set may sit unread before the runtime warns.
+pub(crate) const UNREAD_UPDATE_GRACE: Duration = Duration::from_secs(10);
+
+/// Whether the source has read the newest filter set.
+///
+/// `watch` has no sender-side record of what a receiver saw, so the
+/// [`FilterUpdates`](crate::sources::FilterUpdates) the source holds reports
+/// its reads here. It holds no receiver, so it never keeps the update slot
+/// open once the source drops its own.
+#[derive(Debug, Default)]
+pub(crate) struct ReadTracker {
+    unread: AtomicBool,
+    /// The source took the raw receiver, so its reads can no longer be seen.
+    detached: AtomicBool,
+    published: Notify,
+}
+
+impl ReadTracker {
+    /// Call before sending the set. A read can only follow the send, so it
+    /// cannot be overwritten by this.
+    fn published(&self) {
+        self.unread.store(true, Ordering::Release);
+        self.published.notify_one();
+    }
+
+    pub(crate) fn read(&self) { self.unread.store(false, Ordering::Release); }
+
+    pub(crate) fn detach(&self) { self.detached.store(true, Ordering::Release); }
+
+    /// Resolves once a published set has gone unread for [`UNREAD_UPDATE_GRACE`].
+    pub(crate) async fn stalled(&self) {
+        loop {
+            self.published.notified().await;
+            tokio::time::sleep(UNREAD_UPDATE_GRACE).await;
+
+            if self.unread.load(Ordering::Acquire) && !self.detached.load(Ordering::Acquire) {
+                return;
+            }
+        }
+    }
 }
 
 /// Filter state shared by every handle onto one runtime.
@@ -35,16 +83,18 @@ pub(crate) struct FilterState {
     /// concurrent edits cannot interleave and lose one another. Never held
     /// across an await.
     update_lock: Mutex<()>,
+    reads: Arc<ReadTracker>,
 }
 
 impl FilterState {
-    pub(crate) fn new(filter_updates_tx: watch::Sender<Filters>) -> Self {
+    pub(crate) fn new(filter_updates_tx: watch::Sender<Filters>, reads: Arc<ReadTracker>) -> Self {
         let initial = filter_updates_tx.borrow().clone();
 
         Self {
             initial,
             filter_updates_tx,
             update_lock: Mutex::new(()),
+            reads,
         }
     }
 
@@ -98,6 +148,10 @@ impl FilterState {
 /// - `Ok(())` means the source has the set, not that the server applied it.
 ///   Handlers see the old set until the queued backlog drains.
 /// - Only the newest set is sent. A set the sink rejects is dropped with a warning.
+/// - A source that implements the marker but never reads
+///   [`SourceContext::filter_updates`](crate::sources::SourceContext::filter_updates)
+///   gets no set, and the call still returns `Ok(())`. The runtime logs a warning
+///   once a set has sat unread for 10 seconds.
 /// - A confirmed or finalized stream reconnects with the newest set. A processed
 ///   stream that can take filter updates does not reconnect, so a refusal on the
 ///   stream or a lost connection ends its run.
@@ -165,6 +219,8 @@ impl RuntimeHandle {
                 Ok(())
             };
         }
+
+        self.state.reads.published();
 
         // A failed send leaves the slot untouched, so `filters()` never
         // reports a set that went nowhere.
