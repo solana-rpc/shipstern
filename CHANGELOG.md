@@ -18,6 +18,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `shipstern-block-coordinator`: `CoordinatorSource` stops with `ReceiverDropped` as soon as the runtime drops its receiver. It noticed only on the next account or transaction update, which a narrow filter or an idle stream may never send, so it kept feeding the coordinator ([#460](https://github.com/solana-rpc/shipstern/pull/460) by @Estereg).
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
 
 ## [0.13.0] - 2026-11-12
