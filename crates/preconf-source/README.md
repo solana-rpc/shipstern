@@ -37,7 +37,7 @@ bam-regions = ["fra", "ams"]
 | `x-token` | unset | the Triton token; Triton enables each feed on it separately |
 | `harmonic-regions` | `[]` | Harmonic regions, one stream each |
 | `bam-regions` | `[]` | BAM regions, one stream each; at least one of the two lists needs a region |
-| `timeout` | `10` | seconds for the TCP connect, for TLS and for each subscribe |
+| `timeout` | `10` | seconds for the TCP connect, for TLS and for each subscribe; `0` is refused |
 | `auto-reconnect` | `true` | subscribe a dropped stream again, see Reconnect |
 | `reconnect-max-retries` | unset | resubscribes in a row before the source stops; one that works also counts until a transaction or slot start arrives or the stream stays up 60 s; unset has no limit; `0` never resubscribes; use 12 or more to outlast a cooloff, see Reconnect |
 
@@ -149,6 +149,7 @@ transaction can arrive twice. A later version of the source can do this swap.
 | Case | The source returns |
 |---|---|
 | no region in either list | `Error::Other` with `ConnectError::NoRegion`, before the dial |
+| `timeout = 0` | `Error::Other` with `ConnectError::ZeroTimeout`, before the dial |
 | no transaction prefilter, or one the feed cannot take | `Error::Other` with a `FilterError`, before the dial |
 | no scheme, or a scheme other than `https` or `http` | `Error::Other` with `ConnectError::Scheme`, before the dial |
 | a token on an `http` endpoint whose host is not `127.0.0.1`, `localhost` or `[::1]` | `Error::Other` with `ConnectError::PlainTextToken`, before the dial |

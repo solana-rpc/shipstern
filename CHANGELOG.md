@@ -18,6 +18,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `shipstern-preconf-source`: a `timeout` of 0 is refused at connect. Before, every subscribe failed at connect or with `DEADLINE_EXCEEDED` "subscribe did not answer", even when the server answered at once ([#471](https://github.com/solana-rpc/shipstern/pull/471) by @Estereg).
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
 
 ## [0.13.0] - 2026-11-12

@@ -97,6 +97,7 @@ pub struct PreconfConfig {
     #[arg(long, env, value_delimiter = ',')]
     pub bam_regions: Vec<BamRegion>,
     /// Seconds allowed for the TCP connect, again for the TLS handshake, and for each subscribe.
+    /// `0` is refused at connect.
     #[arg(long, env, default_value_t = DEFAULT_TIMEOUT_SECS)]
     pub timeout: u64,
     /// Resubscribe a stream that ends or fails with a retryable status. Defaults to `true`.
