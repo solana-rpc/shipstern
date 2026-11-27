@@ -1,11 +1,16 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::{atomic::AtomicBool, Arc, RwLock},
 };
 
 use agave_fs::io_setup::IoSetupState;
 use agave_snapshots::{snapshot_config::SnapshotConfig, SnapshotKind, SnapshotVersion};
-use shipstern_solana_snapshot_source::SolanaSnapshot;
+use shipstern::sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait};
+use shipstern_core::{Filters, Prefilter};
+use shipstern_solana_snapshot_source::{
+    SolanaSnapshot, SolanaSnapshotConfig, SolanaSnapshotSource,
+};
 use solana_account::ReadableAccount;
 use solana_accounts_db::{
     accounts_db::AccountsDbConfig, utils::create_all_accounts_run_and_snapshot_dirs,
@@ -20,6 +25,8 @@ use solana_runtime::{
     snapshot_package::SnapshotPackage,
     snapshot_utils::serialize_snapshot,
 };
+use tokio::sync::mpsc;
+use yellowstone_grpc_proto::geyser::subscribe_update::UpdateOneof;
 
 const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
 
@@ -106,8 +113,8 @@ fn recipient_lamports(snapshot: &SolanaSnapshot) -> u64 {
         .lamports()
 }
 
-#[test]
-fn loads_the_bank_of_a_full_snapshot_archive() {
+/// A ledger dir whose only snapshot is a full archive at `ARCHIVE_SLOT`.
+fn ledger_with_full_archive() -> tempfile::TempDir {
     let ledger = tempfile::tempdir().expect("create the ledger dir");
     let snapshots_dir = ledger.path().join("snapshots");
     std::fs::create_dir_all(&snapshots_dir).expect("create the snapshots dir");
@@ -119,6 +126,13 @@ fn loads_the_bank_of_a_full_snapshot_archive() {
     let bank = child_bank(&bank_forks, bank0, ARCHIVE_SLOT, &genesis);
     bank_to_full_snapshot_archive(&snapshot_config(&snapshots_dir), &bank)
         .expect("write the full archive");
+
+    ledger
+}
+
+#[test]
+fn loads_the_bank_of_a_full_snapshot_archive() {
+    let ledger = ledger_with_full_archive();
 
     // The second load starts on a ledger dir that the first load already used.
     for run in 1..=2 {
@@ -204,4 +218,64 @@ fn prefers_a_local_bank_snapshot_at_or_above_the_archive() {
             "the load keeps the bank snapshot dir at {bank_snapshot_slot}"
         );
     }
+}
+
+fn source_for(ledger: &Path, channel_size: usize) -> SolanaSnapshotSource {
+    SolanaSnapshotSource::from_config(SolanaSnapshotConfig {
+        ledger_path: ledger.to_path_buf(),
+        channel_size,
+    })
+}
+
+/// Accounts owned by the system program, which the genesis and the transfer create.
+fn system_owned_accounts() -> Filters {
+    let prefilter = Prefilter::builder()
+        .account_owners([Pubkey::default()])
+        .build()
+        .expect("build the prefilter");
+
+    Filters::new(HashMap::from([("system".to_string(), prefilter)]))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_closed_receiver_before_the_slot_update_is_receiver_dropped() {
+    let ledger = ledger_with_full_archive();
+    let (tx, rx) = mpsc::channel(8);
+    drop(rx);
+
+    let result = source_for(ledger.path(), 8)
+        .connect(SourceContext::new(system_owned_accounts(), tx))
+        .await;
+
+    assert!(
+        matches!(result, Ok(SourceExitStatus::ReceiverDropped)),
+        "got {result:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_receiver_dropped_mid_scan_is_receiver_dropped() {
+    let ledger = ledger_with_full_archive();
+    let (tx, mut rx) = mpsc::channel(1);
+    let source = source_for(ledger.path(), 1);
+
+    let connect = tokio::spawn(async move {
+        source
+            .connect(SourceContext::new(system_owned_accounts(), tx))
+            .await
+    });
+
+    let first = rx.recv().await.expect("the slot update arrives");
+    assert!(matches!(
+        first.expect("no stream error").update_oneof,
+        Some(UpdateOneof::Slot(_))
+    ));
+    drop(rx);
+
+    let result = connect.await.expect("the source task does not panic");
+
+    assert!(
+        matches!(result, Ok(SourceExitStatus::ReceiverDropped)),
+        "got {result:?}"
+    );
 }

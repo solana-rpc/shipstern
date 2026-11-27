@@ -258,45 +258,54 @@ impl SourceTrait for SolanaSnapshotSource {
             .filter_map(|(key, parser_filter)| parser_filter.slot.map(|_| key.to_string()))
             .collect::<Vec<String>>();
 
-        tx.send(Ok(SubscribeUpdate {
-            filters: slot_filters,
-            created_at: None,
-            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot: snapshot_slot,
-                parent: None,
-                status: SlotStatus::SlotFinalized.into(),
-                dead_error: None,
-                bank_id: Some(snapshot_slot),
-            })),
-        }))
-        .await
-        .map_err(|_| ShipsternError::ServerHangup)?;
+        if tx
+            .send(Ok(SubscribeUpdate {
+                filters: slot_filters,
+                created_at: None,
+                update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
+                    slot: snapshot_slot,
+                    parent: None,
+                    status: SlotStatus::SlotFinalized.into(),
+                    dead_error: None,
+                    bank_id: Some(snapshot_slot),
+                })),
+            }))
+            .await
+            .is_err()
+        {
+            return Ok(SourceExitStatus::ReceiverDropped);
+        }
 
         let channel_size = self.config.channel_size;
         let (sync_tx, mut sync_rx) = mpsc::channel::<Event>(channel_size);
 
         let tx_sender = tx.clone();
         let sender_handle = tokio::spawn(async move {
+            // A send fails only when the runtime stopped. Returning drops `sync_rx`,
+            // which stops the scan on its next send.
             while let Some(event) = sync_rx.recv().await {
                 match event {
                     Event::AccountUpdate {
                         account_update,
                         filters,
                     } => {
-                        if let Err(err) = tx_sender
+                        if tx_sender
                             .send(Ok(SubscribeUpdate {
                                 filters,
                                 created_at: None,
                                 update_oneof: Some(UpdateOneof::Account(account_update)),
                             }))
                             .await
+                            .is_err()
                         {
-                            tracing::error!("Error snapshot sending account update: {:?}", err);
+                            return SenderExit::ReceiverDropped;
                         }
                     },
                     Event::SnapshotFinished => break,
                 }
             }
+
+            SenderExit::Finished
         });
 
         tracing::info!("Scanning accounts for accounts owned by program ids");
@@ -312,7 +321,6 @@ impl SourceTrait for SolanaSnapshotSource {
                     .map(|owner| SolanaPubkey::new_from_array(**owner))
                     .collect::<Vec<_>>();
                 let mut is_closed = false;
-                let mut error: Option<ShipsternError> = None;
 
                 // runtime 4.x made `AccountsDb::scan_accounts` private; `Bank`
                 // exposes the same traversal through `scan_all_accounts`.
@@ -351,11 +359,8 @@ impl SourceTrait for SolanaSnapshotSource {
                                 .unwrap_or_default(),
                         };
 
-                        if let Err(err) = scan_sync_tx.blocking_send(event) {
+                        if scan_sync_tx.blocking_send(event).is_err() {
                             is_closed = true;
-                            error = Some(ShipsternError::Io(std::io::Error::other(format!(
-                                "Error sending account update: {err:?}"
-                            ))));
                         }
                     }
                 })
@@ -363,11 +368,7 @@ impl SourceTrait for SolanaSnapshotSource {
                     ShipsternError::Io(std::io::Error::other(format!("Scan failed: {e}")))
                 })?;
 
-                if let Some(error) = error {
-                    Err(error)
-                } else {
-                    Ok(())
-                }
+                Ok(is_closed)
             })
             .await
             .map_err(|_| ShipsternError::Io(std::io::Error::other("Scan thread panicked")))
@@ -378,25 +379,40 @@ impl SourceTrait for SolanaSnapshotSource {
             .map_err(|_| ShipsternError::Io(std::io::Error::other("Scan task panicked")))?
             .and_then(std::convert::identity);
 
-        if let Err(error) = scan_result {
-            drop(sync_tx);
-            let _ = sender_handle.await;
+        let channel_closed = match scan_result {
+            Ok(channel_closed) => channel_closed,
+            Err(error) => {
+                drop(sync_tx);
+                let _ = sender_handle.await;
 
-            return Err(error);
+                return Err(error);
+            },
+        };
+
+        if !channel_closed {
+            tracing::info!("Snapshot source finished");
+
+            // Fails only when the sender task already stopped on a dropped receiver.
+            let _ = sync_tx.send(Event::SnapshotFinished).await;
         }
-
-        tracing::info!("Snapshot source finished");
-
-        sync_tx
-            .send(Event::SnapshotFinished)
-            .await
-            .map_err(|_| ShipsternError::ServerHangup)?;
         drop(sync_tx);
-        let _ = sender_handle.await;
 
-        Ok(SourceExitStatus::Completed)
+        let sender_exit = sender_handle
+            .await
+            .map_err(|_| ShipsternError::Io(std::io::Error::other("Sender task panicked")))?;
+
+        match sender_exit {
+            SenderExit::ReceiverDropped => Ok(SourceExitStatus::ReceiverDropped),
+            SenderExit::Finished => Ok(SourceExitStatus::Completed),
+        }
     }
 }
+
+enum SenderExit {
+    Finished,
+    ReceiverDropped,
+}
+
 enum Event {
     AccountUpdate {
         account_update: SubscribeUpdateAccount,
