@@ -50,7 +50,13 @@ fn build_event_messages(ev: &EventNode, ir: &mut SchemaIr) {
     });
 
     let struct_node = crate::intermediate_representation::helpers::unwrap_event_struct(&ev.data);
-    let arg_fields = build_fields_ir(&args_name, &struct_node.fields, ir, TypeKindIr::Helper);
+    let arg_fields = build_fields_ir(
+        &args_name,
+        &struct_node.fields,
+        &ev.discriminators,
+        ir,
+        TypeKindIr::Helper,
+    );
 
     ir.types.push(TypeIr {
         name: args_name.clone(),

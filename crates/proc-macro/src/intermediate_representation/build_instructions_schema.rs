@@ -156,7 +156,13 @@ fn build_instruction_messages(ix: &InstructionNode, ir: &mut SchemaIr) {
         kind: TypeKindIr::Instruction,
     });
 
-    let arg_fields = build_fields_ir(&args_name, &ix.arguments, ir, TypeKindIr::Helper);
+    let arg_fields = build_fields_ir(
+        &args_name,
+        &ix.arguments,
+        &ix.discriminators,
+        ir,
+        TypeKindIr::Helper,
+    );
 
     // Skip the args wrapper when it shares a top-level DefinedType's name: the
     // schema keeps the flat type, so the wrapper would nest one layer too deep.
