@@ -83,7 +83,7 @@ mod shipstern {
             /// 0-based index of the account dispatch message (`TokenExtensionState`) in the proto file descriptor.
             pub const ACCOUNT_DISPATCH_MESSAGE_INDEX: Option<usize> = Some(6);
             /// 0-based index of the instruction dispatch message (`TokenExtensionProgram`) in the proto file descriptor.
-            pub const INSTRUCTION_DISPATCH_MESSAGE_INDEX: Option<usize> = Some(127);
+            pub const INSTRUCTION_DISPATCH_MESSAGE_INDEX: Option<usize> = Some(129);
         }
     }
 

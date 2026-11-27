@@ -130,20 +130,30 @@ pub struct SetAuthorityArgs {
 
 #[shipstern]
 #[derive(Clone, PartialEq)]
+pub struct BatchEntry {
+    pub number_of_accounts: u32,
+    pub accounts: Vec<Pubkey>,
+    pub data: Vec<u8>,
+    pub instruction: Option<TokenExtensionProgram>,
+}
+
+#[shipstern]
+#[derive(Clone, PartialEq)]
 pub struct TokenExtensionProgram {
     #[hint(
         oneof = "instruction::Instruction",
         tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, \
-                23, 24, 25"
+                23, 24, 25, 26"
     )]
     pub instruction: Option<instruction::Instruction>,
 }
 
 pub mod instruction {
     use super::{
-        shipstern, BaseTokenProgram, CommonExtensionInstructions, ConfidentialMintBurnIx,
-        ConfidentialTransferFeeIx, ConfidentialTransferIx, PausableIx, PermissionedBurnIx,
-        ScaledUiAmountIx, SetAuthorityAccounts, TokenGroupIx, TokenMetadataIx, TransferFeeIx,
+        shipstern, BaseTokenProgram, BatchEntry, CommonExtensionInstructions,
+        ConfidentialMintBurnIx, ConfidentialTransferFeeIx, ConfidentialTransferIx, PausableIx,
+        PermissionedBurnIx, ScaledUiAmountIx, SetAuthorityAccounts, TokenGroupIx, TokenMetadataIx,
+        TransferFeeIx,
     };
 
     #[shipstern]
@@ -300,6 +310,13 @@ pub mod instruction {
         pub instruction: Option<PermissionedBurnIx>,
     }
 
+    #[shipstern]
+    #[derive(Clone, PartialEq)]
+    pub struct Batch {
+        pub instructions: Vec<BatchEntry>,
+        pub remaining_accounts: Vec<crate::Pubkey>,
+    }
+
     #[shipstern(oneof)]
     #[derive(Clone, PartialEq)]
     pub enum Instruction {
@@ -328,6 +345,7 @@ pub mod instruction {
         Pausable(Pausable),
         ConfidentialMintBurn(ConfidentialMintBurn),
         PermissionedBurn(PermissionedBurn),
+        Batch(Batch),
     }
 }
 

@@ -1005,6 +1005,18 @@ message PermissionedBurnInstruction {
   PermissionedBurnIx instruction = 1;
 }
 
+message BatchEntry {
+  uint32 number_of_accounts = 1;
+  repeated shipstern.parser.token.PublicKey accounts = 2;
+  bytes data = 3;
+  TokenExtensionProgram instruction = 4;
+}
+
+message BatchInstruction {
+  repeated BatchEntry instructions = 1;
+  repeated shipstern.parser.token.PublicKey remaining_accounts = 2;
+}
+
 message TokenMetadataInstruction {
   TokenMetadataIx instruction = 1;
 }
@@ -1042,5 +1054,6 @@ message TokenExtensionProgram {
     PausableInstruction pausable = 23;
     ConfidentialMintBurnInstruction confidential_mint_burn = 24;
     PermissionedBurnInstruction permissioned_burn = 25;
+    BatchInstruction batch = 26;
   }
 }

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use shipstern_core::{
     instruction::InstructionUpdate, ParseError, ParseResult, Parser, Prefilter, ProgramParser,
 };
@@ -21,8 +23,12 @@ use crate::{
         InitializePermanentDelegateAccounts, InitializePermanentDelegateArgs, ReallocateAccounts,
         ReallocateArgs, SetAuthorityArgs, WithdrawExcessLamportsAccounts,
     },
-    AuthorityType, ExtensionInstructionParser, TokenExtensionProgram,
+    AuthorityType, BatchEntry, ExtensionInstructionParser, TokenExtensionProgram,
 };
+
+const BATCH_TAG: u8 = 255;
+
+fn invalid_data(message: &'static str) -> Error { Error::new(message) }
 
 #[derive(Debug, Clone, Copy)]
 pub struct InstructionParser;
@@ -392,6 +398,8 @@ impl InstructionParser {
                     ))
                 },
 
+                SplTokenInstruction::Batch { .. } => Self::parse_batch(ix),
+
                 // Anything else: fallback to SPL token parser
                 _ => {
                     let token_instruction = TokenProgramInstructionParser::parse_impl(ix)
@@ -431,6 +439,83 @@ impl InstructionParser {
                 Err(Error::from_inner("Error unpacking instruction data", e))
             },
         }
+    }
+
+    /// Parses each inner instruction of a batch as a Token-2022 instruction, laid out as
+    /// `[account count: u8][data length: u8][data]` per entry (`process_batch` in Token-2022).
+    fn parse_batch(ix: &InstructionUpdate) -> Result<TokenExtensionProgram> {
+        let mut cursor = 1;
+        let mut account_offset = 0usize;
+        let mut instructions = Vec::new();
+
+        // Token-2022 rejects an empty batch.
+        if ix.data.len() <= cursor {
+            return Err(invalid_data("Empty Token-2022 batch"));
+        }
+
+        while cursor < ix.data.len() {
+            let number_of_accounts_byte = ix.data[cursor];
+            let number_of_accounts = usize::from(number_of_accounts_byte);
+            cursor += 1;
+
+            let instruction_data_len = usize::from(
+                *ix.data
+                    .get(cursor)
+                    .ok_or_else(|| invalid_data("Missing Token-2022 batch instruction length"))?,
+            );
+            cursor += 1;
+
+            let next_cursor = cursor + instruction_data_len;
+            let instruction_data = ix
+                .data
+                .get(cursor..next_cursor)
+                .ok_or_else(|| invalid_data("Truncated Token-2022 batch instruction data"))?;
+            cursor = next_cursor;
+
+            let account_end = account_offset + number_of_accounts;
+            let accounts = ix
+                .accounts
+                .get(account_offset..account_end)
+                .ok_or_else(|| invalid_data("Too few accounts for Token-2022 batch entry"))?;
+            account_offset = account_end;
+
+            // Token-2022 rejects a nested batch, so it stays unparsed.
+            let parsed_instruction = if instruction_data.first() == Some(&BATCH_TAG) {
+                None
+            } else {
+                let batch_index = instructions
+                    .len()
+                    .try_into()
+                    .map_err(|_| invalid_data("Too many Token-2022 batch entries"))?;
+                let inner_ix = InstructionUpdate {
+                    program: ix.program,
+                    accounts: accounts.to_vec(),
+                    data: instruction_data.to_vec(),
+                    shared: Arc::clone(&ix.shared),
+                    inner: Vec::new(),
+                    path: ix.path.push_clone(batch_index),
+                    log_range: ix.log_range.clone(),
+                };
+
+                Self::parse_impl(&inner_ix).ok()
+            };
+
+            instructions.push(BatchEntry {
+                number_of_accounts: u32::from(number_of_accounts_byte),
+                accounts: accounts.to_vec(),
+                data: instruction_data.to_vec(),
+                instruction: parsed_instruction,
+            });
+        }
+
+        Ok(TokenExtensionProgram {
+            instruction: Some(crate::instruction::Instruction::Batch(
+                crate::instruction::Batch {
+                    instructions,
+                    remaining_accounts: ix.accounts[account_offset..].to_vec(),
+                },
+            )),
+        })
     }
 }
 
@@ -1100,5 +1185,213 @@ mod tests {
         let decoded = TokenExtensionProgram::decode(ix.encode_to_vec().as_slice()).unwrap();
 
         assert_eq!(decoded, ix);
+    }
+
+    /// A batch holds parsed inner instructions, so its tag and the nested message must both
+    /// decode.
+    #[cfg(feature = "proto")]
+    #[test]
+    fn batch_round_trips_through_protobuf() {
+        use prost::Message;
+
+        let inner = TokenExtensionProgram {
+            instruction: Some(crate::instruction::Instruction::PermissionedBurn(
+                crate::instruction::PermissionedBurn { instruction: None },
+            )),
+        };
+        let ix = TokenExtensionProgram {
+            instruction: Some(crate::instruction::Instruction::Batch(
+                crate::instruction::Batch {
+                    instructions: vec![crate::BatchEntry {
+                        number_of_accounts: 1,
+                        accounts: vec![crate::Pubkey::new([7; 32])],
+                        data: vec![46, 0],
+                        instruction: Some(inner),
+                    }],
+                    remaining_accounts: vec![],
+                },
+            )),
+        };
+
+        let decoded = TokenExtensionProgram::decode(ix.encode_to_vec().as_slice()).unwrap();
+
+        assert_eq!(decoded, ix);
+    }
+
+    /// Packs a Token-2022 batch like `process_batch` expects: per entry, the account count,
+    /// the data length and the data. The accounts are the entries' accounts, concatenated.
+    fn batch_of(ixs: &[&solana_instruction::Instruction]) -> solana_instruction::Instruction {
+        let mut data = vec![255];
+        let mut accounts = Vec::new();
+
+        for ix in ixs {
+            data.push(u8::try_from(ix.accounts.len()).unwrap());
+            data.push(u8::try_from(ix.data.len()).unwrap());
+            data.extend_from_slice(&ix.data);
+            accounts.extend(ix.accounts.iter().cloned());
+        }
+
+        solana_instruction::Instruction {
+            program_id: spl_token_2022::ID,
+            accounts,
+            data,
+        }
+    }
+
+    async fn parse_batch(ix: &solana_instruction::Instruction) -> crate::instruction::Batch {
+        let Some(crate::instruction::Instruction::Batch(batch)) = InstructionParser
+            .parse(&update_from(ix))
+            .await
+            .unwrap()
+            .instruction
+        else {
+            panic!("expected Batch");
+        };
+
+        batch
+    }
+
+    #[tokio::test]
+    async fn batch_parses_inner_instructions_with_the_token_2022_parser() {
+        use shipstern_spl_token_parser::instruction::Instruction as TokenIx;
+        use spl_token_2022::extension::transfer_fee::instruction::transfer_checked_with_fee;
+
+        use crate::extensions::transfer_fee_instruction::Instruction as FeeIx;
+
+        let with_fee = transfer_checked_with_fee(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &key(3),
+            &key(4),
+            &[],
+            100,
+            6,
+            3,
+        )
+        .unwrap();
+        let transfer = spl_token_2022::instruction::transfer_checked(
+            &spl_token_2022::ID,
+            &key(5),
+            &key(6),
+            &key(7),
+            &key(8),
+            &[],
+            9,
+            6,
+        )
+        .unwrap();
+
+        let mut ix = batch_of(&[&with_fee, &transfer]);
+        ix.accounts
+            .push(solana_instruction::AccountMeta::new_readonly(key(9), false));
+
+        let batch = parse_batch(&ix).await;
+        assert_eq!(batch.instructions.len(), 2);
+        assert_eq!(batch.remaining_accounts, vec![pk(9)]);
+
+        let entry = &batch.instructions[0];
+        assert_eq!(entry.number_of_accounts, 4);
+        assert_eq!(entry.accounts, vec![pk(1), pk(2), pk(3), pk(4)]);
+        assert_eq!(entry.data, with_fee.data);
+        let Some(crate::instruction::Instruction::TransferFee(fee)) = entry
+            .instruction
+            .as_ref()
+            .and_then(|i| i.instruction.clone())
+        else {
+            panic!("expected TransferFee");
+        };
+        let Some(FeeIx::TransferCheckedWithFee(fee)) = fee.instruction.and_then(|i| i.instruction)
+        else {
+            panic!("expected TransferCheckedWithFee");
+        };
+        assert_eq!(fee.accounts.source, pk(1));
+        assert_eq!(fee.accounts.owner, pk(4));
+        assert_eq!(fee.args.amount, 100);
+        assert_eq!(fee.args.fee_amount, 3);
+        assert_eq!(fee.args.decimals, 6);
+
+        let entry = &batch.instructions[1];
+        assert_eq!(entry.number_of_accounts, 4);
+        let Some(crate::instruction::Instruction::TokenProgram(token)) = entry
+            .instruction
+            .as_ref()
+            .and_then(|i| i.instruction.clone())
+        else {
+            panic!("expected TokenProgram");
+        };
+        let Some(TokenIx::TransferChecked(transfer)) =
+            token.instruction.and_then(|i| i.instruction)
+        else {
+            panic!("expected TransferChecked");
+        };
+        assert_eq!(transfer.accounts.source, pk(5));
+        assert_eq!(transfer.accounts.mint, pk(6));
+        assert_eq!(transfer.accounts.destination, pk(7));
+        assert_eq!(transfer.args.amount, 9);
+    }
+
+    #[tokio::test]
+    async fn batch_leaves_nested_batch_and_unknown_entries_unparsed() {
+        let transfer = spl_token_2022::instruction::transfer_checked(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &key(3),
+            &key(4),
+            &[],
+            1,
+            6,
+        )
+        .unwrap();
+        let inner = batch_of(&[&transfer]);
+        let mut garbage = transfer.clone();
+        garbage.data = vec![200, 1];
+
+        let batch = parse_batch(&batch_of(&[&inner, &garbage, &transfer])).await;
+
+        assert_eq!(batch.instructions.len(), 3);
+        assert_eq!(batch.instructions[0].data, inner.data);
+        assert_eq!(batch.instructions[0].instruction, None);
+        assert_eq!(batch.instructions[1].instruction, None);
+        assert_eq!(batch.instructions[1].data, vec![200, 1]);
+        assert!(batch.instructions[2].instruction.is_some());
+    }
+
+    #[tokio::test]
+    async fn malformed_batches_are_errors() {
+        let transfer = spl_token_2022::instruction::transfer_checked(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &key(3),
+            &key(4),
+            &[],
+            1,
+            6,
+        )
+        .unwrap();
+        let good = batch_of(&[&transfer]);
+
+        // Token-2022 rejects an empty batch.
+        let mut empty = good.clone();
+        empty.data = vec![255];
+        empty.accounts.clear();
+        assert!(InstructionParser.parse(&update_from(&empty)).await.is_err());
+
+        // Header cut after the account count.
+        let mut ix = good.clone();
+        ix.data = vec![255, 3];
+        assert!(InstructionParser.parse(&update_from(&ix)).await.is_err());
+
+        // Data shorter than the declared length.
+        let mut ix = good.clone();
+        ix.data.pop();
+        assert!(InstructionParser.parse(&update_from(&ix)).await.is_err());
+
+        // Fewer accounts than the entry declares.
+        let mut ix = good.clone();
+        ix.accounts.pop();
+        assert!(InstructionParser.parse(&update_from(&ix)).await.is_err());
     }
 }
