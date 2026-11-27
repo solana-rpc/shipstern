@@ -176,16 +176,6 @@ impl<T: clap::Args> clap::Args for OptConfig<T> {
     }
 }
 
-// Used for clap hacks below
-#[allow(dead_code)] // Currently unused if feature 'prometheus' is disabled
-fn update_clone<T: ToOwned, U: Into<T>, F: FnOnce(&mut U) -> V, V>(t: &mut T, f: F) -> V
-where T::Owned: Into<U> {
-    let mut u = t.to_owned().into();
-    let ret = f(&mut u);
-    *t = u.into();
-    ret
-}
-
 #[cfg(test)]
 mod tests {
     use super::BufferConfig;
