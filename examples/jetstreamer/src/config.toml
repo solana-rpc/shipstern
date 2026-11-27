@@ -1,6 +1,5 @@
 [source]
 archive-url = "https://api.old-faithful.net"
-epoch = 885
 threads = 4
 network = "mainnet"
 compact-index-base-url = "https://files.old-faithful.net"
@@ -21,7 +20,9 @@ network-capacity-mb = 1000
 # header-read timeout and hang the run. Raise on a fast link.
 # buffer-window-bytes = 1073741824
 
-[filters]
-# Add any filters needed for parsing specific programs or accounts
-# For example, to filter for specific programs:
-# programs = ["11111111111111111111111111111112"]
+# The slots to replay: either one epoch, or `slot-start` and `slot-end`
+# (`slot-end` is exclusive).
+[source.range]
+epoch = 885
+# slot-start = 382320000
+# slot-end = 382320100
