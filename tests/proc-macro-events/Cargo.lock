@@ -3941,7 +3941,6 @@ name = "shipstern-block-meta-parser"
 version = "0.13.0"
 dependencies = [
  "prost",
- "prost-types",
  "shipstern-core",
  "shipstern-proc-macro",
  "yellowstone-grpc-proto",
@@ -3970,7 +3969,6 @@ dependencies = [
  "bs58",
  "clap",
  "prost",
- "prost-types",
  "serde",
  "shipstern-proto",
  "thiserror 1.0.69",
@@ -4058,10 +4056,8 @@ name = "shipstern-spl-token-extensions-parser"
 version = "0.13.0"
 dependencies = [
  "borsh",
- "bs58",
  "bytemuck",
  "prost",
- "prost-types",
  "shipstern-core",
  "shipstern-parser",
  "shipstern-proc-macro",
@@ -4074,24 +4070,18 @@ dependencies = [
  "spl-token-group-interface",
  "spl-token-metadata-interface",
  "spl-type-length-value",
- "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "shipstern-spl-token-parser"
 version = "0.13.0"
 dependencies = [
- "bs58",
  "prost",
- "prost-types",
  "shipstern-core",
  "shipstern-parser",
  "shipstern-proc-macro",
  "shipstern-proto",
- "solana-program-error",
- "spl-pod",
  "spl-token",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4100,7 +4090,6 @@ version = "0.13.0"
 dependencies = [
  "borsh",
  "prost",
- "prost-types",
  "shipstern-core",
  "shipstern-parser",
  "shipstern-proc-macro",

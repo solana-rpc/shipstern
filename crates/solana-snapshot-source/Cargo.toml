@@ -13,19 +13,14 @@ agave-snapshots = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
 tracing = { workspace = true }
-futures-util = { workspace = true, features = ["sink"] }
 shipstern = { workspace = true }
 shipstern-core = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
-yellowstone-grpc-client = { workspace = true }
-toml = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 solana-pubkey = { workspace = true, features = ["curve25519", "borsh"] }
 solana-accounts-db = { workspace = true }
 solana-genesis-utils = { workspace = true, features = ["agave-unstable-api"] }
 tempfile = { workspace = true }
-zstd = { workspace = true }
-tar = { workspace = true }
 solana-account = { workspace = true }
 clap = { workspace = true, features = ["derive", "cargo", "wrap_help"] }
 solana-runtime = { workspace = true, features = ["agave-unstable-api"] }

@@ -16,19 +16,14 @@ futures-util = { workspace = true, features = ["sink"] }
 shipstern = { workspace = true }
 shipstern-core = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
-yellowstone-grpc-client = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 clap = { workspace = true, features = ["derive", "cargo", "wrap_help"] }
 thiserror = { workspace = true }
-prost-types = { workspace = true }
 
 jetstreamer-firehose = { workspace = true }
-prometheus = { workspace = true, optional = true }
 
 solana-transaction = { workspace = true }
-solana-msg = { workspace = true }
 solana-message = { workspace = true }
-solana-instruction = { workspace = true }
 solana-pubkey = { workspace = true }
 solana-transaction-status = { workspace = true }
 solana-runtime = { workspace = true }
@@ -53,4 +48,3 @@ serde_json = { workspace = true }
 
 [features]
 default = []
-prometheus = ["dep:prometheus"]

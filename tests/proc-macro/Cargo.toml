@@ -18,7 +18,7 @@ serde = ["dep:serde"]
 # The `#[shipstern]` proc-macro uses `cfg!(feature = "proto")` to decide whether
 # to emit `#[derive(::prost::Message)]`.  Because proc-macros are compiled
 # once for the whole workspace, enabling `shipstern-proc-macro/proto`
-# from any crate (e.g. examples/prometheus) causes every `#[shipstern]` expansion
+# from any crate (e.g. examples/idl-parser) causes every `#[shipstern]` expansion
 # to emit prost derives — even for parser crates whose own `proto` feature is
 # off.
 #

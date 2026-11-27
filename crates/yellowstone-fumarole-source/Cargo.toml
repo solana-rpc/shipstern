@@ -25,7 +25,6 @@ semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tonic = { workspace = true, features = ["gzip", "zstd"] }
 clap = { workspace = true, features = ["derive", "cargo", "wrap_help"] }
-prometheus = { workspace = true }
 
 [features]
 prometheus = []

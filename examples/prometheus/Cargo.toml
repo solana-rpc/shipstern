@@ -13,11 +13,6 @@ tracing = "0.1.40"
 shipstern = { workspace = true, features = ["prometheus"] }
 prometheus = { version = "0.14.0", features = ["push"] }
 tokio = { version = "1.39.3", features = ["rt", "rt-multi-thread"] }
-shipstern-parser = { workspace = true }
-shipstern-proc-macro = { workspace = true }
-borsh = { workspace = true, features = ["derive"] }
 shipstern-yellowstone-grpc-source = { workspace = true }
 shipstern-spl-token-parser = { workspace = true, features = ["proto"] }
-shipstern-spl-token-extensions-parser = { workspace = true, features = ["proto"] }
 rustls = { workspace = true }
-prost = { workspace = true, features = ["derive"] }

@@ -53,7 +53,6 @@ fn main() {
         .with_tonic()
         .build()
         .expect("Error building log exporter!");
-    // let log_exporter = opentelemetry_stdout::LogExporter::default();
 
     let log_provider = opentelemetry_sdk::logs::SdkLoggerProvider::builder()
         .with_batch_exporter(log_exporter)
