@@ -11,24 +11,10 @@ authors.workspace = true
 
 [dependencies]
 shipstern-core = { workspace = true }
-solana-program-option = { workspace = true, optional = true }
 solana-pubkey = { workspace = true }
-shipstern-proto = { workspace = true, features = [
-  "parser",
-], optional = true }
 thiserror.workspace = true
-bs58.workspace = true
 base64 = { workspace = true }
-
-[dev-dependencies]
-shipstern-mock = { workspace = true }
-tokio.workspace = true
 
 [features]
 default = []
-proto = [
-  "dep:shipstern-proto",
-  "shipstern-core/proto",
-  "shipstern-proto/parser",
-  "solana-program-option",
-]
+proto = ["shipstern-core/proto"]

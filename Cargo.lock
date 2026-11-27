@@ -6357,14 +6357,9 @@ name = "shipstern-parser"
 version = "0.13.0"
 dependencies = [
  "base64 0.22.1",
- "bs58",
  "shipstern-core",
- "shipstern-mock",
- "shipstern-proto",
- "solana-program-option",
  "solana-pubkey 4.4.0",
  "thiserror 1.0.69",
- "tokio",
 ]
 
 [[package]]
