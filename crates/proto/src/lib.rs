@@ -68,13 +68,11 @@ mod shipstern {
                 "/shipstern.parser.token_extensions.bin"
             ));
 
-            /// Self-contained `.proto` schema text for the token extensions
-            /// parser. Bundles the `token.proto` dependency inline so
-            /// consumers don't need to resolve the import separately.
-            pub const PROTOBUF_SCHEMA: &str = include_str!(concat!(
-                env!("OUT_DIR"),
-                "/token_extensions_full_schema.proto"
-            ));
+            /// Raw `.proto` schema text for the token extensions parser.
+            ///
+            /// It imports `token.proto`. Resolve that import with
+            /// [`token::PROTOBUF_SCHEMA`](super::token::PROTOBUF_SCHEMA).
+            pub const PROTOBUF_SCHEMA: &str = include_str!("../proto/token_extensions.proto");
 
             ///
             /// IMPORTANT - If you update the .proto files, make sure to update the dispatch message indices below if needed
@@ -227,6 +225,29 @@ mod wire_compat_tests {
         }
 
         None
+    }
+
+    #[test]
+    fn token_extensions_schema_is_a_single_proto_file() {
+        use crate::shipstern::parser::{token, token_extensions};
+
+        let schema = token_extensions::PROTOBUF_SCHEMA;
+        let count = |prefix: &str| schema.lines().filter(|l| l.starts_with(prefix)).count();
+
+        assert_eq!(count("syntax "), 1, "schema must declare `syntax` once");
+        assert_eq!(count("package "), 1, "schema must declare `package` once");
+        assert_eq!(
+            package_decl(schema),
+            Some("shipstern.parser.token_extensions")
+        );
+        assert!(
+            schema.contains("import \"token.proto\";"),
+            "the dependency stays an import, served by `token::PROTOBUF_SCHEMA`",
+        );
+        assert_eq!(
+            package_decl(token::PROTOBUF_SCHEMA),
+            Some("shipstern.parser.token")
+        );
     }
 
     #[test]
