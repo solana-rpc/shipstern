@@ -15,6 +15,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 - **Breaking** `shipstern-proc-macro` and the instruction parser crates: instruction parsers select their program with `transaction_accounts_include`, not `transaction_accounts`. The runtime merges all instruction parsers into one filter, so it received only transactions that touched every program. Include keys merged into `InstructionPipeline::ID` now widen it ([#395](https://github.com/solana-rpc/shipstern/pull/395), from #340 by @hack-wrench and @senzenn).
 - `shipstern`: a bundled `FilterPipeline` also checks its transaction filter in the client and skips a transaction that the filter rejects, on every source. The check drops a false cuckoo match, and a filter update through `RuntimeHandle` does not change it. `DynPipeline::client_filter` is new and returns `None` by default ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- `shipstern-jetstream-source`: `publish = false`. It depends on `jetstreamer-firehose` by git revision, so `cargo publish` could not succeed, and the last release on crates.io is 0.9.0. The crates.io `jetstreamer-firehose` 0.8.1 lacks the block markers and block id the source reads, and takes `solana-reward-info` 6, which has no `VATDebit`. Remove the key once a release has both ([#434](https://github.com/solana-rpc/shipstern/pull/434) for [#318](https://github.com/solana-rpc/shipstern/issues/318) by @Estereg).
 
 ### Fixed
 

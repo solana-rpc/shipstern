@@ -7,6 +7,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "./../../README.md"
+# `jetstreamer-firehose` is a git dependency, which `cargo publish` rejects. See #318.
+publish = false
 
 [dependencies]
 async-trait = { workspace = true }
