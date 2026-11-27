@@ -14,8 +14,9 @@ It supports offline fixtures, account replay, and instruction replay — helping
 - 🚀 Faster Development
   Build and debug parsing pipelines locally, with repeatable fixture-based tests.
 
-Fixtures are fetched from Solana Devnet, not Mainnet.
-This ensures safe and reproducible testing environments.
+Fixtures are read from `./fixtures` in the crate under test. A missing fixture is
+fetched from Solana Devnet, or from the RPC endpoint in `RPC_ENDPOINT`, and
+saved there.
 
 ## Installation
 
@@ -29,17 +30,18 @@ Example Usage
 #[cfg(test)]
 mod tests {
     use shipstern_mock::{account_fixture, tx_fixture};
-    use shipstern_parser::{
-        token_extension_program::InstructionParser as TokenExtensionProgramIxParser,
-        token_program::{AccountParser as TokenProgramAccParser, TokenProgramState},
-    };
+    use shipstern_spl_token_extensions_parser::InstructionParser as TokenExtensionsIxParser;
+    use shipstern_spl_token_parser::{account, AccountParser as TokenAccParser, TokenProgramState};
 
     #[tokio::test]
     async fn test_account_parsing() {
-        let parser = TokenProgramAccParser;
+        let parser = TokenAccParser;
         let account = account_fixture!("3SmPYPvZfEmroktLiJsgaNENuPEud3Z52zSfLQ1zJdkK", &parser);
 
-        let TokenProgramState::Mint(mint) = account else {
+        let TokenProgramState {
+            account: Some(account::Account::Mint(mint)),
+        } = account
+        else {
             panic!("Unexpected account state");
         };
 
@@ -48,7 +50,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_instruction_parsing() {
-        let parser = TokenExtensionProgramIxParser;
+        let parser = TokenExtensionsIxParser;
         let ixs = tx_fixture!(
             "44gWEyKUkeUabtJr4eT3CQEkFGrD4jMdwUV6Ew5MR5K3RGizs9iwbkb5Q4T3gnAaSgHxn3ERQ8g5YTXuLP1FrWnt",
             &parser
