@@ -452,6 +452,8 @@ message ConfigureAccountWithRegistryAccounts {
   shipstern.parser.token.PublicKey account = 1;
   shipstern.parser.token.PublicKey mint = 2;
   shipstern.parser.token.PublicKey registry = 3;
+  optional shipstern.parser.token.PublicKey payer = 4;
+  optional shipstern.parser.token.PublicKey system_program = 5;
 }
 
 message ConfidentialTransferIx {
