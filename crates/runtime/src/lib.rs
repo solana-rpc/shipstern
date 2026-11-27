@@ -288,8 +288,14 @@ impl<S: SourceTrait> Runtime<S> {
             SourceExit(Result<Result<SourceExitStatus, Error>, oneshot::error::RecvError>),
         }
 
+        // Config-supplied, so clamp both ends like `jobs`: `mpsc::channel` panics on 0 and
+        // above `Semaphore::MAX_PERMITS`.
+        let sources_channel_size = self
+            .buffer
+            .sources_channel_size
+            .clamp(1, tokio::sync::Semaphore::MAX_PERMITS);
         let (tx, updates_rx) =
-            mpsc::channel::<Result<SubscribeUpdate, Status>>(self.buffer.sources_channel_size);
+            mpsc::channel::<Result<SubscribeUpdate, Status>>(sources_channel_size);
 
         let (status_tx, status_rx) = oneshot::channel::<Result<SourceExitStatus, Error>>();
 

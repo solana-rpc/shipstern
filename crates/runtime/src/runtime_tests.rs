@@ -44,6 +44,7 @@ fn make_ping_update() -> SubscribeUpdate {
 const TEST_SLOT_FILTER: &str = "test::SlowSlotParser";
 static SLOW_SLOT_HANDLED: AtomicUsize = AtomicUsize::new(0);
 static ONE_BUILDER_SLOTS_HANDLED: AtomicUsize = AtomicUsize::new(0);
+static ZERO_CHANNEL_SLOTS_HANDLED: AtomicUsize = AtomicUsize::new(0);
 /// For runtimes whose source sends no slots, so nothing reads it.
 static UNCOUNTED_SLOTS: AtomicUsize = AtomicUsize::new(0);
 
@@ -1428,4 +1429,24 @@ async fn edge_stop_waits_for_in_flight_handlers() {
         finished, started,
         "only {finished} of {started} handlers finished before shutdown returned"
     );
+}
+
+/// A config can set the sources channel to 0, which `mpsc::channel` rejects with a panic.
+#[tokio::test]
+async fn test_zero_sources_channel_size_runs() {
+    let runtime = Runtime::builder()
+        .slot(Pipeline::new(SlowSlotParser, [SlowSlotHandler(
+            &ZERO_CHANNEL_SLOTS_HANDLED,
+        )]))
+        .try_build_with(
+            MockCompletedWithUpdatesSource { updates_to_send: 2 },
+            BufferConfig {
+                sources_channel_size: 0,
+                ..default_buffer_config()
+            },
+        )
+        .unwrap();
+
+    assert!(runtime.try_run_async().await.is_ok());
+    assert_eq!(ZERO_CHANNEL_SLOTS_HANDLED.load(Ordering::Relaxed), 2);
 }
