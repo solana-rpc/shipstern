@@ -19,6 +19,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- `shipstern-mock`: fixture fetching no longer panics when parallel tests create the `fixtures` directory at once, and a fixture file is written through a temp file and a rename, so a concurrent reader never sees a half-written fixture ([#421](https://github.com/solana-rpc/shipstern/pull/421) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 
