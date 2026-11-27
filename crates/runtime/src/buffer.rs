@@ -114,11 +114,13 @@ async fn run_job(pipelines: &PipelineSets, job: Job) {
                 update_type,
             );
 
+            // Instructions are counted one by one inside the pipeline. Counting
+            // its result here would add a second transaction success.
             let instruction_fut = pipelines.instruction.get_handlers(&filters).run(
                 span,
                 &t,
                 #[cfg(feature = "prometheus")]
-                update_type,
+                metrics::UpdateType::Unknown,
             );
 
             futures_util::future::join_all([transaction_fut, instruction_fut])

@@ -244,22 +244,35 @@ impl From<&UpdateOneof> for UpdateType {
     }
 }
 
+/// Count an update a pipeline handled. `Ok(false)` is one its parser filtered
+/// out, which neither succeeded nor failed.
 pub(crate) fn increment_processed_updates(
-    handle_result: &Result<(), PipelineErrors>,
+    handle_result: &Result<bool, PipelineErrors>,
     update_type: UpdateType,
 ) {
     match handle_result {
-        Ok(()) => match update_type {
-            UpdateType::Account => SHIPSTERN_ACCOUNTS_SUCCESSFUL.inc(),
-            UpdateType::Transaction => SHIPSTERN_TRANSACTIONS_SUCCESSFUL.inc(),
-            UpdateType::Instruction => SHIPSTERN_INSTRUCTIONS_SUCCESSFUL.inc(),
-            UpdateType::BlockMeta => SHIPSTERN_BLOCK_METAS_SUCCESSFUL.inc(),
-            UpdateType::BlockFooter => SHIPSTERN_BLOCK_FOOTERS_SUCCESSFUL.inc(),
-            UpdateType::Block => SHIPSTERN_BLOCK_SUCCESSFUL.inc(),
-            UpdateType::Slot => SHIPSTERN_SLOTS_SUCCESSFUL.inc(),
-            UpdateType::Unknown => (),
-        },
-        Err(PipelineErrors::Parse(_)) => match update_type {
+        Ok(true) => increment_successful(update_type),
+        Ok(false) => (),
+        Err(e) => increment_failed(e, update_type),
+    }
+}
+
+fn increment_successful(update_type: UpdateType) {
+    match update_type {
+        UpdateType::Account => SHIPSTERN_ACCOUNTS_SUCCESSFUL.inc(),
+        UpdateType::Transaction => SHIPSTERN_TRANSACTIONS_SUCCESSFUL.inc(),
+        UpdateType::Instruction => SHIPSTERN_INSTRUCTIONS_SUCCESSFUL.inc(),
+        UpdateType::BlockMeta => SHIPSTERN_BLOCK_METAS_SUCCESSFUL.inc(),
+        UpdateType::BlockFooter => SHIPSTERN_BLOCK_FOOTERS_SUCCESSFUL.inc(),
+        UpdateType::Block => SHIPSTERN_BLOCK_SUCCESSFUL.inc(),
+        UpdateType::Slot => SHIPSTERN_SLOTS_SUCCESSFUL.inc(),
+        UpdateType::Unknown => (),
+    }
+}
+
+pub(crate) fn increment_failed(error: &PipelineErrors, update_type: UpdateType) {
+    match error {
+        PipelineErrors::Parse(_) => match update_type {
             UpdateType::Account => SHIPSTERN_ACCOUNTS_PARSING_ERRORS.inc(),
             UpdateType::Transaction => SHIPSTERN_TRANSACTIONS_PARSING_ERRORS.inc(),
             UpdateType::Instruction => SHIPSTERN_INSTRUCTIONS_PARSING_ERRORS.inc(),
@@ -269,7 +282,7 @@ pub(crate) fn increment_processed_updates(
             UpdateType::Slot => SHIPSTERN_SLOTS_PARSING_ERRORS.inc(),
             UpdateType::Unknown => (),
         },
-        Err(PipelineErrors::Handlers(_)) => match update_type {
+        PipelineErrors::Handlers(_) => match update_type {
             UpdateType::Account => SHIPSTERN_ACCOUNTS_HANDLER_ERRORS.inc(),
             UpdateType::Transaction => SHIPSTERN_TRANSACTIONS_HANDLER_ERRORS.inc(),
             UpdateType::Instruction => SHIPSTERN_INSTRUCTIONS_HANDLER_ERRORS.inc(),
@@ -279,7 +292,7 @@ pub(crate) fn increment_processed_updates(
             UpdateType::Slot => SHIPSTERN_SLOTS_HANDLER_ERRORS.inc(),
             UpdateType::Unknown => (),
         },
-        _ => (),
+        PipelineErrors::AlreadyHandled(_) => (),
     }
 }
 

@@ -139,9 +139,20 @@ where
     /// # Errors
     /// If any of the related handlers executions errors, returns those errors
     pub async fn handle_value(&self, value: &P::Input) -> Result<(), PipelineErrors> {
+        self.handle_value_reporting_filtered(value)
+            .await
+            .map(|_| ())
+    }
+
+    /// [`Self::handle_value`], reporting whether the handlers ran. `false` means
+    /// the parser filtered the value out, so nothing was handled.
+    async fn handle_value_reporting_filtered(
+        &self,
+        value: &P::Input,
+    ) -> Result<bool, PipelineErrors> {
         let parsed = match self.parser.parse(value).await {
             Ok(p) => p,
-            Err(ParseError::Filtered) => return Ok(()),
+            Err(ParseError::Filtered) => return Ok(false),
             Err(ParseError::DiscriminatorNotFound(msg)) => {
                 return Err(PipelineErrors::Parse(msg.into()));
             },
@@ -162,7 +173,7 @@ where
             return Err(PipelineErrors::Handlers(errs));
         }
 
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -182,6 +193,13 @@ where
         Box<dyn Future<Output = Result<(), crate::handler::PipelineErrors>> + Send + 'h>,
     > {
         Box::pin(FilterPipeline::handle_value(self, value))
+    }
+
+    fn handle_reporting_filtered<'h>(
+        &'h self,
+        value: &'h P::Input,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<bool, PipelineErrors>> + Send + 'h>> {
+        Box::pin(FilterPipeline::handle_value_reporting_filtered(self, value))
     }
 
     fn client_filter(&self) -> Option<&TransactionPrefilter> {

@@ -35,3 +35,7 @@ yellowstone-grpc-proto = { workspace = true }
 default = []
 opentelemetry = ["dep:opentelemetry"]
 prometheus = ["dep:prometheus"]
+
+[[test]]
+name = "metrics"
+required-features = ["prometheus"]
