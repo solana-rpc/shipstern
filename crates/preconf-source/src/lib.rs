@@ -8,7 +8,10 @@
 use std::{collections::BTreeSet, time::Duration};
 
 use async_trait::async_trait;
-use futures_util::{future::Either, stream, Stream, StreamExt};
+use futures_util::{
+    future::{self, Either},
+    stream, Stream, StreamExt,
+};
 use shipstern::{
     sources::{FromConfig, SourceContext, SourceExitStatus, SourceTrait},
     Error as ShipsternError,
@@ -96,27 +99,37 @@ impl SourceTrait for PreconfSource {
             max_retries: config.reconnect_max_retries,
             subscribe_timeout: timeout,
         };
-        let mut framers = Vec::with_capacity(feeds.len());
-        let mut streams = Vec::with_capacity(feeds.len());
-        for (index, &feed) in feeds.iter().enumerate() {
+        // Every subscribe is opened at once, so an open stream is not left unread while a later
+        // one dials. The server closes a stream that falls behind.
+        let subscribes = feeds.iter().map(|&feed| {
             // One closure for the first subscribe and each resubscribe, so the two cannot drift.
             let open_stream = {
                 let (channel, interceptor) = (channel.clone(), interceptor.clone());
                 let request = filter::request(&transactions, feed.region());
                 move || subscribe(channel.clone(), interceptor.clone(), feed, request.clone())
             };
-            let first = reconnect::bounded(timeout, open_stream())
-                .await
-                .map_err(|status| {
-                    tracing::error!(
-                        ?feed,
-                        code = ?status.code(),
-                        message = status.message(),
-                        "Preconf source subscription failed"
-                    );
-                    ShipsternError::YellowstoneStatus(status)
-                })?;
-            tracing::info!(?feed, "Preconf source subscribed");
+
+            async move {
+                let first = reconnect::bounded(timeout, open_stream())
+                    .await
+                    .map_err(|status| {
+                        tracing::error!(
+                            ?feed,
+                            code = ?status.code(),
+                            message = status.message(),
+                            "Preconf source subscription failed"
+                        );
+                        ShipsternError::YellowstoneStatus(status)
+                    })?;
+                tracing::info!(?feed, "Preconf source subscribed");
+                Ok::<_, ShipsternError>((feed, first, open_stream))
+            }
+        });
+        let opened = future::try_join_all(subscribes).await?;
+
+        let mut framers = Vec::with_capacity(opened.len());
+        let mut streams = Vec::with_capacity(opened.len());
+        for (index, (feed, first, open_stream)) in opened.into_iter().enumerate() {
             framers.push(Framer::new(feed, vote_rules.clone()));
             // The unfold's step future is not `Unpin`, so one box per stream lets `select_all`
             // merge them.
@@ -427,6 +440,72 @@ mod tests {
             panic!("expected the server status, got {result:?}");
         };
         assert_eq!(status.code(), Code::Unauthenticated);
+    }
+
+    /// The subscribes go out together, so the first stream is not left unread while a later
+    /// one dials. The server answers neither until both have arrived.
+    #[tokio::test]
+    async fn every_feed_is_subscribed_at_once() {
+        use std::{
+            convert::Infallible,
+            future::Future,
+            pin::Pin,
+            sync::Arc,
+            task::{Context, Poll},
+        };
+
+        use tokio::sync::Barrier;
+        use tonic::{
+            body::Body,
+            codegen::{http, Service},
+            server::NamedService,
+            transport::{server::TcpIncoming, Server},
+        };
+
+        #[derive(Clone)]
+        struct AnswerTogether(Arc<Barrier>);
+
+        impl NamedService for AnswerTogether {
+            const NAME: &'static str = "preconfs.Harmonic";
+        }
+
+        impl Service<http::Request<Body>> for AnswerTogether {
+            type Error = Infallible;
+            type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Infallible>> + Send>>;
+            type Response = http::Response<Body>;
+
+            fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Infallible>> {
+                Poll::Ready(Ok(()))
+            }
+
+            fn call(&mut self, _: http::Request<Body>) -> Self::Future {
+                let barrier = self.0.clone();
+                Box::pin(async move {
+                    barrier.wait().await;
+                    Ok(Status::unauthenticated("not entitled").into_http())
+                })
+            }
+        }
+
+        let incoming = TcpIncoming::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let endpoint = format!("http://{}", incoming.local_addr().unwrap());
+        tokio::spawn(
+            Server::builder()
+                .add_service(AnswerTogether(Arc::new(Barrier::new(2))))
+                .serve_with_incoming(incoming),
+        );
+        let source = PreconfSource::from_config(PreconfConfig {
+            endpoint,
+            ..config(vec![HarmonicRegion::Fra, HarmonicRegion::Ams], vec![])
+        });
+
+        let result = connect(source, filters()).await;
+
+        // One at a time, the first subscribe waits for a second that never comes and times out.
+        let Err(shipstern::Error::YellowstoneStatus(status)) = result else {
+            panic!("expected the server status, got {result:?}");
+        };
+        assert_eq!(status.code(), Code::Unauthenticated, "{status:?}");
     }
 
     /// A token that a header cannot carry fails before the dial.
