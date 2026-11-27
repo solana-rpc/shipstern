@@ -392,7 +392,8 @@ fn render_enum_oneof(oneof_ir: &OneofIr, tag: &EnumTagIr) -> TokenStream {
             quote! { ::borsh::BorshDeserialize::deserialize_reader(reader)? },
         )
     };
-    let mod_ident = format_ident!("{}", crate::utils::to_snake_case(&oneof_ir.parent_message));
+    let mod_ident =
+        crate::utils::field_ident(&crate::utils::to_field_name(&oneof_ir.parent_message));
     let oneof_ident = format_ident!("Kind");
     let field_ident = format_ident!("{}", oneof_ir.field_name);
 
@@ -545,7 +546,7 @@ fn render_enum_oneof(oneof_ir: &OneofIr, tag: &EnumTagIr) -> TokenStream {
 /// and borsh helper paths get `super::` prefixed.
 ///
 pub fn render_field(f: &FieldIr, local_names: Option<&HashSet<&str>>) -> TokenStream {
-    let name = format_ident!("{}", f.name);
+    let name = crate::utils::field_ident(&f.name);
     let in_module = local_names.is_some();
     let path_prefix = if in_module { "super::" } else { "" };
 

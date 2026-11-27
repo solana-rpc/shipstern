@@ -1,6 +1,6 @@
 use codama_nodes::{EventNode, RootNode};
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 
 #[derive(Debug, Clone)]
 pub struct ParserConfig {
@@ -42,7 +42,8 @@ pub fn shipstern_parser(
     events: &[EventNode],
     config: &ParserConfig,
 ) -> TokenStream {
-    let program_mod_ident = format_ident!("{}", crate::utils::to_snake_case(&idl.program.name));
+    let program_mod_name = crate::utils::to_field_name(&idl.program.name);
+    let program_mod_ident = crate::utils::field_ident(&program_mod_name);
 
     let program_pubkey = crate::render::program_pubkey(&idl.program.public_key);
 
@@ -99,11 +100,8 @@ pub fn shipstern_parser(
     let program_name_pascal = crate::utils::to_pascal_case(&idl.program.name);
 
     let proto_schema = if cfg!(feature = "proto") {
-        let output = crate::render::proto_schema_string(
-            &schema_ir,
-            &program_mod_ident.to_string(),
-            &program_name_pascal,
-        );
+        let output =
+            crate::render::proto_schema_string(&schema_ir, &program_mod_name, &program_name_pascal);
 
         let proto_lit = syn::LitStr::new(&output.schema, proc_macro2::Span::call_site());
 

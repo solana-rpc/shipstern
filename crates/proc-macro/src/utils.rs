@@ -53,6 +53,43 @@ pub fn to_snake_case(s: &str) -> String {
     out
 }
 
+const KEYWORDS: &[&str] = &[
+    "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "do", "dyn",
+    "else", "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl", "in", "let",
+    "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref", "return",
+    "static", "struct", "trait", "true", "try", "type", "typeof", "unsafe", "unsized", "use",
+    "virtual", "where", "while", "yield",
+];
+
+/// Keywords that `r#` cannot escape.
+const UNRAW_KEYWORDS: &[&str] = &["crate", "self", "Self", "super"];
+
+///
+/// Convert an IDL account or argument name to the snake_case name of a field.
+///
+/// A keyword that cannot be a raw identifier gets a trailing `_`. Other keywords
+/// stay as they are and become raw identifiers in `field_ident`, so the protobuf
+/// field name keeps the IDL spelling.
+///
+pub fn to_field_name(s: &str) -> String {
+    let name = to_snake_case(s);
+
+    if UNRAW_KEYWORDS.contains(&name.as_str()) {
+        return format!("{name}_");
+    }
+
+    name
+}
+
+/// The identifier of a struct field or local named `name`.
+pub fn field_ident(name: &str) -> proc_macro2::Ident {
+    if KEYWORDS.contains(&name) {
+        return proc_macro2::Ident::new_raw(name, proc_macro2::Span::call_site());
+    }
+
+    quote::format_ident!("{}", name)
+}
+
 pub fn to_pascal_case(str: &str) -> String {
     let mut result = String::with_capacity(str.len());
     let mut capitalize_next = true;
