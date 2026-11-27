@@ -1,0 +1,42 @@
+{
+  "kind": "rootNode",
+  "standard": "codama",
+  "version": "1.6.0",
+  "program": {
+    "kind": "programNode",
+    "name": "helperNameCollision",
+    "publicKey": "11111111111111111111111111111111",
+    "version": "0.1.0",
+    "accounts": [],
+    "instructions": [
+      {
+        "kind": "instructionNode",
+        "name": "ABC",
+        "accounts": [],
+        "arguments": [],
+        "discriminators": [
+          {
+            "kind": "sizeDiscriminatorNode",
+            "size": 1
+          }
+        ]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "Abc",
+        "accounts": [],
+        "arguments": [],
+        "discriminators": [
+          {
+            "kind": "sizeDiscriminatorNode",
+            "size": 2
+          }
+        ]
+      }
+    ],
+    "definedTypes": [],
+    "errors": [],
+    "constants": []
+  },
+  "additionalPrograms": []
+}
