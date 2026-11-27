@@ -97,7 +97,7 @@ fn main() {
 RUST_LOG=info cargo run -- --config "./Shipstern.toml"
 ```
 
-Metrics are collected into a `prometheus::Registry` you hand to the runtime with `.metrics(registry)`. The runtime serves no HTTP endpoint of its own; push the gathered metrics to a Pushgateway, as [`examples/prometheus`](./examples/prometheus) does on a 30-second interval. `docker-compose.yaml` starts a Pushgateway on `:9091` and a Prometheus that scrapes it, so the metrics show up at `http://localhost:9090`.
+Metrics are collected into a `prometheus::Registry` you hand to the runtime with `.metrics(registry)`. The method exists only with the `prometheus` feature of `shipstern`: `shipstern = { version = "0.13.0", features = ["prometheus"] }`. The runtime serves no HTTP endpoint of its own; push the gathered metrics to a Pushgateway, as [`examples/prometheus`](./examples/prometheus) does on a 30-second interval. `docker-compose.yaml` starts a Pushgateway on `:9091` and a Prometheus that scrapes it, so the metrics show up at `http://localhost:9090`.
 
 To run prometheus, you need to have docker and docker-compose installed on your machine. To start the services, run the following command:
 
