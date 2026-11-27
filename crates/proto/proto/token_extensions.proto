@@ -232,6 +232,200 @@ message TransferFeeIx {
   }
 }
 
+// ── Scaled UI Amount Extension ─────────────────────────────────────
+
+message ScaledUiAmountInitializeAccounts {
+  shipstern.parser.token.PublicKey mint = 1;
+}
+
+message ScaledUiAmountInitializeArgs {
+  optional shipstern.parser.token.PublicKey authority = 1;
+  double multiplier = 2;
+}
+
+message UpdateMultiplierAccounts {
+  shipstern.parser.token.PublicKey mint = 1;
+  shipstern.parser.token.PublicKey authority = 2;
+  repeated shipstern.parser.token.PublicKey multisig_signers = 3;
+}
+
+message UpdateMultiplierArgs {
+  double multiplier = 1;
+  int64 effective_timestamp = 2;
+}
+
+message ScaledUiAmountIx {
+  message Initialize {
+    ScaledUiAmountInitializeAccounts accounts = 1;
+    ScaledUiAmountInitializeArgs args = 2;
+  }
+  message UpdateMultiplier {
+    UpdateMultiplierAccounts accounts = 1;
+    UpdateMultiplierArgs args = 2;
+  }
+
+  oneof instruction {
+    Initialize initialize = 1;
+    UpdateMultiplier update_multiplier = 2;
+  }
+}
+
+// ── Pausable Extension ─────────────────────────────────────────────
+
+message PausableInitializeAccounts {
+  shipstern.parser.token.PublicKey mint = 1;
+}
+
+message PausableInitializeArgs {
+  shipstern.parser.token.PublicKey authority = 1;
+}
+
+message PauseAccounts {
+  shipstern.parser.token.PublicKey mint = 1;
+  shipstern.parser.token.PublicKey authority = 2;
+  repeated shipstern.parser.token.PublicKey multisig_signers = 3;
+}
+
+message ResumeAccounts {
+  shipstern.parser.token.PublicKey mint = 1;
+  shipstern.parser.token.PublicKey authority = 2;
+  repeated shipstern.parser.token.PublicKey multisig_signers = 3;
+}
+
+message PausableIx {
+  message Initialize {
+    PausableInitializeAccounts accounts = 1;
+    PausableInitializeArgs args = 2;
+  }
+  message Pause {
+    PauseAccounts accounts = 1;
+  }
+  message Resume {
+    ResumeAccounts accounts = 1;
+  }
+
+  oneof instruction {
+    Initialize initialize = 1;
+    Pause pause = 2;
+    Resume resume = 3;
+  }
+}
+
+// ── Confidential Mint Burn Extension ───────────────────────────────
+
+message ConfidentialMintBurnInitializeMintAccounts {
+  shipstern.parser.token.PublicKey mint = 1;
+}
+
+message ConfidentialMintBurnInitializeMintArgs {
+  bytes supply_elgamal_pubkey = 1;
+  bytes decryptable_supply = 2;
+}
+
+message RotateSupplyElGamalPubkeyAccounts {
+  shipstern.parser.token.PublicKey mint = 1;
+  optional shipstern.parser.token.PublicKey instructions_sysvar = 2;
+  optional shipstern.parser.token.PublicKey equality_context = 3;
+  shipstern.parser.token.PublicKey authority = 4;
+  repeated shipstern.parser.token.PublicKey multisig_signers = 5;
+}
+
+message RotateSupplyElGamalPubkeyArgs {
+  bytes new_supply_elgamal_pubkey = 1;
+  int32 proof_instruction_offset = 2;
+}
+
+message UpdateDecryptableSupplyAccounts {
+  shipstern.parser.token.PublicKey mint = 1;
+  shipstern.parser.token.PublicKey authority = 2;
+  repeated shipstern.parser.token.PublicKey multisig_signers = 3;
+}
+
+message UpdateDecryptableSupplyArgs {
+  bytes new_decryptable_supply = 1;
+}
+
+message ConfidentialMintAccounts {
+  shipstern.parser.token.PublicKey token_account = 1;
+  shipstern.parser.token.PublicKey mint = 2;
+  optional shipstern.parser.token.PublicKey instructions_sysvar = 3;
+  optional shipstern.parser.token.PublicKey equality_context = 4;
+  optional shipstern.parser.token.PublicKey ciphertext_validity_context = 5;
+  optional shipstern.parser.token.PublicKey range_context = 6;
+  shipstern.parser.token.PublicKey authority = 7;
+  repeated shipstern.parser.token.PublicKey multisig_signers = 8;
+}
+
+message ConfidentialMintArgs {
+  bytes new_decryptable_supply = 1;
+  bytes mint_amount_auditor_ciphertext_lo = 2;
+  bytes mint_amount_auditor_ciphertext_hi = 3;
+  int32 equality_proof_instruction_offset = 4;
+  int32 ciphertext_validity_proof_instruction_offset = 5;
+  int32 range_proof_instruction_offset = 6;
+}
+
+message ConfidentialBurnAccounts {
+  shipstern.parser.token.PublicKey token_account = 1;
+  shipstern.parser.token.PublicKey mint = 2;
+  optional shipstern.parser.token.PublicKey instructions_sysvar = 3;
+  optional shipstern.parser.token.PublicKey equality_context = 4;
+  optional shipstern.parser.token.PublicKey ciphertext_validity_context = 5;
+  optional shipstern.parser.token.PublicKey range_context = 6;
+  shipstern.parser.token.PublicKey owner = 7;
+  repeated shipstern.parser.token.PublicKey multisig_signers = 8;
+}
+
+message ConfidentialBurnArgs {
+  bytes new_decryptable_available_balance = 1;
+  bytes burn_amount_auditor_ciphertext_lo = 2;
+  bytes burn_amount_auditor_ciphertext_hi = 3;
+  int32 equality_proof_instruction_offset = 4;
+  int32 ciphertext_validity_proof_instruction_offset = 5;
+  int32 range_proof_instruction_offset = 6;
+}
+
+message ApplyPendingBurnAccounts {
+  shipstern.parser.token.PublicKey mint = 1;
+  shipstern.parser.token.PublicKey authority = 2;
+  repeated shipstern.parser.token.PublicKey multisig_signers = 3;
+}
+
+message ConfidentialMintBurnIx {
+  message InitializeMint {
+    ConfidentialMintBurnInitializeMintAccounts accounts = 1;
+    ConfidentialMintBurnInitializeMintArgs args = 2;
+  }
+  message RotateSupplyElGamalPubkey {
+    RotateSupplyElGamalPubkeyAccounts accounts = 1;
+    RotateSupplyElGamalPubkeyArgs args = 2;
+  }
+  message UpdateDecryptableSupply {
+    UpdateDecryptableSupplyAccounts accounts = 1;
+    UpdateDecryptableSupplyArgs args = 2;
+  }
+  message Mint {
+    ConfidentialMintAccounts accounts = 1;
+    ConfidentialMintArgs args = 2;
+  }
+  message Burn {
+    ConfidentialBurnAccounts accounts = 1;
+    ConfidentialBurnArgs args = 2;
+  }
+  message ApplyPendingBurn {
+    ApplyPendingBurnAccounts accounts = 1;
+  }
+
+  oneof instruction {
+    InitializeMint initialize_mint = 1;
+    RotateSupplyElGamalPubkey rotate_supply_elgamal_pubkey = 2;
+    UpdateDecryptableSupply update_decryptable_supply = 3;
+    Mint mint = 4;
+    Burn burn = 5;
+    ApplyPendingBurn apply_pending_burn = 6;
+  }
+}
+
 // ── Token Metadata Extension ───────────────────────────────────────
 
 message InitializeAccounts {
@@ -722,6 +916,18 @@ message TransferHookInstruction {
   CommonExtensionInstructions instruction = 1;
 }
 
+message ScaledUiAmountInstruction {
+  ScaledUiAmountIx instruction = 1;
+}
+
+message PausableInstruction {
+  PausableIx instruction = 1;
+}
+
+message ConfidentialMintBurnInstruction {
+  ConfidentialMintBurnIx instruction = 1;
+}
+
 message TokenMetadataInstruction {
   TokenMetadataIx instruction = 1;
 }
@@ -755,5 +961,8 @@ message TokenExtensionProgram {
     TransferHookInstruction transfer_hook = 19;
     TokenMetadataInstruction token_metadata = 20;
     TokenGroupInstruction token_group = 21;
+    ScaledUiAmountInstruction scaled_ui_amount = 22;
+    PausableInstruction pausable = 23;
+    ConfidentialMintBurnInstruction confidential_mint_burn = 24;
   }
 }

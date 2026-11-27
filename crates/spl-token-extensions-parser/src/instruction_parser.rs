@@ -11,8 +11,9 @@ use spl_token_metadata_interface::instruction::TokenMetadataInstruction as SplTo
 
 use crate::{
     extensions::{
-        CommonExtensionInstructions, ConfidentialTransferFeeIx, ConfidentialTransferIx,
-        ExtensionWithCommonInstruction, TokenGroupIx, TokenMetadataIx, TransferFeeIx,
+        CommonExtensionInstructions, ConfidentialMintBurnIx, ConfidentialTransferFeeIx,
+        ConfidentialTransferIx, ExtensionWithCommonInstruction, PausableIx, ScaledUiAmountIx,
+        TokenGroupIx, TokenMetadataIx, TransferFeeIx,
     },
     instructions::{
         CreateNativeMintAccounts, InitializeMintCloseAuthorityAccounts,
@@ -209,6 +210,38 @@ impl InstructionParser {
                             instruction: Some(parsed),
                         },
                     )))
+                },
+
+                SplTokenInstruction::ScaledUiAmountExtension => {
+                    let parsed = ScaledUiAmountIx::try_parse(ix)?;
+
+                    Ok(envelope!(crate::instruction::Instruction::ScaledUiAmount(
+                        crate::instruction::ScaledUiAmount {
+                            instruction: Some(parsed),
+                        },
+                    )))
+                },
+
+                SplTokenInstruction::PausableExtension => {
+                    let parsed = PausableIx::try_parse(ix)?;
+
+                    Ok(envelope!(crate::instruction::Instruction::Pausable(
+                        crate::instruction::Pausable {
+                            instruction: Some(parsed),
+                        },
+                    )))
+                },
+
+                SplTokenInstruction::ConfidentialMintBurnExtension => {
+                    let parsed = ConfidentialMintBurnIx::try_parse(ix)?;
+
+                    Ok(envelope!(
+                        crate::instruction::Instruction::ConfidentialMintBurn(
+                            crate::instruction::ConfidentialMintBurn {
+                                instruction: Some(parsed),
+                            },
+                        )
+                    ))
                 },
 
                 SplTokenInstruction::SetAuthority {
@@ -447,5 +480,422 @@ mod tests {
         let res = InstructionParser.parse(&ix).await;
 
         assert!(matches!(res, Err(ParseError::Filtered)), "{res:?}");
+    }
+
+    fn key(n: u8) -> solana_pubkey::Pubkey { solana_pubkey::Pubkey::new_from_array([n; 32]) }
+
+    fn update_from(ix: &solana_instruction::Instruction) -> InstructionUpdate {
+        InstructionUpdate {
+            program: shipstern_core::Pubkey::new(ix.program_id.to_bytes()),
+            accounts: ix
+                .accounts
+                .iter()
+                .map(|m| shipstern_core::Pubkey::new(m.pubkey.to_bytes()))
+                .collect(),
+            data: ix.data.clone(),
+            shared: Default::default(),
+            inner: vec![],
+            path: Path::new_single(0),
+            log_range: 0..0,
+        }
+    }
+
+    fn pk(n: u8) -> shipstern_core::Pubkey { shipstern_core::Pubkey::new([n; 32]) }
+
+    #[tokio::test]
+    async fn scaled_ui_amount_instructions_parse() {
+        use crate::extensions::scaled_ui_amount_instruction::Instruction as Ix;
+
+        let init = spl_token_2022::extension::scaled_ui_amount::instruction::initialize(
+            &spl_token_2022::ID,
+            &key(1),
+            Some(key(2)),
+            1.5,
+        )
+        .unwrap();
+        let update = spl_token_2022::extension::scaled_ui_amount::instruction::update_multiplier(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &[&key(3)],
+            2.5,
+            1_700_000_000,
+        )
+        .unwrap();
+
+        let Some(crate::instruction::Instruction::ScaledUiAmount(init)) = InstructionParser
+            .parse(&update_from(&init))
+            .await
+            .unwrap()
+            .instruction
+        else {
+            panic!("expected ScaledUiAmount");
+        };
+        let Some(Ix::Initialize(init)) = init.instruction.and_then(|i| i.instruction) else {
+            panic!("expected Initialize");
+        };
+
+        assert_eq!(init.accounts.mint, pk(1));
+        assert_eq!(init.args.authority, Some(pk(2)));
+        assert_eq!(init.args.multiplier, 1.5);
+
+        let Some(crate::instruction::Instruction::ScaledUiAmount(update)) = InstructionParser
+            .parse(&update_from(&update))
+            .await
+            .unwrap()
+            .instruction
+        else {
+            panic!("expected ScaledUiAmount");
+        };
+        let Some(Ix::UpdateMultiplier(update)) = update.instruction.and_then(|i| i.instruction)
+        else {
+            panic!("expected UpdateMultiplier");
+        };
+
+        assert_eq!(update.accounts.authority, pk(2));
+        assert_eq!(update.accounts.multisig_signers, vec![pk(3)]);
+        assert_eq!(update.args.multiplier, 2.5);
+        assert_eq!(update.args.effective_timestamp, 1_700_000_000);
+    }
+
+    #[tokio::test]
+    async fn pausable_instructions_parse() {
+        use crate::extensions::pausable_instruction::Instruction as Ix;
+
+        let init = spl_token_2022::extension::pausable::instruction::initialize(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+        )
+        .unwrap();
+        let pause = spl_token_2022::extension::pausable::instruction::pause(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &[&key(3)],
+        )
+        .unwrap();
+        let resume = spl_token_2022::extension::pausable::instruction::resume(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &[],
+        )
+        .unwrap();
+
+        let mut parsed = vec![];
+        for ix in [&init, &pause, &resume] {
+            let Some(crate::instruction::Instruction::Pausable(p)) = InstructionParser
+                .parse(&update_from(ix))
+                .await
+                .unwrap()
+                .instruction
+            else {
+                panic!("expected Pausable");
+            };
+            parsed.push(
+                p.instruction
+                    .and_then(|i| i.instruction)
+                    .expect("empty pausable ix"),
+            );
+        }
+
+        let [Ix::Initialize(init), Ix::Pause(pause), Ix::Resume(resume)] = &parsed[..] else {
+            panic!("unexpected variants");
+        };
+
+        assert_eq!(init.accounts.mint, pk(1));
+        assert_eq!(init.args.authority, pk(2));
+        assert_eq!(pause.accounts.authority, pk(2));
+        assert_eq!(pause.accounts.multisig_signers, vec![pk(3)]);
+        assert!(resume.accounts.multisig_signers.is_empty());
+    }
+
+    async fn parse_confidential_mint_burn(
+        ix: &solana_instruction::Instruction,
+    ) -> crate::extensions::confidential_mint_burn_instruction::Instruction {
+        let Some(crate::instruction::Instruction::ConfidentialMintBurn(c)) = InstructionParser
+            .parse(&update_from(ix))
+            .await
+            .unwrap()
+            .instruction
+        else {
+            panic!("expected ConfidentialMintBurn");
+        };
+
+        c.instruction
+            .and_then(|i| i.instruction)
+            .expect("empty confidential mint burn ix")
+    }
+
+    #[tokio::test]
+    async fn confidential_mint_burn_supply_instructions_parse() {
+        use spl_token_2022::extension::confidential_mint_burn::instruction::{
+            apply_pending_burn, initialize_mint, rotate_supply_elgamal_pubkey,
+            update_decryptable_supply,
+        };
+        use spl_token_confidential_transfer_proof_extraction::instruction::ProofLocation;
+
+        use crate::extensions::confidential_mint_burn_instruction::Instruction as Ix;
+
+        let init = initialize_mint(
+            &spl_token_2022::ID,
+            &key(1),
+            &bytemuck::cast([5u8; 32]),
+            &bytemuck::pod_read_unaligned(&[6u8; 36]),
+        )
+        .unwrap();
+        let Ix::InitializeMint(init) = parse_confidential_mint_burn(&init).await else {
+            panic!("expected InitializeMint");
+        };
+        assert_eq!(init.accounts.mint, pk(1));
+        assert_eq!(init.args.supply_elgamal_pubkey, vec![5u8; 32]);
+        assert_eq!(init.args.decryptable_supply, vec![6u8; 36]);
+
+        // Proof in the same transaction: account 1 is the instructions sysvar.
+        let rotate = rotate_supply_elgamal_pubkey(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &[&key(3), &key(4)],
+            &bytemuck::cast([7u8; 32]),
+            ProofLocation::InstructionOffset(
+                std::num::NonZeroI8::new(1).unwrap(),
+                &bytemuck::Zeroable::zeroed(),
+            ),
+        )
+        .unwrap();
+        let Ix::RotateSupplyElGamalPubkey(rotate) = parse_confidential_mint_burn(&rotate[0]).await
+        else {
+            panic!("expected RotateSupplyElGamalPubkey");
+        };
+        assert_eq!(rotate.accounts.mint, pk(1));
+        assert!(rotate.accounts.instructions_sysvar.is_some());
+        assert_eq!(rotate.accounts.equality_context, None);
+        assert_eq!(rotate.accounts.authority, pk(2));
+        assert_eq!(rotate.accounts.multisig_signers, vec![pk(3), pk(4)]);
+        assert_eq!(rotate.args.new_supply_elgamal_pubkey, vec![7u8; 32]);
+        assert_eq!(rotate.args.proof_instruction_offset, 1);
+
+        // Pre-verified proof: account 1 is the context state account.
+        let rotate = rotate_supply_elgamal_pubkey(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &[],
+            &bytemuck::cast([7u8; 32]),
+            ProofLocation::ContextStateAccount(&key(9)),
+        )
+        .unwrap();
+        let Ix::RotateSupplyElGamalPubkey(rotate) = parse_confidential_mint_burn(&rotate[0]).await
+        else {
+            panic!("expected RotateSupplyElGamalPubkey");
+        };
+        assert_eq!(rotate.accounts.instructions_sysvar, None);
+        assert_eq!(rotate.accounts.equality_context, Some(pk(9)));
+        assert_eq!(rotate.accounts.authority, pk(2));
+        assert!(rotate.accounts.multisig_signers.is_empty());
+        assert_eq!(rotate.args.proof_instruction_offset, 0);
+
+        let update = update_decryptable_supply(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &[&key(3)],
+            &bytemuck::pod_read_unaligned(&[8u8; 36]),
+        )
+        .unwrap();
+        let Ix::UpdateDecryptableSupply(update) = parse_confidential_mint_burn(&update).await
+        else {
+            panic!("expected UpdateDecryptableSupply");
+        };
+        assert_eq!(update.accounts.mint, pk(1));
+        assert_eq!(update.accounts.authority, pk(2));
+        assert_eq!(update.accounts.multisig_signers, vec![pk(3)]);
+        assert_eq!(update.args.new_decryptable_supply, vec![8u8; 36]);
+
+        let apply = apply_pending_burn(&spl_token_2022::ID, &key(1), &key(2), &[&key(3)]).unwrap();
+        let Ix::ApplyPendingBurn(apply) = parse_confidential_mint_burn(&apply).await else {
+            panic!("expected ApplyPendingBurn");
+        };
+        assert_eq!(apply.accounts.mint, pk(1));
+        assert_eq!(apply.accounts.authority, pk(2));
+        assert_eq!(apply.accounts.multisig_signers, vec![pk(3)]);
+    }
+
+    #[tokio::test]
+    async fn confidential_mint_reads_proof_accounts_from_offsets() {
+        use std::num::NonZeroI8;
+
+        use spl_token_2022::extension::confidential_mint_burn::instruction::inner_confidential_mint;
+        use spl_token_confidential_transfer_proof_extraction::instruction::ProofLocation;
+
+        use crate::extensions::confidential_mint_burn_instruction::Instruction as Ix;
+
+        // All proofs pre-verified: three context accounts, no sysvar.
+        let mint = inner_confidential_mint(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &bytemuck::cast([5u8; 64]),
+            &bytemuck::cast([6u8; 64]),
+            &key(3),
+            &[&key(4), &key(5)],
+            ProofLocation::ContextStateAccount(&key(10)),
+            ProofLocation::ContextStateAccount(&key(11)),
+            ProofLocation::ContextStateAccount(&key(12)),
+            &bytemuck::pod_read_unaligned(&[7u8; 36]),
+        )
+        .unwrap();
+        let Ix::Mint(mint) = parse_confidential_mint_burn(&mint).await else {
+            panic!("expected Mint");
+        };
+        assert_eq!(mint.accounts.token_account, pk(1));
+        assert_eq!(mint.accounts.mint, pk(2));
+        assert_eq!(mint.accounts.instructions_sysvar, None);
+        assert_eq!(mint.accounts.equality_context, Some(pk(10)));
+        assert_eq!(mint.accounts.ciphertext_validity_context, Some(pk(11)));
+        assert_eq!(mint.accounts.range_context, Some(pk(12)));
+        assert_eq!(mint.accounts.authority, pk(3));
+        assert_eq!(mint.accounts.multisig_signers, vec![pk(4), pk(5)]);
+        assert_eq!(mint.args.new_decryptable_supply, vec![7u8; 36]);
+        assert_eq!(mint.args.mint_amount_auditor_ciphertext_lo, vec![5u8; 64]);
+        assert_eq!(mint.args.mint_amount_auditor_ciphertext_hi, vec![6u8; 64]);
+
+        // Mixed: equality and range in the transaction, validity pre-verified.
+        let mint = inner_confidential_mint(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &bytemuck::cast([5u8; 64]),
+            &bytemuck::cast([6u8; 64]),
+            &key(3),
+            &[],
+            ProofLocation::InstructionOffset(
+                NonZeroI8::new(1).unwrap(),
+                &bytemuck::Zeroable::zeroed(),
+            ),
+            ProofLocation::ContextStateAccount(&key(11)),
+            ProofLocation::InstructionOffset(
+                NonZeroI8::new(2).unwrap(),
+                &bytemuck::Zeroable::zeroed(),
+            ),
+            &bytemuck::pod_read_unaligned(&[7u8; 36]),
+        )
+        .unwrap();
+        let Ix::Mint(mint) = parse_confidential_mint_burn(&mint).await else {
+            panic!("expected Mint");
+        };
+        assert!(mint.accounts.instructions_sysvar.is_some());
+        assert_eq!(mint.accounts.equality_context, None);
+        assert_eq!(mint.accounts.ciphertext_validity_context, Some(pk(11)));
+        assert_eq!(mint.accounts.range_context, None);
+        assert_eq!(mint.accounts.authority, pk(3));
+        assert!(mint.accounts.multisig_signers.is_empty());
+        assert_eq!(mint.args.equality_proof_instruction_offset, 1);
+        assert_eq!(mint.args.ciphertext_validity_proof_instruction_offset, 0);
+        assert_eq!(mint.args.range_proof_instruction_offset, 2);
+    }
+
+    #[tokio::test]
+    async fn confidential_burn_reads_proof_accounts_from_offsets() {
+        use std::num::NonZeroI8;
+
+        use spl_token_2022::extension::confidential_mint_burn::instruction::inner_confidential_burn;
+        use spl_token_confidential_transfer_proof_extraction::instruction::ProofLocation;
+
+        use crate::extensions::confidential_mint_burn_instruction::Instruction as Ix;
+
+        // All proofs in the transaction: only the sysvar sits before the owner.
+        let burn = inner_confidential_burn(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &bytemuck::pod_read_unaligned(&[7u8; 36]),
+            &bytemuck::cast([5u8; 64]),
+            &bytemuck::cast([6u8; 64]),
+            &key(3),
+            &[&key(4)],
+            ProofLocation::InstructionOffset(
+                NonZeroI8::new(1).unwrap(),
+                &bytemuck::Zeroable::zeroed(),
+            ),
+            ProofLocation::InstructionOffset(
+                NonZeroI8::new(2).unwrap(),
+                &bytemuck::Zeroable::zeroed(),
+            ),
+            ProofLocation::InstructionOffset(
+                NonZeroI8::new(3).unwrap(),
+                &bytemuck::Zeroable::zeroed(),
+            ),
+        )
+        .unwrap();
+        let Ix::Burn(burn) = parse_confidential_mint_burn(&burn).await else {
+            panic!("expected Burn");
+        };
+        assert_eq!(burn.accounts.token_account, pk(1));
+        assert_eq!(burn.accounts.mint, pk(2));
+        assert!(burn.accounts.instructions_sysvar.is_some());
+        assert_eq!(burn.accounts.equality_context, None);
+        assert_eq!(burn.accounts.ciphertext_validity_context, None);
+        assert_eq!(burn.accounts.range_context, None);
+        assert_eq!(burn.accounts.owner, pk(3));
+        assert_eq!(burn.accounts.multisig_signers, vec![pk(4)]);
+        assert_eq!(burn.args.new_decryptable_available_balance, vec![7u8; 36]);
+        assert_eq!(burn.args.burn_amount_auditor_ciphertext_lo, vec![5u8; 64]);
+        assert_eq!(burn.args.burn_amount_auditor_ciphertext_hi, vec![6u8; 64]);
+        assert_eq!(burn.args.range_proof_instruction_offset, 3);
+
+        // Mixed: equality pre-verified, validity in the transaction, range pre-verified.
+        let burn = inner_confidential_burn(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &bytemuck::pod_read_unaligned(&[7u8; 36]),
+            &bytemuck::cast([5u8; 64]),
+            &bytemuck::cast([6u8; 64]),
+            &key(3),
+            &[],
+            ProofLocation::ContextStateAccount(&key(10)),
+            ProofLocation::InstructionOffset(
+                NonZeroI8::new(1).unwrap(),
+                &bytemuck::Zeroable::zeroed(),
+            ),
+            ProofLocation::ContextStateAccount(&key(12)),
+        )
+        .unwrap();
+        let Ix::Burn(burn) = parse_confidential_mint_burn(&burn).await else {
+            panic!("expected Burn");
+        };
+        assert!(burn.accounts.instructions_sysvar.is_some());
+        assert_eq!(burn.accounts.equality_context, Some(pk(10)));
+        assert_eq!(burn.accounts.ciphertext_validity_context, None);
+        assert_eq!(burn.accounts.range_context, Some(pk(12)));
+        assert_eq!(burn.accounts.owner, pk(3));
+        assert!(burn.accounts.multisig_signers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn confidential_burn_without_the_owner_is_rejected() {
+        use spl_token_2022::extension::confidential_mint_burn::instruction::inner_confidential_burn;
+        use spl_token_confidential_transfer_proof_extraction::instruction::ProofLocation;
+
+        let mut burn = inner_confidential_burn(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &bytemuck::pod_read_unaligned(&[7u8; 36]),
+            &bytemuck::cast([5u8; 64]),
+            &bytemuck::cast([6u8; 64]),
+            &key(3),
+            &[],
+            ProofLocation::ContextStateAccount(&key(10)),
+            ProofLocation::ContextStateAccount(&key(11)),
+            ProofLocation::ContextStateAccount(&key(12)),
+        )
+        .unwrap();
+        burn.accounts.pop();
+
+        assert!(InstructionParser.parse(&update_from(&burn)).await.is_err());
     }
 }
