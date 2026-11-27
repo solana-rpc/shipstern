@@ -1345,85 +1345,6 @@ mod tests {
         )));
     }
 
-    /// Drive `run_stream` with an `open` that returns `opened`, drop the receiver after 20 ms,
-    /// and give the run 2 s to notice. A backoff would otherwise last up to 10 s.
-    async fn exit_after_receiver_drop(
-        mut opened: impl FnMut(u32) -> Option<Vec<Result<SubscribeUpdate, Status>>>,
-        backoff: Duration,
-    ) -> Option<Result<SourceExitStatus, ShipsternError>> {
-        let config = config_from(
-            "endpoint = \"https://example.rpcpool.com\"\ntimeout = 60\ncommitment-level = \
-             \"confirmed\"",
-        );
-        let (tx, rx) = mpsc::channel(64);
-        let (_filters_tx, filters_rx) = watch::channel(filters_owned_by(1));
-        let mut opens = 0;
-        let open = |_request: SubscribeRequest| {
-            opens += 1;
-            let result = match opened(opens) {
-                Some(items) => {
-                    let sink = Box::pin(futures_util::sink::unfold((), |(), _request| {
-                        std::future::ready(Ok::<_, Rejected>(()))
-                    }));
-                    let stream = futures_util::stream::iter(items)
-                        .chain(futures_util::stream::pending())
-                        .boxed();
-                    Ok((sink, stream))
-                },
-                None => Err(ShipsternError::Other("the open failed".into())),
-            };
-            std::future::ready(result)
-        };
-
-        let run = run_stream(
-            &config,
-            ReconnectMode::SlotResume,
-            Some(Backoff::new(backoff, 1.0, 5)),
-            filters_owned_by(1),
-            tx,
-            Some(filters_rx),
-            open,
-        );
-        let dropper = async move {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            drop(rx);
-            std::future::pending::<()>().await;
-        };
-
-        tokio::time::timeout(Duration::from_secs(2), async {
-            tokio::select! {
-                out = run => out,
-                () = dropper => unreachable!(),
-            }
-        })
-        .await
-        .ok()
-    }
-
-    fn is_receiver_dropped(exit: &Option<Result<SourceExitStatus, ShipsternError>>) -> bool {
-        matches!(exit, Some(Ok(SourceExitStatus::ReceiverDropped)))
-    }
-
-    /// A stream with nothing to send never fails a send, so only watching the receiver ends it.
-    #[tokio::test]
-    async fn quiet_stream_stops_when_the_receiver_drops() {
-        let exit = exit_after_receiver_drop(|_| Some(Vec::new()), Duration::ZERO).await;
-
-        assert!(is_receiver_dropped(&exit), "{exit:?}");
-    }
-
-    /// The wait before a reconnect sends nothing either.
-    #[tokio::test]
-    async fn backoff_stops_when_the_receiver_drops() {
-        let exit = exit_after_receiver_drop(
-            |n| (n == 1).then(|| vec![Ok(transaction(100, 1)), Err(Status::unavailable("cut"))]),
-            Duration::from_secs(60),
-        )
-        .await;
-
-        assert!(is_receiver_dropped(&exit), "{exit:?}");
-    }
-
     fn ping() -> SubscribeUpdate {
         SubscribeUpdate {
             update_oneof: Some(UpdateOneof::Ping(Default::default())),
@@ -1736,6 +1657,87 @@ mod tests {
         let request =
             build_subscribe_request(Filters::new(HashMap::new()), &config, ReconnectMode::Off);
         assert!(!request.slots.contains_key(RESUME_FILTER_KEY));
+    }
+
+    /// Drive `run_stream` with an `open` that returns `opened`, drop the receiver after 20 ms,
+    /// and give the run 2 s to notice. A backoff would otherwise last up to 10 s.
+    // `.into()` is a no-op today and keeps this compiling if the receiver parameter changes type.
+    #[allow(clippy::useless_conversion)]
+    async fn exit_after_receiver_drop(
+        mut opened: impl FnMut(u32) -> Option<Vec<Result<SubscribeUpdate, Status>>>,
+        backoff: Duration,
+    ) -> Option<Result<SourceExitStatus, ShipsternError>> {
+        let config = config_from(
+            "endpoint = \"https://example.rpcpool.com\"\ntimeout = 60\ncommitment-level = \
+             \"confirmed\"",
+        );
+        let (tx, rx) = mpsc::channel(64);
+        let (_filters_tx, filters_rx) = watch::channel(filters_owned_by(1));
+        let mut opens = 0;
+        let open = |_request: SubscribeRequest| {
+            opens += 1;
+            let result = match opened(opens) {
+                Some(items) => {
+                    let sink = Box::pin(futures_util::sink::unfold((), |(), _request| {
+                        std::future::ready(Ok::<_, Rejected>(()))
+                    }));
+                    let stream = futures_util::stream::iter(items)
+                        .chain(futures_util::stream::pending())
+                        .boxed();
+                    Ok((sink, stream))
+                },
+                None => Err(ShipsternError::Other("the open failed".into())),
+            };
+            std::future::ready(result)
+        };
+
+        let run = run_stream(
+            &config,
+            ReconnectMode::SlotResume,
+            Some(Backoff::new(backoff, 1.0, 5)),
+            filters_owned_by(1),
+            tx,
+            Some(filters_rx.into()),
+            open,
+        );
+        let dropper = async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            drop(rx);
+            std::future::pending::<()>().await;
+        };
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::select! {
+                out = run => out,
+                () = dropper => unreachable!(),
+            }
+        })
+        .await
+        .ok()
+    }
+
+    fn is_receiver_dropped(exit: &Option<Result<SourceExitStatus, ShipsternError>>) -> bool {
+        matches!(exit, Some(Ok(SourceExitStatus::ReceiverDropped)))
+    }
+
+    /// A stream with nothing to send never fails a send, so only watching the receiver ends it.
+    #[tokio::test]
+    async fn quiet_stream_stops_when_the_receiver_drops() {
+        let exit = exit_after_receiver_drop(|_| Some(Vec::new()), Duration::ZERO).await;
+
+        assert!(is_receiver_dropped(&exit), "{exit:?}");
+    }
+
+    /// The wait before a reconnect sends nothing either.
+    #[tokio::test]
+    async fn backoff_stops_when_the_receiver_drops() {
+        let exit = exit_after_receiver_drop(
+            |n| (n == 1).then(|| vec![Ok(transaction(100, 1)), Err(Status::unavailable("cut"))]),
+            Duration::from_secs(60),
+        )
+        .await;
+
+        assert!(is_receiver_dropped(&exit), "{exit:?}");
     }
 
     const IDLE: Duration = SLOT_RESUME_IDLE_TIMEOUT;
