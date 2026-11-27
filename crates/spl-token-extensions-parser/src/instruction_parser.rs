@@ -401,6 +401,94 @@ mod tests {
         TokenExtensionProgram,
     };
 
+    fn key(n: u8) -> solana_pubkey::Pubkey { solana_pubkey::Pubkey::new_from_array([n; 32]) }
+
+    fn update_from(ix: &solana_instruction::Instruction) -> InstructionUpdate {
+        InstructionUpdate {
+            program: shipstern_core::Pubkey::new(ix.program_id.to_bytes()),
+            accounts: ix
+                .accounts
+                .iter()
+                .map(|m| shipstern_core::Pubkey::new(m.pubkey.to_bytes()))
+                .collect(),
+            data: ix.data.clone(),
+            shared: Default::default(),
+            inner: vec![],
+            path: Path::new_single(0),
+            log_range: 0..0,
+        }
+    }
+
+    fn pk(n: u8) -> shipstern_core::Pubkey { shipstern_core::Pubkey::new([n; 32]) }
+
+    fn transfer_fee_ix(
+        parsed: TokenExtensionProgram,
+    ) -> crate::extensions::transfer_fee_instruction::Instruction {
+        let Some(crate::instruction::Instruction::TransferFee(tf)) = parsed.instruction else {
+            panic!("expected TransferFee");
+        };
+
+        tf.instruction
+            .and_then(|i| i.instruction)
+            .expect("empty transfer fee ix")
+    }
+
+    #[tokio::test]
+    async fn withdraw_withheld_from_accounts_reads_signers_before_sources() {
+        use crate::extensions::transfer_fee_instruction::Instruction as Ix;
+
+        let ix = spl_token_2022::extension::transfer_fee::instruction::withdraw_withheld_tokens_from_accounts(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &key(3),
+            &[&key(4), &key(5)],
+            &[&key(6), &key(7), &key(8)],
+        )
+        .unwrap();
+
+        let parsed = InstructionParser.parse(&update_from(&ix)).await.unwrap();
+
+        let Ix::WithdrawWithheldTokensFromAccounts(w) = transfer_fee_ix(parsed) else {
+            panic!("expected WithdrawWithheldTokensFromAccounts");
+        };
+
+        assert_eq!(w.accounts.withdraw_withheld_authority, pk(3));
+        assert_eq!(w.accounts.multisig_signers, vec![pk(4), pk(5)]);
+        assert_eq!(w.accounts.source_accounts, vec![pk(6), pk(7), pk(8)]);
+        assert_eq!(w.args.num_token_accounts, 3);
+    }
+
+    /// The program treats every account after the authority as a source when there are fewer
+    /// than `num_token_accounts`, so the instruction stays valid.
+    #[tokio::test]
+    async fn withdraw_withheld_from_accounts_accepts_fewer_sources_than_declared() {
+        use crate::extensions::transfer_fee_instruction::Instruction as Ix;
+
+        let mut ix = spl_token_2022::extension::transfer_fee::instruction::withdraw_withheld_tokens_from_accounts(
+            &spl_token_2022::ID,
+            &key(1),
+            &key(2),
+            &key(3),
+            &[],
+            &[&key(6), &key(7)],
+        )
+        .unwrap();
+
+        // Declare 5 sources while passing 2.
+        *ix.data.last_mut().unwrap() = 5;
+
+        let parsed = InstructionParser.parse(&update_from(&ix)).await.unwrap();
+
+        let Ix::WithdrawWithheldTokensFromAccounts(w) = transfer_fee_ix(parsed) else {
+            panic!("expected WithdrawWithheldTokensFromAccounts");
+        };
+
+        assert!(w.accounts.multisig_signers.is_empty());
+        assert_eq!(w.accounts.source_accounts, vec![pk(6), pk(7)]);
+        assert_eq!(w.args.num_token_accounts, 5);
+    }
+
     #[tokio::test]
     async fn test_mint_to_checked_ix_parsing() {
         let parser = InstructionParser;

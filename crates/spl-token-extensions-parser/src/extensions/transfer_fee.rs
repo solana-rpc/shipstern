@@ -240,9 +240,12 @@ impl ExtensionInstructionParser for TransferFeeIx {
             SplTransferFeeInstruction::WithdrawWithheldTokensFromAccounts {
                 num_token_accounts,
             } => {
-                let n = num_token_accounts as usize;
+                check_min_accounts_req(accounts_len, 3)?;
 
-                check_min_accounts_req(accounts_len, 3 + n)?;
+                // As the program does: the last `num_token_accounts` accounts are sources, and
+                // any before them are signers. A list shorter than `num_token_accounts` is valid
+                // on chain and holds only sources.
+                let n = (num_token_accounts as usize).min(accounts_len - 3);
 
                 oneof::Instruction::WithdrawWithheldTokensFromAccounts(
                     oneof::WithdrawWithheldTokensFromAccounts {
@@ -250,11 +253,11 @@ impl ExtensionInstructionParser for TransferFeeIx {
                             mint: crate::Pubkey::new(ix.accounts[0].0),
                             fee_recipient: crate::Pubkey::new(ix.accounts[1].0),
                             withdraw_withheld_authority: crate::Pubkey::new(ix.accounts[2].0),
-                            source_accounts: ix.accounts[3..(3 + n)]
+                            multisig_signers: ix.accounts[3..(accounts_len - n)]
                                 .iter()
                                 .map(|a| crate::Pubkey::new(a.0))
                                 .collect(),
-                            multisig_signers: ix.accounts[(3 + n)..]
+                            source_accounts: ix.accounts[(accounts_len - n)..]
                                 .iter()
                                 .map(|a| crate::Pubkey::new(a.0))
                                 .collect(),
