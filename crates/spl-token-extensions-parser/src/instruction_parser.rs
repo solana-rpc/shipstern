@@ -431,6 +431,60 @@ mod tests {
         assert_eq!(args.amount, 100.mul(10u64.pow(args.decimals)));
     }
 
+    fn key(n: u8) -> solana_pubkey::Pubkey { solana_pubkey::Pubkey::new_from_array([n; 32]) }
+
+    fn update_from(ix: &solana_instruction::Instruction) -> InstructionUpdate {
+        InstructionUpdate {
+            program: shipstern_core::Pubkey::new(ix.program_id.to_bytes()),
+            accounts: ix
+                .accounts
+                .iter()
+                .map(|m| shipstern_core::Pubkey::new(m.pubkey.to_bytes()))
+                .collect(),
+            data: ix.data.clone(),
+            shared: Default::default(),
+            inner: vec![],
+            path: Path::new_single(0),
+            log_range: 0..0,
+        }
+    }
+
+    fn pk(n: u8) -> shipstern_core::Pubkey { shipstern_core::Pubkey::new([n; 32]) }
+
+    fn transfer_fee_ix(
+        parsed: TokenExtensionProgram,
+    ) -> crate::extensions::transfer_fee_instruction::Instruction {
+        let Some(crate::instruction::Instruction::TransferFee(tf)) = parsed.instruction else {
+            panic!("expected TransferFee");
+        };
+
+        tf.instruction
+            .and_then(|i| i.instruction)
+            .expect("empty transfer fee ix")
+    }
+
+    #[tokio::test]
+    async fn harvest_withheld_tokens_lists_every_source_account() {
+        use crate::extensions::transfer_fee_instruction::Instruction as Ix;
+
+        let ix =
+            spl_token_2022::extension::transfer_fee::instruction::harvest_withheld_tokens_to_mint(
+                &spl_token_2022::ID,
+                &key(1),
+                &[&key(2), &key(3), &key(4)],
+            )
+            .unwrap();
+
+        let parsed = InstructionParser.parse(&update_from(&ix)).await.unwrap();
+
+        let Ix::HarvestWithheldTokensToMint(h) = transfer_fee_ix(parsed) else {
+            panic!("expected HarvestWithheldTokensToMint");
+        };
+
+        assert_eq!(h.accounts.mint, pk(1));
+        assert_eq!(h.accounts.source_accounts, vec![pk(2), pk(3), pk(4)]);
+    }
+
     /// Every parser gets every instruction, so an SPL Token transfer must come back Filtered.
     #[tokio::test]
     async fn spl_token_instruction_is_filtered() {

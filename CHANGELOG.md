@@ -15,6 +15,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 - **Breaking** `shipstern-proc-macro` and the instruction parser crates: instruction parsers select their program with `transaction_accounts_include`, not `transaction_accounts`. The runtime merges all instruction parsers into one filter, so it received only transactions that touched every program. Include keys merged into `InstructionPipeline::ID` now widen it ([#395](https://github.com/solana-rpc/shipstern/pull/395), from #340 by @hack-wrench and @senzenn).
 - `shipstern`: a bundled `FilterPipeline` also checks its transaction filter in the client and skips a transaction that the filter rejects, on every source. The check drops a false cuckoo match, and a filter update through `RuntimeHandle` does not change it. `DynPipeline::client_filter` is new and returns `None` by default ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- **Breaking** `shipstern-spl-token-extensions-parser`: `HarvestWithheldTokensToMintAccounts` replaces `mint_fee_acc_owner: Pubkey` with `source_accounts: Vec<Pubkey>`, the accounts `1..` that the instruction harvests from. Before, it held only the first source under a wrong name and dropped the rest. In the proto, field 2 of `HarvestWithheldTokensToMintAccounts` is now `repeated PublicKey source_accounts`, which keeps the same field number and wire type. Read `mint_fee_acc_owner` as `source_accounts[0]` ([#412](https://github.com/solana-rpc/shipstern/pull/412) by @Estereg).
 
 ### Fixed
 

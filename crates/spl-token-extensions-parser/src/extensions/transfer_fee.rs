@@ -87,7 +87,7 @@ pub struct SetTransferFeeArgs {
 #[derive(Clone, PartialEq)]
 pub struct HarvestWithheldTokensToMintAccounts {
     pub mint: Pubkey,
-    pub mint_fee_acc_owner: Pubkey,
+    pub source_accounts: Vec<Pubkey>,
 }
 
 #[shipstern]
@@ -267,13 +267,16 @@ impl ExtensionInstructionParser for TransferFeeIx {
             },
 
             SplTransferFeeInstruction::HarvestWithheldTokensToMint => {
-                check_min_accounts_req(accounts_len, 2)?;
+                check_min_accounts_req(accounts_len, 1)?;
 
                 oneof::Instruction::HarvestWithheldTokensToMint(
                     oneof::HarvestWithheldTokensToMint {
                         accounts: HarvestWithheldTokensToMintAccounts {
                             mint: crate::Pubkey::new(ix.accounts[0].0),
-                            mint_fee_acc_owner: crate::Pubkey::new(ix.accounts[1].0),
+                            source_accounts: ix.accounts[1..]
+                                .iter()
+                                .map(|a| crate::Pubkey::new(a.0))
+                                .collect(),
                         },
                     },
                 )
