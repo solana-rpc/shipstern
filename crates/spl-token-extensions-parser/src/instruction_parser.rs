@@ -1084,4 +1084,21 @@ mod tests {
             .await
             .is_err());
     }
+
+    /// The newest oneof variant must survive an encode and decode round trip.
+    #[cfg(feature = "proto")]
+    #[test]
+    fn permissioned_burn_round_trips_through_protobuf() {
+        use prost::Message;
+
+        let ix = TokenExtensionProgram {
+            instruction: Some(crate::instruction::Instruction::PermissionedBurn(
+                crate::instruction::PermissionedBurn { instruction: None },
+            )),
+        };
+
+        let decoded = TokenExtensionProgram::decode(ix.encode_to_vec().as_slice()).unwrap();
+
+        assert_eq!(decoded, ix);
+    }
 }
