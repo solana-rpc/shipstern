@@ -3,7 +3,8 @@ use shipstern_spl_token_parser::{SetAuthorityAccounts, TokenProgram as BaseToken
 use spl_token_2022::{extension::ExtensionType, instruction::AuthorityType as SplAuthorityType};
 
 use super::{
-    CommonExtensionInstructions, ConfidentialTransferFeeIx, ConfidentialTransferIx, TokenGroupIx,
+    CommonExtensionInstructions, ConfidentialMintBurnIx, ConfidentialTransferFeeIx,
+    ConfidentialTransferIx, PausableIx, PermissionedBurnIx, ScaledUiAmountIx, TokenGroupIx,
     TokenMetadataIx, TransferFeeIx,
 };
 use crate::Pubkey;
@@ -129,18 +130,30 @@ pub struct SetAuthorityArgs {
 
 #[shipstern]
 #[derive(Clone, PartialEq)]
+pub struct BatchEntry {
+    pub number_of_accounts: u32,
+    pub accounts: Vec<Pubkey>,
+    pub data: Vec<u8>,
+    pub instruction: Option<TokenExtensionProgram>,
+}
+
+#[shipstern]
+#[derive(Clone, PartialEq)]
 pub struct TokenExtensionProgram {
     #[hint(
         oneof = "instruction::Instruction",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, \
+                23, 24, 25, 26"
     )]
     pub instruction: Option<instruction::Instruction>,
 }
 
 pub mod instruction {
     use super::{
-        shipstern, BaseTokenProgram, CommonExtensionInstructions, ConfidentialTransferFeeIx,
-        ConfidentialTransferIx, SetAuthorityAccounts, TokenGroupIx, TokenMetadataIx, TransferFeeIx,
+        shipstern, BaseTokenProgram, BatchEntry, CommonExtensionInstructions,
+        ConfidentialMintBurnIx, ConfidentialTransferFeeIx, ConfidentialTransferIx, PausableIx,
+        PermissionedBurnIx, ScaledUiAmountIx, SetAuthorityAccounts, TokenGroupIx, TokenMetadataIx,
+        TransferFeeIx,
     };
 
     #[shipstern]
@@ -273,6 +286,37 @@ pub mod instruction {
         pub instruction: Option<TokenGroupIx>,
     }
 
+    #[shipstern]
+    #[derive(Clone, PartialEq)]
+    pub struct ScaledUiAmount {
+        pub instruction: Option<ScaledUiAmountIx>,
+    }
+
+    #[shipstern]
+    #[derive(Clone, PartialEq)]
+    pub struct Pausable {
+        pub instruction: Option<PausableIx>,
+    }
+
+    #[shipstern]
+    #[derive(Clone, PartialEq)]
+    pub struct ConfidentialMintBurn {
+        pub instruction: Option<ConfidentialMintBurnIx>,
+    }
+
+    #[shipstern]
+    #[derive(Clone, PartialEq)]
+    pub struct PermissionedBurn {
+        pub instruction: Option<PermissionedBurnIx>,
+    }
+
+    #[shipstern]
+    #[derive(Clone, PartialEq)]
+    pub struct Batch {
+        pub instructions: Vec<BatchEntry>,
+        pub remaining_accounts: Vec<crate::Pubkey>,
+    }
+
     #[shipstern(oneof)]
     #[derive(Clone, PartialEq)]
     pub enum Instruction {
@@ -297,6 +341,11 @@ pub mod instruction {
         TransferHook(TransferHook),
         TokenMetadata(TokenMetadata),
         TokenGroup(TokenGroup),
+        ScaledUiAmount(ScaledUiAmount),
+        Pausable(Pausable),
+        ConfidentialMintBurn(ConfidentialMintBurn),
+        PermissionedBurn(PermissionedBurn),
+        Batch(Batch),
     }
 }
 
