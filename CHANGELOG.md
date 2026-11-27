@@ -18,6 +18,7 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `shipstern-jetstream-source`: warn at startup when a transaction pipeline's filter sets accounts, vote or signature. The firehose cannot apply these, so the pipeline receives every transaction; this was silent. The instruction parsers' shared filter is not reported, since each parser drops other programs' instructions itself ([#467](https://github.com/solana-rpc/shipstern/pull/467) by @Estereg).
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
 
 ## [0.13.0] - 2026-11-12
