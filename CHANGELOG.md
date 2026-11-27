@@ -15,10 +15,12 @@ and adheres to [Semantic Versioning](https://semver.org/).
 
 - **Breaking** `shipstern-proc-macro` and the instruction parser crates: instruction parsers select their program with `transaction_accounts_include`, not `transaction_accounts`. The runtime merges all instruction parsers into one filter, so it received only transactions that touched every program. Include keys merged into `InstructionPipeline::ID` now widen it ([#395](https://github.com/solana-rpc/shipstern/pull/395), from #340 by @hack-wrench and @senzenn).
 - `shipstern`: a bundled `FilterPipeline` also checks its transaction filter in the client and skips a transaction that the filter rejects, on every source. The check drops a false cuckoo match, and a filter update through `RuntimeHandle` does not change it. `DynPipeline::client_filter` is new and returns `None` by default ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- `shipstern-stream`: the per-message allocation in the response stream is gone, since it now wraps tokio's `BroadcastStream` ([#401](https://github.com/solana-rpc/shipstern/pull/401) by @Estereg).
 
 ### Fixed
 
 - `shipstern`: a `FilterPipeline` transaction include replaces the parser's program key, and the user's exclude, vote and signature values now apply; `Prefilter::merge` dropped them. A broad include key such as wSOL makes the server send more transactions ([#395](https://github.com/solana-rpc/shipstern/pull/395) by @senzenn).
+- `shipstern-stream`: a client that falls behind the broadcast channel now gets a `DATA_LOSS` status that says how many updates it missed, so it can subscribe again. Before, it silently skipped the missed updates and panicked only after 9 lags in a row, with no message between them ([#401](https://github.com/solana-rpc/shipstern/pull/401) by @Estereg).
 
 ## [0.13.0] - 2026-11-12
 

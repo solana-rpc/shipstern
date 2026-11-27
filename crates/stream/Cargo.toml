@@ -18,13 +18,13 @@ clap = { workspace = true, features = [
 ] }
 futures-channel = { workspace = true, features = ["sink"] }
 futures-util = { workspace = true, features = ["sink"] }
-pin-project-lite = { workspace = true }
 prometheus = { workspace = true, features = ["push"], optional = true }
 toml = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
+tokio-stream = { workspace = true }
 tracing = { workspace = true }
 yellowstone-grpc-client = { workspace = true }
 shipstern-core = { workspace = true }
@@ -35,3 +35,6 @@ shipstern-proto = { workspace = true, features = ["stream"] }
 [features]
 default = []
 prometheus = ["dep:prometheus", "shipstern/prometheus"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros"] }

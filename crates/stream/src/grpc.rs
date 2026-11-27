@@ -1,6 +1,6 @@
-use std::{collections::HashMap, future::Future, mem, pin::Pin, task::Poll};
+use std::{collections::HashMap, future::Future, pin::Pin, task::Poll};
 
-use futures_util::pin_mut;
+use futures_util::StreamExt;
 use shipstern::{stop, Handler, HandlerResult};
 use shipstern_core::Pubkey;
 use shipstern_proto::{
@@ -18,6 +18,7 @@ use tokio::{
     sync::broadcast,
     task::{JoinError, JoinHandle},
 };
+use tokio_stream::wrappers::{errors::BroadcastStreamRecvError, BroadcastStream};
 
 use super::config::GrpcConfig;
 
@@ -62,9 +63,7 @@ impl ProgramStreams for Service {
         static NO_RX: [Receiver; 0] = [];
         let rxs = self.0.get(&pubkey).map_or(NO_RX.as_slice(), AsRef::as_ref);
 
-        // TODO: make max_tries configurable?
-        let stream =
-            futures_util::stream::select_all(rxs.iter().map(|rx| ReceiverStream::new(rx, 8)));
+        let stream = futures_util::stream::select_all(rxs.iter().map(new_receiver_stream));
 
         Ok(Response::new(stream))
     }
@@ -90,94 +89,33 @@ impl ProgramStreams for Service {
             .flatten()
             .collect();
 
-        // TODO: make max_tries configurable?
-        let stream =
-            futures_util::stream::select_all(rxs.iter().map(|rx| ReceiverStream::new(rx, 8)));
+        let stream = futures_util::stream::select_all(rxs.iter().map(|rx| new_receiver_stream(rx)));
 
         Ok(Response::new(stream))
     }
 }
 
-type BoxedRx = Box<Receiver>;
-type RecvResult = (BoxedRx, Result<Any, broadcast::error::RecvError>);
-enum RecvState {
-    Unpolled(BoxedRx),
-    Poison,
-    Polled(Pin<Box<dyn Future<Output = RecvResult> + Send>>),
+pub type ReceiverStream =
+    futures_util::stream::Map<BroadcastStream<Any>, fn(RecvItem) -> UpdateItem>;
+
+type RecvItem = Result<Any, BroadcastStreamRecvError>;
+type UpdateItem = Result<SubscribeUpdate, Status>;
+
+fn new_receiver_stream(rx: &Receiver) -> ReceiverStream {
+    BroadcastStream::new(rx.resubscribe()).map(into_update)
 }
 
-pin_project_lite::pin_project! {
-    pub struct ReceiverStream {
-        recv: RecvState,
-        tries: u8,
-        max_tries: u8,
-    }
-}
-
-impl ReceiverStream {
-    fn new(rx: &Receiver, max_tries: u8) -> Self {
-        Self {
-            recv: RecvState::Unpolled(rx.resubscribe().into()),
-            tries: max_tries,
-            max_tries,
-        }
-    }
-}
-
-impl futures_util::Stream for ReceiverStream {
-    type Item = Result<SubscribeUpdate, tonic::Status>;
-
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let me = self.project();
-
-        loop {
-            match me.recv {
-                RecvState::Unpolled(_) => {
-                    let RecvState::Unpolled(mut rx) = mem::replace(me.recv, RecvState::Poison)
-                    else {
-                        unreachable!();
-                    };
-
-                    *me.recv = RecvState::Polled(Box::pin(async move {
-                        let res = rx.recv().await;
-                        (rx, res)
-                    }));
-                },
-                RecvState::Poison => panic!("RecvState was poisoned!"),
-                RecvState::Polled(_) => (),
-            }
-
-            let RecvState::Polled(fut) = me.recv else {
-                unreachable!()
-            };
-
-            pin_mut!(fut);
-            let (rx, res) = match fut.poll(cx) {
-                Poll::Pending => break Poll::Pending,
-                Poll::Ready(r) => r,
-            };
-
-            *me.recv = RecvState::Unpolled(rx);
-
-            break Poll::Ready(match res {
-                Ok(m) => {
-                    *me.tries = *me.max_tries;
-                    Some(Ok(SubscribeUpdate { parsed: Some(m) }))
-                },
-                Err(broadcast::error::RecvError::Closed) => None,
-                Err(broadcast::error::RecvError::Lagged(_)) => {
-                    *me.tries = me
-                        .tries
-                        .checked_sub(1)
-                        .unwrap_or_else(|| panic!("gRPC channel lagged too many times!"));
-
-                    continue;
-                },
-            });
-        }
+// A lagged receiver has already dropped messages. Ending the response with an
+// error tells the client about the gap so it can resubscribe, instead of
+// silently continuing with missing data.
+fn into_update(item: RecvItem) -> UpdateItem {
+    match item {
+        Ok(parsed) => Ok(SubscribeUpdate {
+            parsed: Some(parsed),
+        }),
+        Err(BroadcastStreamRecvError::Lagged(skipped)) => Err(Status::data_loss(format!(
+            "client lagged behind and missed {skipped} updates"
+        ))),
     }
 }
 
@@ -226,5 +164,43 @@ impl Server {
     pub async fn stop(self) -> Result<(), Error> {
         self.0.maybe_send();
         flatten_error(self.1.await)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures_util::StreamExt;
+    use shipstern_proto::prost_types::Any;
+
+    use super::*;
+
+    const PROGRAM: &str = "11111111111111111111111111111111";
+
+    fn msg(n: u8) -> Any {
+        Any {
+            type_url: "test".into(),
+            value: vec![n],
+        }
+    }
+
+    #[tokio::test]
+    async fn lagged_client_gets_data_loss_instead_of_panicking() {
+        let (tx, rx) = broadcast::channel(2);
+        let channels = Channels::from([(PROGRAM.parse().unwrap(), Box::from([rx]))]);
+
+        let mut stream = Service(channels)
+            .subscribe(Request::new(SubscribeRequest {
+                program: PROGRAM.into(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        for n in 0..5 {
+            tx.send(msg(n)).unwrap();
+        }
+
+        let err = stream.next().await.unwrap().unwrap_err();
+        assert_eq!(err.code(), tonic::Code::DataLoss);
     }
 }

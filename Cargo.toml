@@ -102,6 +102,7 @@ zstd = "^0.13.0"
 bytemuck = "^1"
 wincode = "0.6"
 tokio-util = "0.7"
+tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
 jetstreamer-firehose = { git = "https://github.com/vaultic-win/jetstreamer", rev = "e522a67edd06f770e45afa6889c8283d42103721" }
 warp = "0.3"
 
