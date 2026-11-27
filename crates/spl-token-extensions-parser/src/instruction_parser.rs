@@ -431,24 +431,6 @@ mod tests {
         assert_eq!(args.amount, 100.mul(10u64.pow(args.decimals)));
     }
 
-    /// Every parser gets every instruction, so an SPL Token transfer must come back Filtered.
-    #[tokio::test]
-    async fn spl_token_instruction_is_filtered() {
-        let ix = InstructionUpdate {
-            program: shipstern_spl_token_parser::InstructionParser.program_id(),
-            accounts: vec![shipstern_core::Pubkey::new([1; 32]); 3],
-            data: [&[3][..], &1_000u64.to_le_bytes()].concat(),
-            shared: Default::default(),
-            inner: vec![],
-            path: Path::new_single(0),
-            log_range: 0..0,
-        };
-
-        let res = InstructionParser.parse(&ix).await;
-
-        assert!(matches!(res, Err(ParseError::Filtered)), "{res:?}");
-    }
-
     fn key(n: u8) -> solana_pubkey::Pubkey { solana_pubkey::Pubkey::new_from_array([n; 32]) }
 
     fn update_from(ix: &solana_instruction::Instruction) -> InstructionUpdate {
@@ -501,5 +483,23 @@ mod tests {
 
         assert_eq!(h.accounts.mint, pk(1));
         assert_eq!(h.accounts.source_accounts, vec![pk(2), pk(3), pk(4)]);
+    }
+
+    /// Every parser gets every instruction, so an SPL Token transfer must come back Filtered.
+    #[tokio::test]
+    async fn spl_token_instruction_is_filtered() {
+        let ix = InstructionUpdate {
+            program: shipstern_spl_token_parser::InstructionParser.program_id(),
+            accounts: vec![shipstern_core::Pubkey::new([1; 32]); 3],
+            data: [&[3][..], &1_000u64.to_le_bytes()].concat(),
+            shared: Default::default(),
+            inner: vec![],
+            path: Path::new_single(0),
+            log_range: 0..0,
+        };
+
+        let res = InstructionParser.parse(&ix).await;
+
+        assert!(matches!(res, Err(ParseError::Filtered)), "{res:?}");
     }
 }
