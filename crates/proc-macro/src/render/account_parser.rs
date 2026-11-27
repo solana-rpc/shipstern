@@ -378,6 +378,7 @@ pub fn account_parser(
                 &account_field,
                 &account_mod_ident,
                 &account_enum,
+                &(1..=accounts.len() as u32).collect::<Vec<_>>(),
             )
         } else {
             quote! {}

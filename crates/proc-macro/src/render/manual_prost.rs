@@ -20,6 +20,7 @@ pub(super) fn manual_prost_message_impl(
     field_ident: &syn::Ident,
     mod_ident: &syn::Ident,
     oneof_ident: &syn::Ident,
+    tags: &[u32],
 ) -> TokenStream {
     quote! {
         impl ::core::fmt::Debug for #parent_ident {
@@ -42,6 +43,12 @@ pub(super) fn manual_prost_message_impl(
                 buf: &mut impl ::prost::bytes::Buf,
                 ctx: ::prost::encoding::DecodeContext,
             ) -> ::core::result::Result<(), ::prost::DecodeError> {
+                // Oneof::merge() panics on tags it does not own, so unknown fields are
+                // skipped here like the derived Message impl does.
+                if !matches!(tag, #(#tags)|*) {
+                    return ::prost::encoding::skip_field(wire_type, tag, buf, ctx);
+                }
+
                 // Oneof::merge() requires `&mut Option<Self>`, so we wrap our non-Option
                 // field into Some, call merge, then unwrap back.
                 let mut opt = ::core::option::Option::Some(self.#field_ident.clone());
@@ -173,7 +180,7 @@ pub(super) fn manual_prost_oneof_impl(
             ) -> ::core::result::Result<(), ::prost::DecodeError> {
                 match tag {
                     #(#merge_arms,)*
-                    _ => unreachable!(concat!("invalid ", stringify!(#oneof_ident), " tag: {}"), tag),
+                    _ => ::prost::encoding::skip_field(wire_type, tag, buf, ctx),
                 }
             }
 

@@ -279,6 +279,7 @@ fn render_dispatch(
             &field_ident,
             &mod_ident,
             &oneof_ident,
+            &oneof_ir.variants.iter().map(|v| v.tag).collect::<Vec<_>>(),
         );
 
         quote! { #oneof_impl #message_impl }
@@ -463,6 +464,7 @@ fn render_enum_oneof(oneof_ir: &OneofIr, tag: &EnumTagIr) -> TokenStream {
             &field_ident,
             &mod_ident,
             &oneof_ident,
+            &oneof_ir.variants.iter().map(|v| v.tag).collect::<Vec<_>>(),
         );
 
         quote! {
