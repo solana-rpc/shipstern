@@ -35,7 +35,9 @@ borsh = { workspace = true }
 [dev-dependencies]
 shipstern-mock = { workspace = true }
 tokio.workspace = true
+solana-instruction = { workspace = true }
 solana-pubkey = { workspace = true }
+spl-token-confidential-transfer-proof-extraction = { workspace = true }
 
 [features]
 default = []
