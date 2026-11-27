@@ -6146,6 +6146,7 @@ dependencies = [
  "prost 0.14.4",
  "prost-types 0.14.4",
  "serde",
+ "serde_json",
  "shipstern-proto",
  "thiserror 1.0.69",
  "yellowstone-grpc-proto",

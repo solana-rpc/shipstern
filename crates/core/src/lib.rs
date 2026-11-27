@@ -967,8 +967,10 @@ impl<const LEN: usize> serde::Serialize for KeyBytes<LEN> {
 impl<'de, const LEN: usize> serde::Deserialize<'de> for KeyBytes<LEN> {
     fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
         use serde::de::Error;
-        let s = <&str>::deserialize(de)?;
-        let v = bs58::decode(s).into_vec().map_err(D::Error::custom)?;
+        let s = <Cow<str> as serde::Deserialize>::deserialize(de)?;
+        let v = bs58::decode(s.as_ref())
+            .into_vec()
+            .map_err(D::Error::custom)?;
         let arr: [u8; LEN] = v.try_into().map_err(|v: Vec<u8>| {
             D::Error::custom(format!(
                 "KeyBytes<{LEN}>: expected {LEN} bytes, got {}",
@@ -1972,6 +1974,44 @@ impl From<Filters> for SubscribeRequest {
 mod tests {
 
     use super::*;
+
+    #[derive(serde::Deserialize)]
+    struct Flattened {
+        #[serde(flatten)]
+        inner: Holder,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Holder {
+        key: Pubkey,
+    }
+
+    #[test]
+    fn pubkey_deserializes_from_owned_json_value() {
+        let key = Pubkey::new([7; 32]);
+        let value = serde_json::json!(key.to_string());
+
+        let parsed: Pubkey = serde_json::from_value(value).unwrap();
+
+        assert_eq!(parsed, key);
+    }
+
+    #[test]
+    fn pubkey_deserializes_through_serde_flatten() {
+        let key = Pubkey::new([9; 32]);
+        let value = serde_json::json!({ "key": key.to_string() });
+
+        let parsed: Flattened = serde_json::from_value(value).unwrap();
+
+        assert_eq!(parsed.inner.key, key);
+    }
+
+    #[test]
+    fn pubkey_deserialize_rejects_wrong_length() {
+        let err = serde_json::from_value::<Pubkey>(serde_json::json!("11")).unwrap_err();
+
+        assert!(err.to_string().contains("expected 32 bytes"), "{err}");
+    }
 
     fn owned_by(marker: u8) -> Prefilter {
         Prefilter {
